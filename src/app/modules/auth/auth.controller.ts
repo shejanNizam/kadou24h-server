@@ -1,226 +1,191 @@
-﻿/* eslint-disable @typescript-eslint/no-unused-vars */
+import { Request, Response } from "express";
 import httpStatus from "http-status";
-import catchAsync from "../../utils/catchAsync";
-
-import { NextFunction, Request, Response } from "express";
-import { JwtPayload } from "jsonwebtoken";
-import passport from "passport";
 import { configs } from "../../config/index";
 import AppError from "../../errorHelpers/AppError";
+import catchAsync from "../../utils/catchAsync";
 import sendResponse from "../../utils/sendResponse";
 import { setAuthCookie } from "../../utils/setCookie";
-import { createUserTokens } from "../../utils/userTokens";
-import { IUser } from "../user/user.interface";
 import { AuthServices } from "./auth.service";
 
-// for manual login with credentials ------------>>
-// const credentialsLogin = catchAsync(
-//   async (req: Request, res: Response, next: NextFunction) => {
-//     const loginInfo = await AuthServices.credentialLogin(req.body);
+const clearAuthCookies = (res: Response) => {
+  const options = {
+    httpOnly: true,
+    secure: configs.node_env === "production",
+    sameSite: (configs.node_env === "production" ? "none" : "lax") as "none" | "lax",
+  };
+  res.clearCookie("accessToken", options);
+  res.clearCookie("refreshToken", options);
+};
 
-//     setAuthCookie(res, loginInfo);
+const register = catchAsync(async (req: Request, res: Response) => {
+  const result = await AuthServices.register(req.body);
+  sendResponse(res, {
+    statusCode: httpStatus.CREATED,
+    success: true,
+    message: "Account created. Enter the code we sent to verify your phone.",
+    data: result,
+  });
+});
 
-//     sendResponse(res, {
-//       statusCode: httpStatus.CREATED,
-//       success: true,
-//       message: "User loggedin successfully!",
-//       data: loginInfo,
-//     });
-//   },
-// );
+const verifyAccount = catchAsync(async (req: Request, res: Response) => {
+  const result = await AuthServices.verifyAccount(req.body.phone, req.body.otp);
+  setAuthCookie(res, result);
+  sendResponse(res, {
+    statusCode: httpStatus.OK,
+    success: true,
+    message: "Account verified successfully!",
+    data: result,
+  });
+});
 
-// for manual login with credentials  using passport js ------------>>
-const credentialsLogin = catchAsync(
-  async (req: Request, res: Response, next: NextFunction) => {
-    passport.authenticate(
-      "local",
-      async (
-        err: Error | null,
-        user: IUser | false,
-        info: { message: string },
-      ) => {
-        if (err) {
-          return next(
-            new AppError(httpStatus.INTERNAL_SERVER_ERROR, err.message),
-          );
-        }
+const resendOtp = catchAsync(async (req: Request, res: Response) => {
+  const result = await AuthServices.resendOtp(req.body.identifier, req.body.purpose);
+  sendResponse(res, {
+    statusCode: httpStatus.OK,
+    success: true,
+    message: "Verification code sent",
+    data: result,
+  });
+});
 
-        if (!user) {
-          return next(new AppError(httpStatus.UNAUTHORIZED, info.message));
-        }
+const login = catchAsync(async (req: Request, res: Response) => {
+  const result = await AuthServices.login(req.body.identifier, req.body.password);
 
-        const userTokens = createUserTokens(user);
-
-        const { password: _password, ...rest } = user.toObject();
-
-        setAuthCookie(res, userTokens);
-
-        sendResponse(res, {
-          success: true,
-          statusCode: httpStatus.OK,
-          message: "User Logged In Successfully",
-          data: {
-            user: rest,
-            accessToken: userTokens.accessToken,
-            refreshToken: userTokens.refreshToken,
-          },
-        });
-      },
-    )(req, res, next);
-  },
-);
-
-const getNewAccessToken = catchAsync(
-  async (req: Request, res: Response, next: NextFunction) => {
-    const refreshToken = req.cookies.refreshToken;
-
-    if (!refreshToken) {
-      throw new AppError(
-        httpStatus.BAD_REQUEST,
-        "No refresh token received from cookies!",
-      );
-    }
-    const tokenInfo = await AuthServices.getNewAccessToken(
-      refreshToken as string,
-    );
-    setAuthCookie(res, tokenInfo);
-
-    sendResponse(res, {
-      statusCode: httpStatus.CREATED,
-      success: true,
-      message: "New access token retrive successfully!",
-      data: tokenInfo,
-    });
-  },
-);
-
-const logout = catchAsync(
-  async (req: Request, res: Response, next: NextFunction) => {
-    res.clearCookie("accessToken", {
-      httpOnly: true,
-      secure: configs.node_env === "production",
-      sameSite: "lax",
-    });
-    res.clearCookie("refreshToken", {
-      httpOnly: true,
-      secure: false,
-      sameSite: "lax",
-    });
-
-    sendResponse(res, {
+  if ("requiresVerification" in result) {
+    return sendResponse(res, {
       statusCode: httpStatus.OK,
       success: true,
-      message: "User logged out successfully!",
-      data: null,
+      message: "Please verify your phone number. We sent you a code.",
+      data: result,
     });
-  },
-);
+  }
 
-const changePassword = catchAsync(
-  async (req: Request, res: Response, next: NextFunction) => {
-    const oldPassword = req.body.oldPassword;
-    const newPassword = req.body.newPassword;
-    const decodedToken = req.user;
+  setAuthCookie(res, result);
+  sendResponse(res, {
+    statusCode: httpStatus.OK,
+    success: true,
+    message: "Logged in successfully!",
+    data: result,
+  });
+});
 
-    await AuthServices.changePassword(
-      oldPassword,
-      newPassword,
-      decodedToken as JwtPayload,
-    );
+const socialLogin = catchAsync(async (req: Request, res: Response) => {
+  const result = await AuthServices.socialLogin(req.body);
+  setAuthCookie(res, result);
+  sendResponse(res, {
+    statusCode: httpStatus.OK,
+    success: true,
+    message: "Logged in successfully!",
+    data: result,
+  });
+});
 
-    sendResponse(res, {
-      statusCode: httpStatus.OK,
-      success: true,
-      message: "Password changed successfully!",
-      data: null,
-    });
-  },
-);
+const getNewAccessToken = catchAsync(async (req: Request, res: Response) => {
+  // Mobile apps send it in the body; the admin panel relies on the cookie
+  const refreshToken = req.body?.refreshToken ?? req.cookies?.refreshToken;
+  if (!refreshToken) {
+    throw new AppError(httpStatus.BAD_REQUEST, "Refresh token is required");
+  }
 
-const setPassword = catchAsync(
-  async (req: Request, res: Response, next: NextFunction) => {
-    const decodedToken = req.user as JwtPayload;
-    const { password } = req.body;
+  const result = await AuthServices.getNewAccessToken(refreshToken as string);
+  setAuthCookie(res, result);
+  sendResponse(res, {
+    statusCode: httpStatus.OK,
+    success: true,
+    message: "New access token issued",
+    data: result,
+  });
+});
 
-    await AuthServices.setPassword(decodedToken._id, password);
+const logout = catchAsync(async (req: Request, res: Response) => {
+  await AuthServices.logout(req.body?.deviceToken);
+  clearAuthCookies(res);
+  sendResponse(res, {
+    statusCode: httpStatus.OK,
+    success: true,
+    message: "Logged out successfully!",
+    data: null,
+  });
+});
 
-    sendResponse(res, {
-      statusCode: httpStatus.OK,
-      success: true,
-      message: "Password set successfully!",
-      data: null,
-    });
-  },
-);
+const logoutAll = catchAsync(async (req: Request, res: Response) => {
+  await AuthServices.logoutAll(req.user._id);
+  clearAuthCookies(res);
+  sendResponse(res, {
+    statusCode: httpStatus.OK,
+    success: true,
+    message: "Logged out from all devices",
+    data: null,
+  });
+});
 
-const forgotPassword = catchAsync(
-  async (req: Request, res: Response, next: NextFunction) => {
-    const { email } = req.body;
+const changePassword = catchAsync(async (req: Request, res: Response) => {
+  const tokens = await AuthServices.changePassword(
+    req.user._id,
+    req.body.oldPassword,
+    req.body.newPassword,
+  );
+  setAuthCookie(res, tokens);
+  sendResponse(res, {
+    statusCode: httpStatus.OK,
+    success: true,
+    message: "Password changed. Other devices have been signed out.",
+    data: tokens,
+  });
+});
 
-    await AuthServices.forgotPassword(email);
+const setPassword = catchAsync(async (req: Request, res: Response) => {
+  await AuthServices.setPassword(req.user._id, req.body.password);
+  sendResponse(res, {
+    statusCode: httpStatus.OK,
+    success: true,
+    message: "Password set successfully!",
+    data: null,
+  });
+});
 
-    sendResponse(res, {
-      statusCode: httpStatus.OK,
-      success: true,
-      message: "Email sent successfully!",
-      data: null,
-    });
-  },
-);
+const forgotPassword = catchAsync(async (req: Request, res: Response) => {
+  const result = await AuthServices.forgotPassword(req.body.identifier);
+  sendResponse(res, {
+    statusCode: httpStatus.OK,
+    success: true,
+    message: result.message,
+    data: { expiresIn: result.expiresIn, resendIn: result.resendIn },
+  });
+});
 
-const resetPassword = catchAsync(
-  async (req: Request, res: Response, next: NextFunction) => {
-    const decodedToken = req.user;
-    // console.log(decodedToken);
+const verifyResetOtp = catchAsync(async (req: Request, res: Response) => {
+  const result = await AuthServices.verifyResetOtp(req.body.identifier, req.body.otp);
+  sendResponse(res, {
+    statusCode: httpStatus.OK,
+    success: true,
+    message: "Code verified. You can now set a new password.",
+    data: result,
+  });
+});
 
-    await AuthServices.resetPassword(req.body, decodedToken as JwtPayload);
-
-    sendResponse(res, {
-      statusCode: httpStatus.OK,
-      success: true,
-      message: "Password reset successfully!",
-      data: null,
-    });
-  },
-);
-
-//  for google authentication
-const googleCallbackControll = catchAsync(
-  async (req: Request, res: Response, next: NextFunction) => {
-    const user = req.user;
-    if (!user) {
-      throw new AppError(httpStatus.NOT_FOUND, "User not found!");
-    }
-
-    const tokenInfo = createUserTokens(user);
-    setAuthCookie(res, tokenInfo);
-
-    if (!configs.frontend_url) {
-      throw new AppError(
-        httpStatus.INTERNAL_SERVER_ERROR,
-        "Frontend URL not configured",
-      );
-    }
-
-    const rawState = (req.query.state as string) || "/";
-
-    const isRelative = rawState.startsWith("/") && !rawState.startsWith("//");
-
-    const safePath = /^\/[a-zA-Z0-9\-._~:@!$&'()*+,;=%/?#]*$/.test(rawState)
-      ? rawState
-      : "/";
-
-    res.redirect(`${configs.frontend_url}${safePath}`);
-  },
-);
+const resetPassword = catchAsync(async (req: Request, res: Response) => {
+  await AuthServices.resetPassword(req.user, req.body.newPassword);
+  sendResponse(res, {
+    statusCode: httpStatus.OK,
+    success: true,
+    message: "Password reset successfully! Please log in.",
+    data: null,
+  });
+});
 
 export const AuthControllers = {
-  credentialsLogin,
+  register,
+  verifyAccount,
+  resendOtp,
+  login,
+  socialLogin,
   getNewAccessToken,
   logout,
+  logoutAll,
   changePassword,
   setPassword,
   forgotPassword,
+  verifyResetOtp,
   resetPassword,
-  googleCallbackControll,
 };

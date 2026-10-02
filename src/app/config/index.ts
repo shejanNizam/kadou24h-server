@@ -18,11 +18,15 @@ const envSchema = z.object({
   ADMIN_EMAIL: z.string().email("ADMIN_EMAIL must be a valid email"),
   ADMIN_PASSWORD: z.string().min(8, "ADMIN_PASSWORD must be at least 8 characters"),
 
-  GOOGLE_CLIENT_ID: z.string().optional(),
-  GOOGLE_CLIENT_SECRET: z.string().optional(),
-  GOOGLE_CALLBACK_URL: z.string().optional(),
+  // Comma-separated OAuth client IDs accepted as the `aud` of Google ID tokens
+  // (Android, iOS and web client IDs from Google Cloud Console)
+  GOOGLE_CLIENT_IDS: z.string().optional(),
+  // Apple Services ID / iOS bundle ID(s), comma-separated
+  APPLE_CLIENT_IDS: z.string().optional(),
 
-  EXPRESS_SESSION_SECRET: z.string().min(1, "EXPRESS_SESSION_SECRET is required"),
+  // "log" prints SMS to the server log (development only) until a real provider is plugged in
+  SMS_PROVIDER: z.enum(["log"]).default("log"),
+  SMS_SENDER_ID: z.string().default("Kadou24h"),
 
   FRONTEND_URL: z.string().default("*"),
 
@@ -56,6 +60,13 @@ if (!parsed.success) {
 
 const env = parsed.data;
 
+function splitList(value?: string): string[] {
+  return (value ?? "")
+    .split(",")
+    .map((v) => v.trim())
+    .filter(Boolean);
+}
+
 export const configs = {
   port: env.PORT,
   database_url: env.DATABASE_URL,
@@ -75,11 +86,15 @@ export const configs = {
   admin_email: env.ADMIN_EMAIL,
   admin_password: env.ADMIN_PASSWORD,
 
-  google_client_id: env.GOOGLE_CLIENT_ID,
-  google_client_secret: env.GOOGLE_CLIENT_SECRET,
-  google_callback_url: env.GOOGLE_CALLBACK_URL,
+  OAUTH: {
+    google_client_ids: splitList(env.GOOGLE_CLIENT_IDS),
+    apple_client_ids: splitList(env.APPLE_CLIENT_IDS),
+  },
 
-  express_session_secret: env.EXPRESS_SESSION_SECRET,
+  SMS: {
+    provider: env.SMS_PROVIDER,
+    sender_id: env.SMS_SENDER_ID,
+  },
 
   frontend_url: env.FRONTEND_URL,
 

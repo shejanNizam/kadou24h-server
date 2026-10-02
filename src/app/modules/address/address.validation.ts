@@ -1,0 +1,30 @@
+import z from "zod";
+import { fileRefZodSchema, latLngSchema } from "../../utils/commonSchemas";
+import { AddressLabel } from "../user/user.interface";
+import { nameSchema, phoneSchema } from "../user/user.validation";
+
+const text = (max: number) => z.string().trim().max(max);
+
+const addressFields = {
+  label: z.enum(Object.values(AddressLabel) as [string, ...string[]]),
+  customLabel: text(30),
+  fullName: nameSchema,
+  phone: phoneSchema,
+  region: text(60),
+  city: text(60).min(2, { message: "City is required" }),
+  commune: text(60),
+  neighborhood: text(80),
+  landmark: text(200),
+  directions: text(500),
+  location: latLngSchema,
+  placePhoto: fileRefZodSchema,
+  isDefault: z.boolean(),
+};
+
+export const createAddressZodSchema = z
+  .object(addressFields)
+  .partial()
+  .required({ fullName: true, phone: true, city: true, location: true })
+  .strict();
+
+export const updateAddressZodSchema = z.object(addressFields).partial().strict();

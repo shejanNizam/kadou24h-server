@@ -1,0 +1,70 @@
+import { model, Schema } from "mongoose";
+import { ISettings, PayoutMethodType } from "./settings.interface";
+
+const withdrawalFeeSchema = new Schema(
+  {
+    method: { type: String, enum: Object.values(PayoutMethodType), required: true },
+    type: { type: String, enum: ["fixed", "percent"], required: true },
+    value: { type: Number, required: true },
+  },
+  { _id: false },
+);
+
+// Singleton collection — exactly one document, created on first read.
+const settingsSchema = new Schema<ISettings>(
+  {
+    platformName: { type: String, default: "Kadou" },
+    supportEmail: { type: String },
+    contactNumber: { type: String },
+    whatsappSupportNumber: { type: String },
+    defaultCurrency: { type: String, default: "GNF" },
+    logo: {
+      url: { type: String },
+      publicId: { type: String },
+    },
+
+    commission: {
+      rate: { type: Number, default: 10 },
+      min: { type: Number, default: 1000 },
+    },
+    platformFee: { type: Number, default: 1000 },
+    taxRate: { type: Number, default: 0 },
+    withdrawalFees: {
+      type: [withdrawalFeeSchema],
+      default: [
+        { method: PayoutMethodType.orange_money, type: "fixed", value: 500 },
+        { method: PayoutMethodType.mobile_money, type: "fixed", value: 500 },
+        { method: PayoutMethodType.bank, type: "fixed", value: 1000 },
+      ],
+    },
+    riderCashLimitDefault: { type: Number, default: 1_000_000 },
+    escrowReleaseHours: { type: Number, default: 0 },
+
+    pricing: {
+      jobPublishFee: { type: Number, default: 5000 },
+      cvUnlockFee: { type: Number, default: 5000 },
+      spontaneousApplicationFee: { type: Number, default: 5000 },
+    },
+
+    moderation: {
+      restrictAfter: { type: Number, default: 3 },
+      suspendAfter: { type: Number, default: 5 },
+      restrictHours: { type: Number, default: 24 },
+    },
+
+    emailToggles: {
+      orderConfirmation: { type: Boolean, default: true },
+      paymentVerification: { type: Boolean, default: true },
+      invoice: { type: Boolean, default: true },
+      disputeUpdates: { type: Boolean, default: true },
+    },
+
+    updatedBy: { type: Schema.Types.ObjectId, ref: "User" },
+  },
+  {
+    timestamps: true,
+    versionKey: false,
+  },
+);
+
+export const Settings = model<ISettings>("Settings", settingsSchema);

@@ -3,14 +3,11 @@ import cookieParser from "cookie-parser";
 import cors from "cors";
 import express, { Application, Request, Response } from "express";
 import mongoSanitize from "express-mongo-sanitize";
-import expressSession from "express-session";
 import { xss } from "express-xss-sanitizer";
 import helmet from "helmet";
 import morgan from "morgan";
-import passport from "passport";
 import swaggerUi from "swagger-ui-express";
 import { configs } from "./app/config/index";
-import "./app/config/passport";
 import { swaggerSpec } from "./app/config/swagger.config";
 import { globalErrorHandler } from "./app/middlewares/globalErrorHandler";
 import notFound from "./app/middlewares/notFound";
@@ -64,15 +61,6 @@ app.use(
     credentials: configs.frontend_url !== "*",
   }),
 );
-app.use(
-  expressSession({
-    secret: configs.express_session_secret,
-    resave: false,
-    saveUninitialized: false,
-  }),
-);
-app.use(passport.initialize());
-app.use(passport.session());
 
 // Health checks — outside /api/v1 so infra probes don't need auth headers
 app.use("/health", HealthRoutes);
@@ -89,7 +77,7 @@ if (configs.node_env !== "production") {
 app.use("/api/v1", router);
 
 app.get("/", (_req: Request, res: Response) => {
-  res.send("Server is running");
+  res.send(" Kadou24h Server is running");
 });
 
 app.use(globalErrorHandler);

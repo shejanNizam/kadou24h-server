@@ -4,11 +4,12 @@ import { ZodTypeAny } from "zod";
 const validateRequest = (schema: ZodTypeAny) => {
   return async (req: Request, res: Response, next: NextFunction) => {
     try {
-      if (req.body.data) {
+      if (req.body?.data) {
         req.body = JSON.parse(req.body.data as string);
       }
 
-      req.body = await schema.parseAsync(req.body);
+      // Express 5 leaves req.body undefined when a request has no body
+      req.body = await schema.parseAsync(req.body ?? {});
       next();
     } catch (error) {
       next(error);

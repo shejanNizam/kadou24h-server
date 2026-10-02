@@ -1,7 +1,7 @@
 import bcrypt from "bcrypt";
 import { configs } from "../config/index";
 import { AuthIdentity } from "../modules/auth_identity/auth_identity.model";
-import { IUserInitial, UserRole } from "../modules/user/user.interface";
+import { UserRole } from "../modules/user/user.interface";
 import { User } from "../modules/user/user.model";
 import { logger } from "./logger";
 
@@ -20,17 +20,13 @@ export const seedSuperAdmin = async () => {
       Number(configs.bcrypt_salt_round),
     );
 
-    const payload: IUserInitial = {
+    const superAdmin = await User.create({
       name: "Super Admin",
-      role: UserRole.super_admin,
+      roles: [UserRole.super_admin],
       email: configs.super_admin_email,
       password: hashedPassword,
       isEmailVerified: true,
-      status: "active",
-      isDeleted: false,
-    };
-
-    const superAdmin = await User.create(payload);
+    });
 
     await AuthIdentity.create({
       userId: superAdmin._id,

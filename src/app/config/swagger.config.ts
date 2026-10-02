@@ -8,7 +8,7 @@ const options: swaggerJsdoc.Options = {
       title: "Kadou24h Backend API",
       version: "1.0.0",
       description:
-        "Kadou24h Backend API with auth, OTP, file upload, and real-time support.",
+        "Kadou24h marketplace, delivery & jobs API. Full guide: docs/API_DOCUMENTATION.md",
     },
     servers: [
       { url: "http://localhost:5000/api/v1", description: "Local development" },
@@ -20,22 +20,34 @@ const options: swaggerJsdoc.Options = {
           type: "http",
           scheme: "bearer",
           bearerFormat: "JWT",
-          description: "Access token obtained from /auth/login",
+          description: "Access token from /auth/login, /auth/verify-account or /auth/social",
         },
-        cookieAuth: {
-          type: "apiKey",
-          in: "cookie",
-          name: "refreshToken",
-          description: "Refresh token stored in httpOnly cookie",
-        },
+      },
+      parameters: {
+        id: { in: "path", name: "id", required: true, schema: { type: "string" }, description: "MongoDB ObjectId" },
+        page: { in: "query", name: "page", schema: { type: "integer", default: 1 } },
+        limit: { in: "query", name: "limit", schema: { type: "integer", default: 10 } },
+        sort: { in: "query", name: "sort", schema: { type: "string", default: "-createdAt" }, description: "Field name, prefix with - for descending" },
+        searchTerm: { in: "query", name: "searchTerm", schema: { type: "string" } },
       },
       schemas: {
         SuccessResponse: {
           type: "object",
           properties: {
+            statusCode: { type: "integer", example: 200 },
             success: { type: "boolean", example: true },
             message: { type: "string", example: "Operation successful" },
             data: { type: "object" },
+            meta: { $ref: "#/components/schemas/PaginationMeta" },
+          },
+        },
+        PaginationMeta: {
+          type: "object",
+          properties: {
+            page: { type: "integer", example: 1 },
+            limit: { type: "integer", example: 10 },
+            total: { type: "integer", example: 57 },
+            totalPage: { type: "integer", example: 6 },
           },
         },
         ErrorResponse: {
@@ -43,44 +55,52 @@ const options: swaggerJsdoc.Options = {
           properties: {
             success: { type: "boolean", example: false },
             message: { type: "string", example: "Something went wrong" },
-            errorDetails: { type: "object" },
-          },
-        },
-        ValidationError: {
-          type: "object",
-          properties: {
-            success: { type: "boolean", example: false },
-            message: { type: "string", example: "Validation failed" },
-            errorDetails: {
+            errorSources: {
               type: "array",
               items: {
                 type: "object",
-                properties: {
-                  field: { type: "string" },
-                  message: { type: "string" },
-                },
+                properties: { path: { type: "string" }, message: { type: "string" } },
               },
             },
+          },
+        },
+        ValidationError: { $ref: "#/components/schemas/ErrorResponse" },
+        NotificationPrefs: {
+          type: "object",
+          properties: {
+            orderUpdates: { type: "boolean" },
+            messages: { type: "boolean" },
+            deliveryUpdates: { type: "boolean" },
+            offers: { type: "boolean" },
+            jobPosts: { type: "boolean" },
+            accountAlerts: { type: "boolean" },
           },
         },
         User: {
           type: "object",
           properties: {
             _id: { type: "string", example: "64a1b2c3d4e5f6a7b8c9d0e1" },
-            name: { type: "string", example: "John Doe" },
-            email: { type: "string", format: "email", example: "john@example.com" },
-            phone: { type: "string", example: "+8801712345678" },
-            role: { type: "string", enum: ["user", "admin", "super_admin"], example: "user" },
+            name: { type: "string", example: "Mamadou Diallo" },
+            phone: { type: "string", example: "+224620123456" },
+            email: { type: "string", format: "email", example: "diallo@gmail.com" },
             avatar: {
               type: "object",
-              properties: {
-                url: { type: "string" },
-                publicId: { type: "string" },
-              },
+              properties: { url: { type: "string" }, publicId: { type: "string" } },
             },
+            roles: {
+              type: "array",
+              items: { type: "string", enum: ["customer", "vendor", "rider", "staff", "admin", "super_admin"] },
+              example: ["customer"],
+            },
+            lastActiveMode: { type: "string", enum: ["customer", "vendor", "rider"], example: "customer" },
+            isPhoneVerified: { type: "boolean", example: true },
             isEmailVerified: { type: "boolean", example: false },
-            status: { type: "string", enum: ["active", "blocked"], example: "active" },
-            isDeleted: { type: "boolean", example: false },
+            language: { type: "string", enum: ["fr", "en"], example: "fr" },
+            country: { type: "string", example: "GN" },
+            status: { type: "string", enum: ["active", "inactive", "suspended", "banned"], example: "active" },
+            statusReason: { type: "string" },
+            notificationPrefs: { $ref: "#/components/schemas/NotificationPrefs" },
+            referralCode: { type: "string", example: "K7QX2M9P" },
             lastLoginAt: { type: "string", format: "date-time" },
             createdAt: { type: "string", format: "date-time" },
             updatedAt: { type: "string", format: "date-time" },
@@ -88,38 +108,64 @@ const options: swaggerJsdoc.Options = {
         },
         RegisterRequest: {
           type: "object",
-          required: ["name", "email", "password"],
+          required: ["name", "phone", "password"],
           properties: {
-            name: { type: "string", minLength: 2, maxLength: 50, example: "John Doe" },
-            email: { type: "string", format: "email", example: "john@example.com" },
-            password: {
-              type: "string",
-              minLength: 8,
-              example: "SecurePass1!",
-              description:
-                "Min 8 chars, must include uppercase, number, and special character",
-            },
-            phone: { type: "string", example: "+8801712345678" },
+            name: { type: "string", minLength: 2, maxLength: 50, example: "Mamadou Diallo" },
+            phone: { type: "string", example: "+224620123456", description: "International format" },
+            email: { type: "string", format: "email", example: "diallo@gmail.com" },
+            password: { type: "string", minLength: 8, example: "kadou2026", description: "Min 8 chars, at least 1 letter and 1 number" },
+            language: { type: "string", enum: ["fr", "en"], default: "fr" },
+            referralCode: { type: "string", example: "K7QX2M9P" },
+          },
+        },
+        OtpSentResponse: {
+          type: "object",
+          properties: {
+            phone: { type: "string", example: "+224 ••• •• 56" },
+            email: { type: "string", example: "di•••@gmail.com" },
+            expiresIn: { type: "integer", example: 300, description: "Seconds the code is valid" },
+            resendIn: { type: "integer", example: 60, description: "Seconds before /auth/resend-otp is allowed" },
+          },
+        },
+        VerifyAccountRequest: {
+          type: "object",
+          required: ["phone", "otp"],
+          properties: {
+            phone: { type: "string", example: "+224620123456" },
+            otp: { type: "string", example: "123456" },
           },
         },
         LoginRequest: {
           type: "object",
-          required: ["email", "password"],
+          required: ["identifier", "password"],
           properties: {
-            email: { type: "string", format: "email", example: "john@example.com" },
-            password: { type: "string", example: "SecurePass1!" },
+            identifier: { type: "string", example: "+224620123456", description: "Phone or email" },
+            password: { type: "string", example: "kadou2026" },
           },
         },
-        LoginResponse: {
+        SocialLoginRequest: {
+          type: "object",
+          required: ["provider", "idToken"],
+          properties: {
+            provider: { type: "string", enum: ["google", "apple"] },
+            idToken: { type: "string", description: "ID token from the Google / Apple native SDK" },
+            name: { type: "string", description: "Apple: pass the name from the first sign-in" },
+            language: { type: "string", enum: ["fr", "en"] },
+          },
+        },
+        AuthSessionResponse: {
           type: "object",
           properties: {
             success: { type: "boolean", example: true },
-            message: { type: "string", example: "Login successful" },
+            message: { type: "string", example: "Logged in successfully!" },
             data: {
               type: "object",
               properties: {
-                accessToken: { type: "string" },
                 user: { $ref: "#/components/schemas/User" },
+                accessToken: { type: "string" },
+                refreshToken: { type: "string" },
+                requiresPhone: { type: "boolean", description: "Social login only" },
+                requiresVerification: { type: "boolean", description: "Login only — no tokens; show the OTP screen" },
               },
             },
           },
@@ -128,56 +174,274 @@ const options: swaggerJsdoc.Options = {
           type: "object",
           required: ["oldPassword", "newPassword"],
           properties: {
-            oldPassword: { type: "string", example: "OldPass1!" },
-            newPassword: { type: "string", example: "NewPass2@" },
+            oldPassword: { type: "string", example: "kadou2026" },
+            newPassword: { type: "string", example: "kadou2027" },
           },
         },
-        SetPasswordRequest: {
+        UpdateMeRequest: {
           type: "object",
-          required: ["password"],
           properties: {
-            password: { type: "string", example: "NewPass1!" },
+            name: { type: "string", example: "Mamadou Diallo" },
+            avatar: {
+              type: "object",
+              properties: { url: { type: "string" }, publicId: { type: "string" } },
+              description: "Upload with POST /upload first",
+            },
+            language: { type: "string", enum: ["fr", "en"] },
+            country: { type: "string", example: "GN" },
           },
         },
-        ForgotPasswordRequest: {
+        CreateTeamMemberRequest: {
           type: "object",
-          required: ["email"],
+          required: ["name", "email", "password", "role"],
           properties: {
-            email: { type: "string", format: "email", example: "john@example.com" },
+            name: { type: "string", example: "Fatoumata Camara" },
+            email: { type: "string", format: "email", example: "fatoumata@kadou.com" },
+            phone: { type: "string", example: "+224620000001" },
+            password: { type: "string", example: "kadouStaff1" },
+            role: { type: "string", enum: ["staff", "admin"] },
           },
         },
-        ResetPasswordRequest: {
+        UpdateSettingsRequest: {
           type: "object",
-          required: ["password"],
+          description: "Any subset of fields. Nested objects are merged, not replaced.",
           properties: {
-            password: { type: "string", example: "ResetPass1!" },
-          },
-        },
-        SendOtpRequest: {
-          type: "object",
-          required: ["email"],
-          properties: {
-            email: { type: "string", format: "email", example: "john@example.com" },
-          },
-        },
-        VerifyOtpRequest: {
-          type: "object",
-          required: ["email", "otp"],
-          properties: {
-            email: { type: "string", format: "email", example: "john@example.com" },
-            otp: {
-              type: "string",
-              pattern: "^\\d{6}$",
-              example: "123456",
-              description: "6-digit numeric OTP",
+            platformName: { type: "string" },
+            supportEmail: { type: "string" },
+            contactNumber: { type: "string" },
+            whatsappSupportNumber: { type: "string" },
+            commission: {
+              type: "object",
+              properties: { rate: { type: "number", example: 10 }, min: { type: "integer", example: 1000 } },
+            },
+            platformFee: { type: "integer", example: 1000 },
+            taxRate: { type: "number", example: 0 },
+            riderCashLimitDefault: { type: "integer", example: 1000000 },
+            pricing: {
+              type: "object",
+              properties: {
+                jobPublishFee: { type: "integer", example: 5000 },
+                cvUnlockFee: { type: "integer", example: 5000 },
+                spontaneousApplicationFee: { type: "integer", example: 5000 },
+              },
             },
           },
         },
-        UpdateUserRequest: {
+        LatLng: {
+          type: "object",
+          required: ["lat", "lng"],
+          properties: {
+            lat: { type: "number", example: 9.5092 },
+            lng: { type: "number", example: -13.7122 },
+          },
+        },
+        FileRef: {
+          type: "object",
+          properties: { url: { type: "string" }, publicId: { type: "string" } },
+          description: "Returned by POST /upload",
+        },
+        AddressRequest: {
+          type: "object",
+          required: ["fullName", "phone", "city", "location"],
+          properties: {
+            label: { type: "string", enum: ["home", "office", "other"] },
+            customLabel: { type: "string", example: "Mum's house" },
+            fullName: { type: "string", example: "Maher Kashan" },
+            phone: { type: "string", example: "+224623457821" },
+            region: { type: "string", example: "Conakry" },
+            city: { type: "string", example: "Kaloum" },
+            commune: { type: "string", example: "Kaloum" },
+            neighborhood: { type: "string", example: "Almamya" },
+            landmark: { type: "string", example: "Next to BICIGUI Bank, 3rd floor office" },
+            directions: { type: "string" },
+            location: { $ref: "#/components/schemas/LatLng" },
+            placePhoto: { $ref: "#/components/schemas/FileRef" },
+            isDefault: { type: "boolean" },
+          },
+        },
+        Address: {
+          allOf: [
+            { $ref: "#/components/schemas/AddressRequest" },
+            { type: "object", properties: { _id: { type: "string" }, isDefault: { type: "boolean" } } },
+          ],
+        },
+        CategoryRequest: {
+          type: "object",
+          required: ["name", "type"],
+          properties: {
+            name: {
+              type: "object",
+              properties: { fr: { type: "string", example: "Électronique" }, en: { type: "string", example: "Electronics" } },
+            },
+            type: { type: "string", enum: ["product", "business", "service", "job"] },
+            parentId: { type: "string", nullable: true, description: "Set to create a subcategory (same type)" },
+            image: { $ref: "#/components/schemas/FileRef" },
+            isFeatured: { type: "boolean" },
+            sortOrder: { type: "integer" },
+            isActive: { type: "boolean" },
+          },
+        },
+        ApprovalStatus: {
+          type: "string",
+          enum: ["draft", "pending", "approved", "rejected", "needs_changes", "suspended"],
+        },
+        VerificationDocument: {
           type: "object",
           properties: {
-            name: { type: "string", minLength: 2, maxLength: 50, example: "Jane Doe" },
-            phone: { type: "string", example: "+8801798765432" },
+            _id: { type: "string" },
+            type: { type: "string" },
+            file: { $ref: "#/components/schemas/FileRef" },
+            status: { type: "string", enum: ["pending", "verified", "rejected"] },
+            note: { type: "string" },
+          },
+        },
+        VendorApplicationRequest: {
+          type: "object",
+          description: "Any subset — send what each onboarding screen collects",
+          properties: {
+            storeName: { type: "string", example: "TechHub Store" },
+            businessCategoryId: { type: "string", description: "Category of type business" },
+            marketName: { type: "string", example: "Marché Madina" },
+            businessPhone: { type: "string", example: "+224620000000" },
+            businessEmail: { type: "string" },
+            logo: { $ref: "#/components/schemas/FileRef" },
+            address: {
+              type: "object",
+              properties: {
+                text: { type: "string", example: "Kaloum Market Street" },
+                city: { type: "string", example: "Conakry" },
+                country: { type: "string", example: "GN" },
+                location: { $ref: "#/components/schemas/LatLng" },
+              },
+            },
+            documents: {
+              type: "array",
+              description: "Replaces the list. business_license is optional.",
+              items: {
+                type: "object",
+                properties: {
+                  type: { type: "string", enum: ["business_license", "national_id"] },
+                  file: { $ref: "#/components/schemas/FileRef" },
+                },
+              },
+            },
+          },
+        },
+        VendorProfile: {
+          type: "object",
+          properties: {
+            _id: { type: "string" },
+            userId: { type: "string" },
+            storeName: { type: "string" },
+            logo: { $ref: "#/components/schemas/FileRef" },
+            businessCategoryId: { type: "string" },
+            marketName: { type: "string" },
+            businessPhone: { type: "string" },
+            businessEmail: { type: "string" },
+            address: {
+              type: "object",
+              properties: {
+                text: { type: "string" },
+                city: { type: "string" },
+                country: { type: "string" },
+                location: { $ref: "#/components/schemas/LatLng" },
+              },
+            },
+            documents: { type: "array", items: { $ref: "#/components/schemas/VerificationDocument" } },
+            approvalStatus: { $ref: "#/components/schemas/ApprovalStatus" },
+            reviewNote: { type: "string", description: "Admin message on reject / needs_changes / suspend" },
+            isOpen: { type: "boolean" },
+            availability: {
+              type: "object",
+              properties: {
+                enabled: { type: "boolean" },
+                days: { type: "array", items: { type: "string" } },
+                openTime: { type: "string", example: "08:00" },
+                closeTime: { type: "string", example: "20:00" },
+              },
+            },
+            stats: { type: "object" },
+          },
+        },
+        RiderApplicationRequest: {
+          type: "object",
+          description: "Any subset — send what each onboarding screen collects",
+          properties: {
+            partnerType: { type: "string", enum: ["moto", "transit"], description: "transit = bus driver" },
+            vehicle: {
+              type: "object",
+              properties: {
+                type: { type: "string", enum: ["motorbike", "bicycle", "car", "bus", "minibus"] },
+                color: { type: "string", example: "Red" },
+                brand: { type: "string", example: "Yamaha" },
+                plateNumber: { type: "string", example: "GN-4587-KD" },
+              },
+            },
+            vestNumber: { type: "string", example: "V-1024" },
+            cityArea: { type: "string", example: "Kipé, Conakry" },
+            nationalIdNumber: { type: "string", example: "53345-6646547-1" },
+            transitRoutes: {
+              type: "array",
+              description: "Bus drivers only (station ids from GET /transit-stations)",
+              items: {
+                type: "object",
+                properties: { fromStationId: { type: "string" }, toStationId: { type: "string" } },
+              },
+            },
+            documents: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  type: { type: "string", enum: ["driver_license", "national_id", "vehicle_registration"] },
+                  file: { $ref: "#/components/schemas/FileRef" },
+                },
+              },
+            },
+          },
+        },
+        RiderProfile: {
+          allOf: [
+            { $ref: "#/components/schemas/RiderApplicationRequest" },
+            {
+              type: "object",
+              properties: {
+                _id: { type: "string" },
+                userId: { type: "string" },
+                approvalStatus: { $ref: "#/components/schemas/ApprovalStatus" },
+                reviewNote: { type: "string" },
+                isOnline: { type: "boolean" },
+                stats: { type: "object" },
+              },
+            },
+          ],
+        },
+        ReviewApplicationRequest: {
+          type: "object",
+          required: ["action"],
+          properties: {
+            action: { type: "string", enum: ["approve", "reject", "needs_changes", "suspend", "reinstate"] },
+            note: { type: "string", description: "Required for reject / needs_changes / suspend — shown to the applicant" },
+          },
+        },
+        ReviewDocumentRequest: {
+          type: "object",
+          required: ["status"],
+          properties: {
+            status: { type: "string", enum: ["verified", "rejected"] },
+            note: { type: "string", description: "Required when rejected" },
+          },
+        },
+        PayoutMethodRequest: {
+          type: "object",
+          required: ["mode", "type", "accountName", "accountNumber"],
+          properties: {
+            mode: { type: "string", enum: ["vendor", "rider"] },
+            type: { type: "string", enum: ["orange_money", "mobile_money", "bank"] },
+            accountName: { type: "string", example: "Anthony Jack" },
+            accountNumber: { type: "string", example: "+224623447788", description: "Phone number for mobile money" },
+            bankName: { type: "string", description: "Required for bank" },
+            isDefault: { type: "boolean" },
           },
         },
         DeviceTokenRequest: {
@@ -197,19 +461,13 @@ const options: swaggerJsdoc.Options = {
               oneOf: [
                 {
                   type: "object",
-                  properties: {
-                    url: { type: "string" },
-                    publicId: { type: "string" },
-                  },
+                  properties: { url: { type: "string" }, publicId: { type: "string" } },
                 },
                 {
                   type: "array",
                   items: {
                     type: "object",
-                    properties: {
-                      url: { type: "string" },
-                      publicId: { type: "string" },
-                    },
+                    properties: { url: { type: "string" }, publicId: { type: "string" } },
                   },
                 },
               ],
@@ -219,14 +477,26 @@ const options: swaggerJsdoc.Options = {
       },
     },
     tags: [
-      { name: "Auth", description: "Authentication & authorization" },
-      { name: "User", description: "User management" },
-      { name: "OTP", description: "One-time password for email verification" },
+      { name: "Auth", description: "Sign up, OTP verification, login, passwords" },
+      { name: "User", description: "My profile, mode switch, phone, preferences" },
+      { name: "User — Admin", description: "Manage app users and admin team members" },
+      { name: "Address", description: "My saved delivery addresses" },
+      { name: "Category", description: "Product, business, service and job categories" },
+      { name: "Vendor", description: "Become a Vendor, my store, public stores" },
+      { name: "Vendor — Admin", description: "Review vendor applications and documents" },
+      { name: "Rider", description: "Become a Delivery Partner, my rider profile, rider search" },
+      { name: "Rider — Admin", description: "Review rider applications and documents" },
+      { name: "Vendor–Rider Link", description: "A store's rider network (invite / request / accept)" },
+      { name: "Wallet", description: "Vendor / rider wallet and payout methods" },
+      { name: "Transit Station", description: "Bus stations for intercity delivery" },
+      { name: "Settings", description: "Platform fees, commission and support contacts" },
+      { name: "Audit Log", description: "History of admin and money actions" },
       { name: "Upload", description: "File uploads via Cloudinary" },
       { name: "Device Token", description: "Push notification device tokens" },
     ],
   },
-  apis: [path.join(__dirname, "../modules/**/*.route.*")],
+  // Glob patterns need forward slashes — path.join gives backslashes on Windows
+  apis: [path.join(__dirname, "../modules/**/*.route.*").split(path.sep).join("/")],
 };
 
 export const swaggerSpec = swaggerJsdoc(options);

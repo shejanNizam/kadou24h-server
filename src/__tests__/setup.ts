@@ -12,7 +12,6 @@ process.env.SUPER_ADMIN_EMAIL = "super@example.com";
 process.env.SUPER_ADMIN_PASSWORD = "SuperSecure@123";
 process.env.ADMIN_EMAIL = "admin@example.com";
 process.env.ADMIN_PASSWORD = "AdminSecure@123";
-process.env.EXPRESS_SESSION_SECRET = "test_session_secret";
 process.env.FRONTEND_URL = "*";
 process.env.REDIS_HOST = "localhost";
 process.env.REDIS_PORT = "6379";

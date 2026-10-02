@@ -77,6 +77,34 @@ export const initSocket = async (httpServer: HTTPServer): Promise<Server> => {
       socket.to(`conv:${conversationId}`).emit("stop_typing", { conversationId, userId });
     });
 
+    // Delivery tracking room
+    socket.on("join_delivery", (deliveryId: string) => {
+      socket.join(`delivery:${deliveryId}`);
+    });
+
+    socket.on("leave_delivery", (deliveryId: string) => {
+      socket.leave(`delivery:${deliveryId}`);
+    });
+
+    socket.on(
+      "rider_location",
+      ({
+        deliveryId,
+        lat,
+        lng,
+        heading,
+      }: {
+        deliveryId: string;
+        lat: number;
+        lng: number;
+        heading?: number;
+      }) => {
+        socket
+          .to(`delivery:${deliveryId}`)
+          .emit("rider:location_updated", { deliveryId, lat, lng, heading });
+      },
+    );
+
     socket.on("disconnect", () => {
       socket.leave(`user:${userId}`);
     });
@@ -109,6 +137,17 @@ export const emitToUser = (userId: string, event: string, data: unknown): void =
 export const emitToConversation = (conversationId: string, event: string, data: unknown): void => {
   try {
     getIO().to(`conv:${conversationId}`).emit(event, data);
+  } catch {
+    // socket not yet initialized, skip silently
+  }
+};
+
+/**
+ * Emit an event to all sockets watching a specific delivery tracking room.
+ */
+export const emitToDelivery = (deliveryId: string, event: string, data: unknown): void => {
+  try {
+    getIO().to(`delivery:${deliveryId}`).emit(event, data);
   } catch {
     // socket not yet initialized, skip silently
   }

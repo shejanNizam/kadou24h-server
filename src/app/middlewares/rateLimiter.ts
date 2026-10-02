@@ -17,11 +17,13 @@ export const authLimiter = rateLimit({
   message: { success: false, message: "Too many auth attempts, please try again later." },
 });
 
-// For OTP send — very tight to prevent abuse
+// For routes that send an OTP. Mobile carriers in Guinea put many users behind
+// one IP, so this per-IP limit is loose; the real cap is per phone/email in
+// OTPService (60s cooldown, 10 codes per day).
 export const otpLimiter = rateLimit({
   windowMs: 60 * 60 * 1000, // 1 hour
-  limit: 5,
+  limit: 30,
   standardHeaders: "draft-8",
   legacyHeaders: false,
-  message: { success: false, message: "OTP request limit reached, please try again in an hour." },
+  message: { success: false, message: "Too many code requests, please try again later." },
 });
