@@ -1,0 +1,1170 @@
+// ════════════════════════════════════════════════════════════════
+//  Kadou24h — Multi-Role Marketplace, Delivery & Jobs Platform
+//  Database Design (v3.1)
+//  MongoDB (Mongoose) · modeled in DBML
+//  Scope: CUSTOMER APP + VENDOR MODE + RIDER/DRIVER MODE + ADMIN PANEL
+//  Docs: https://dbml.dbdiagram.io/docs
+//
+//  CONVENTIONS
+//  - Money: integers in GNF (no decimals). USD shown in UI = display conversion only.
+//  - Geo: GeoJSON Point { type: "Point", coordinates: [lng, lat] } + 2dsphere index.
+//  - Tables marked "subdoc of X" are embedded arrays inside X, not collections.
+//  - Default language: French (fr). Admin-managed text stored as { fr, en }.
+//  - OTPs live in Redis: key `otp:<purpose>:<phone|email>` = { otpHash, attempts }, 5-min TTL.
+//  - Rider live location lives in Redis: `rider:<id>:loc`, streamed via Socket.io.
+//  - Soft delete (is_deleted + deleted_at) on users, products, jobs.
+//
+//  CHANGELOG vs v3.0  (46 -> 38 collections)
+//  ── EMBEDDED ──
+//  - addresses        -> user_addresses      (subdoc of users, max 10)
+//  - payout_methods   -> wallet_payout_methods (subdoc of wallets)
+//  - blocks           -> users.blocked_user_ids[]
+//  ── MERGED ──
+//  - intercity_fares  -> delivery_rates (type: local | intercity)
+//  - cv_unlocks       -> payments (purpose: cv_unlock, partial unique index)
+//  ── REMOVED / DEFERRED ──
+//  - referrals        -> removed; users.referred_by is enough until rewards exist
+//  - coupons, coupon_redemptions -> deferred to Phase 2 (no admin screen yet)
+//
+//  CHANGELOG v3.0 vs v2.0 (docs/DB_DESIGN.md)
+//  ── MULTI-ROLE ACCOUNT ──
+//  - users.role (single) -> users.roles[] + users.last_active_mode
+//    Everyone signs up as customer; "Become a Vendor / Delivery Partner"
+//    creates a profile that needs admin approval, then unlocks mode switch.
+//  - vendor_profiles / rider_profiles: approval_status adds draft | needs_changes,
+//    + review_note + application_history (subdoc)
+//  - users.status (account-wide) is separate from profile status (role-only)
+//  - users.token_version: bump to invalidate all sessions on ban / password change
+//
+//  Carried from v2.0: per-vendor sub_orders, 3-leg intercity deliveries with
+//  PIN handover, escrow wallets + append-only ledger, COD cash limit +
+//  settlements, chat moderation, 5000 GNF job publish / CV unlock.
+// ════════════════════════════════════════════════════════════════
+
+
+// ──────────────────────────────
+// AUTH & USER
+// ──────────────────────────────
+
+Table users {
+  id varchar [primary key, note: 'MongoDB ObjectId']
+  name varchar [not null]
+  phone varchar [unique, not null, note: 'E.164, e.g. +224... — primary identity, SMS OTP']
+  email varchar [unique, note: 'optional for app users, required for admin/staff']
+  password varchar [note: 'bcrypt; NULL for Google/Apple-only accounts']
+  avatar varchar [note: 'Cloudinary { url, publicId }']
+  roles varchar [not null, note: 'string[]: customer | vendor | rider  — OR one of: staff | admin | super_admin (never mixed)']
+  last_active_mode varchar [not null, default: 'customer', note: 'customer | vendor | rider — app opens in this mode']
+  is_phone_verified boolean [not null, default: false]
+  is_email_verified boolean [not null, default: false]
+  language varchar [not null, default: 'fr', note: 'fr | en']
+  country varchar [default: 'GN']
+  status varchar [not null, default: 'active', note: 'ACCOUNT-wide: active | inactive | suspended | banned']
+  status_reason varchar
+  token_version integer [not null, default: 0, note: 'bump to invalidate all tokens']
+  notification_prefs json [note: '{ orderUpdates, messages, deliveryUpdates, offers, jobPosts, accountAlerts } booleans']
+  moderation json [note: '{ violationCount, lastViolationAt, chatRestrictedUntil }']
+  referral_code varchar [unique, note: 'sparse; Share KADOU link']
+  referred_by varchar [note: 'users.id']
+  blocked_user_ids json [note: 'ObjectId[] — users this user blocked (chat)']
+  last_login_at timestamp
+  is_deleted boolean [not null, default: false]
+  deleted_at timestamp
+  created_at timestamp
+  updated_at timestamp
+
+  Indexes {
+    phone [unique]
+    email [unique, note: 'sparse']
+    (roles, status)
+    referral_code [unique, note: 'sparse']
+  }
+}
+
+// Existing boilerplate collection — links a user to local / google / apple login.
+Table auth_identities {
+  id varchar [primary key, note: 'MongoDB ObjectId']
+  user_id varchar [not null]
+  provider varchar [not null, note: 'local | google | apple']
+  provider_id varchar [not null]
+  created_at timestamp
+  updated_at timestamp
+
+  Indexes {
+    (provider, provider_id) [unique]
+    user_id
+  }
+}
+
+// Existing boilerplate collection — FCM/APNs push tokens.
+Table device_tokens {
+  id varchar [primary key, note: 'MongoDB ObjectId']
+  user_id varchar [not null]
+  token varchar [unique, not null]
+  platform varchar [not null, note: 'ios | android | web']
+  last_active_at timestamp
+  created_at timestamp
+  updated_at timestamp
+
+  Indexes {
+    user_id
+  }
+}
+
+// Embedded in users (bounded, always read with the user). Copied into orders at checkout.
+Table user_addresses {
+  id varchar [primary key, note: 'subdoc of users — max 10']
+  user_id varchar [not null]
+  label varchar [not null, default: 'home', note: 'home | office | other']
+  custom_label varchar
+  full_name varchar [not null]
+  phone varchar [not null]
+  region varchar
+  city varchar [not null]
+  commune varchar
+  neighborhood varchar
+  landmark varchar [note: 'e.g. "Next to BICIGUI Bank, 3rd floor" — no formal addresses in Guinea']
+  directions text
+  location json [not null, note: 'GeoJSON Point — required (pin)']
+  place_photo varchar [note: 'Cloudinary URL — photo of gate / house']
+  is_default boolean [not null, default: false]
+}
+
+
+// ──────────────────────────────
+// VENDOR & RIDER PROFILES (role upgrade + KYC)
+// ──────────────────────────────
+
+Table vendor_profiles {
+  id varchar [primary key, note: 'MongoDB ObjectId']
+  user_id varchar [unique, not null]
+  is_platform_store boolean [not null, default: false, note: 'true = admin-owned store (admin can sell)']
+  store_name varchar [not null]
+  logo varchar [note: 'Cloudinary URL']
+  business_category_id varchar [note: 'categories.id (type = business)']
+  market_name varchar
+  business_phone varchar
+  business_email varchar
+  address_text varchar
+  city varchar
+  country varchar [default: 'GN']
+  location json [note: 'GeoJSON Point — distance filter']
+  is_open boolean [not null, default: false, note: 'Open / Closed toggle']
+  availability json [note: '{ enabled, days: [mon..sun], openTime: "11:00", closeTime: "21:00" }']
+  approval_status varchar [not null, default: 'draft', note: 'draft | pending | approved | rejected | needs_changes | suspended — ROLE-only status']
+  review_note text [note: 'admin message, e.g. "license photo blurry"']
+  reviewed_by varchar [note: 'users.id (admin)']
+  reviewed_at timestamp
+  stats json [note: '{ ratingAvg, ratingCount, totalOrders, totalProducts, totalRevenue } — denormalized']
+  created_at timestamp
+  updated_at timestamp
+
+  Indexes {
+    user_id [unique]
+    approval_status
+    location [note: '2dsphere']
+  }
+}
+
+Table rider_profiles {
+  id varchar [primary key, note: 'MongoDB ObjectId']
+  user_id varchar [unique, not null]
+  partner_type varchar [not null, note: 'moto (first/last mile) | transit (bus driver, station -> station)']
+  vehicle_type varchar [not null, note: 'motorbike | bicycle | car | bus | minibus']
+  vehicle_color varchar
+  vehicle_brand varchar
+  plate_number varchar
+  vest_number varchar
+  city_area varchar
+  national_id_number varchar
+  approval_status varchar [not null, default: 'draft', note: 'draft | pending | approved | rejected | needs_changes | suspended']
+  review_note text
+  reviewed_by varchar
+  reviewed_at timestamp
+  is_online boolean [not null, default: false, note: 'true only while in Driver Mode']
+  last_location json [note: 'GeoJSON Point — sampled copy; live position in Redis']
+  last_location_at timestamp
+  active_delivery_count integer [not null, default: 0]
+  cash_limit integer [note: 'max COD cash held (GNF); NULL = settings default']
+  stats json [note: '{ ratingAvg, ratingCount, totalDeliveries, completed, cancelled }']
+  created_at timestamp
+  updated_at timestamp
+
+  Indexes {
+    user_id [unique]
+    (approval_status, partner_type)
+    (is_online, last_location) [note: '2dsphere on last_location']
+  }
+}
+
+// Subdoc of vendor_profiles / rider_profiles — KYC files verified one by one.
+Table verification_documents {
+  id varchar [primary key, note: 'subdoc of vendor_profiles | rider_profiles']
+  profile_id varchar [not null]
+  type varchar [not null, note: 'business_license | national_id | driver_license | vehicle_registration']
+  file varchar [not null, note: 'Cloudinary URL']
+  status varchar [not null, default: 'pending', note: 'pending | verified | rejected']
+  note varchar
+}
+
+// Subdoc of vendor_profiles / rider_profiles — every submit / review kept.
+Table application_history {
+  id varchar [primary key, note: 'subdoc of vendor_profiles | rider_profiles']
+  profile_id varchar [not null]
+  action varchar [not null, note: 'submitted | approved | rejected | needs_changes | resubmitted | suspended']
+  note text
+  by_user_id varchar
+  at timestamp [not null]
+}
+
+// Subdoc of rider_profiles (partner_type = transit only).
+Table rider_transit_routes {
+  id varchar [primary key, note: 'subdoc of rider_profiles']
+  rider_profile_id varchar [not null]
+  from_station_id varchar [not null]
+  to_station_id varchar [not null]
+}
+
+// Vendor <-> rider network: "connect via invitation or search".
+Table vendor_rider_links {
+  id varchar [primary key, note: 'MongoDB ObjectId']
+  vendor_id varchar [not null, note: 'vendor_profiles.id']
+  rider_id varchar [not null, note: 'rider_profiles.id']
+  initiated_by varchar [not null, note: 'vendor | rider']
+  status varchar [not null, default: 'invited', note: 'invited | active | declined | removed']
+  invited_at timestamp
+  responded_at timestamp
+  created_at timestamp
+  updated_at timestamp
+
+  Indexes {
+    (vendor_id, rider_id) [unique]
+    (rider_id, status)
+  }
+}
+
+// Admin-managed bus stations for intercity relay + station pickup.
+Table transit_stations {
+  id varchar [primary key, note: 'MongoDB ObjectId']
+  name varchar [not null]
+  city varchar [not null]
+  region varchar
+  location json [not null, note: 'GeoJSON Point']
+  is_active boolean [not null, default: true]
+  created_at timestamp
+  updated_at timestamp
+
+  Indexes {
+    city
+    location [note: '2dsphere']
+  }
+}
+
+
+// ──────────────────────────────
+// CATALOG
+// ──────────────────────────────
+
+Table categories {
+  id varchar [primary key, note: 'MongoDB ObjectId']
+  name json [not null, note: '{ fr, en }']
+  slug varchar [unique, not null]
+  image varchar [note: 'Cloudinary URL']
+  parent_id varchar [note: 'NULLABLE — set = subcategory']
+  type varchar [not null, note: 'product | job | business | service']
+  is_featured boolean [not null, default: false, note: 'Home "Top Categories"']
+  sort_order integer [not null, default: 0]
+  is_active boolean [not null, default: true]
+  created_at timestamp
+  updated_at timestamp
+
+  Indexes {
+    slug [unique]
+    (type, parent_id, is_active)
+  }
+}
+
+Table products {
+  id varchar [primary key, note: 'MongoDB ObjectId']
+  vendor_id varchar [not null, note: 'vendor_profiles.id']
+  category_id varchar [not null]
+  subcategory_id varchar
+  name varchar [not null]
+  slug varchar [not null]
+  description text
+  price integer [not null, note: 'GNF']
+  discount_price integer [note: 'GNF, < price']
+  images json [note: '[{ url, publicId }]']
+  features json [note: 'string[] — tag chips on product page']
+  in_the_box json [note: 'string[]']
+  tags json [note: 'string[]: popular | new | bestseller']
+  stock_qty integer [not null, default: 0, note: '0 = Out of Stock']
+  min_stock_alert integer [not null, default: 0]
+  prep_time_minutes integer
+  is_available boolean [not null, default: true, note: 'vendor "Available for sale" toggle']
+  approval_status varchar [not null, default: 'pending', note: 'pending | approved | rejected']
+  vendor_location json [note: 'GeoJSON Point — copied from vendor for distance filter']
+  rating_avg float [not null, default: 0]
+  rating_count integer [not null, default: 0]
+  sold_count integer [not null, default: 0]
+  created_by varchar [note: 'users.id — vendor or admin']
+  is_deleted boolean [not null, default: false]
+  deleted_at timestamp
+  created_at timestamp
+  updated_at timestamp
+
+  Indexes {
+    (vendor_id, is_deleted)
+    (category_id, approval_status, is_available)
+    vendor_location [note: '2dsphere']
+    // text index on (name, description) — declared in Mongoose
+  }
+}
+
+Table favorites {
+  id varchar [primary key, note: 'MongoDB ObjectId']
+  user_id varchar [not null]
+  product_id varchar [not null]
+  created_at timestamp
+
+  Indexes {
+    (user_id, product_id) [unique]
+  }
+}
+
+// One review per vendor sub-order; shown on vendor + each product in it.
+Table reviews {
+  id varchar [primary key, note: 'MongoDB ObjectId']
+  author_id varchar [not null]
+  sub_order_id varchar [not null]
+  vendor_id varchar [not null]
+  product_ids json [note: 'ObjectId[]']
+  rider_id varchar
+  rating integer [not null, note: '1–5 (Terrible..Excellent)']
+  comment text
+  status varchar [not null, default: 'visible', note: 'visible | hidden']
+  report_count integer [not null, default: 0]
+  created_at timestamp
+  updated_at timestamp
+
+  Indexes {
+    (author_id, sub_order_id) [unique]
+    (vendor_id, status)
+    product_ids
+  }
+}
+
+
+// ──────────────────────────────
+// CART & ORDERS
+// ──────────────────────────────
+
+Table carts {
+  id varchar [primary key, note: 'MongoDB ObjectId']
+  user_id varchar [unique, not null]
+  updated_at timestamp
+}
+
+Table cart_items {
+  id varchar [primary key, note: 'subdoc of carts — prices always recomputed live']
+  cart_id varchar [not null]
+  product_id varchar [not null]
+  vendor_id varchar [not null]
+  qty integer [not null]
+}
+
+// coupons + coupon_redemptions: DEFERRED to Phase 2 (no admin screen in Figma yet).
+
+// One per checkout (customer view). Payment is per order.
+Table orders {
+  id varchar [primary key, note: 'MongoDB ObjectId']
+  order_number varchar [unique, not null, note: 'e.g. AP421 — from counters']
+  customer_id varchar [not null]
+  address_snapshot json [not null, note: 'full address copy incl. location, photo, landmark']
+  delivery_type varchar [not null, note: 'local | intercity | station_pickup']
+  destination_station_id varchar [note: 'intercity / station_pickup']
+  special_instructions text
+  payment_method varchar [not null, note: 'cod | orange_money | mobile_money | card']
+  payment_status varchar [not null, default: 'unpaid', note: 'unpaid | paid | partially_refunded | refunded']
+  subtotal integer [not null]
+  delivery_fee integer [not null, note: 'sum of all leg fees']
+  tax_amount integer [not null, default: 0]
+  platform_fee integer [not null, note: 'customer fee, min 1000 GNF']
+  discount integer [not null, default: 0]
+  total integer [not null]
+  coupon_code varchar [note: 'Phase 2 — unused until coupons ship']
+  status varchar [not null, default: 'active', note: 'derived: active | completed | cancelled | partially_cancelled']
+  placed_at timestamp [not null]
+  created_at timestamp
+  updated_at timestamp
+
+  Indexes {
+    order_number [unique]
+    (customer_id, created_at)
+    (status, created_at)
+  }
+}
+
+// One per vendor inside an order — the main working document.
+Table sub_orders {
+  id varchar [primary key, note: 'MongoDB ObjectId']
+  order_id varchar [not null]
+  sub_order_number varchar [unique, not null, note: 'e.g. AP421-1']
+  customer_id varchar [not null]
+  vendor_id varchar [not null]
+  current_leg_id varchar [note: 'deliveries.id']
+  current_rider_id varchar [note: 'rider_profiles.id']
+  subtotal integer [not null]
+  delivery_fee integer [not null]
+  discount_share integer [not null, default: 0]
+  total integer [not null]
+  commission_rate float [not null, note: 'snapshot, e.g. 10']
+  commission_amount integer [not null, note: 'max(rate% x subtotal, 1000 GNF)']
+  vendor_earning integer [not null]
+  status varchar [not null, default: 'new', note: 'new | accepted | preparing | ready_for_pickup | in_delivery | delivered | cancelled']
+  estimated_delivery_at timestamp
+  cancellation json [note: '{ by: customer|vendor|admin, reason, at }']
+  cod_amount_to_collect integer [note: 'COD only']
+  cod_collected_by varchar [note: 'rider_profiles.id']
+  cod_collected_at timestamp
+  settlement varchar [not null, default: 'held', note: 'held | released | refunded (escrow)']
+  released_at timestamp
+  created_at timestamp
+  updated_at timestamp
+
+  Indexes {
+    order_id
+    (vendor_id, status, created_at)
+    (customer_id, created_at)
+    (current_rider_id, status)
+  }
+}
+
+Table sub_order_items {
+  id varchar [primary key, note: 'subdoc of sub_orders — snapshot at order time']
+  sub_order_id varchar [not null]
+  product_id varchar [not null]
+  name varchar [not null]
+  image varchar
+  unit_price integer [not null]
+  qty integer [not null]
+  line_total integer [not null]
+  removed boolean [not null, default: false, note: 'vendor removed via order modification']
+}
+
+Table sub_order_timeline {
+  id varchar [primary key, note: 'subdoc of sub_orders — drives tracking screens']
+  sub_order_id varchar [not null]
+  status varchar [not null, note: 'status or event, e.g. arrived_departure_station']
+  note varchar
+  by_user_id varchar
+  at timestamp [not null]
+}
+
+Table sub_order_modifications {
+  id varchar [primary key, note: 'subdoc of sub_orders — vendor edits after chat']
+  sub_order_id varchar [not null]
+  removed_items json [note: '[{ productId, qty }]']
+  old_total integer [not null]
+  new_total integer [not null]
+  refund_amount integer [not null, default: 0]
+  by_user_id varchar [not null]
+  at timestamp [not null]
+}
+
+// Delivery legs: local = 1 leg; intercity = 3 legs (moto -> bus -> moto).
+Table deliveries {
+  id varchar [primary key, note: 'MongoDB ObjectId']
+  sub_order_id varchar [not null]
+  leg_number integer [not null, note: '1..3']
+  leg_type varchar [not null, note: 'local | first_mile | line_haul | last_mile']
+  rider_id varchar [note: 'rider_profiles.id — NULL while pending_assignment']
+  assigned_by varchar [note: 'users.id — vendor / previous rider / admin']
+  from_kind varchar [not null, note: 'vendor | station']
+  from_ref_id varchar [not null]
+  from_location json [not null]
+  to_kind varchar [not null, note: 'station | customer']
+  to_ref_id varchar
+  to_location json [not null]
+  status varchar [not null, default: 'pending_assignment', note: 'pending_assignment | assigned | accepted | declined | going_to_pickup | picked_up | in_transit | delivered | cancelled']
+  fee integer [not null, note: 'GNF — 100% to partner (app free for riders)']
+  pickup_pin_hash varchar [note: 'giver shows PIN -> rider enters at pickup']
+  handover_pin_hash varchar [note: 'receiver (next driver / customer) PIN -> completes leg']
+  pin_attempts integer [not null, default: 0]
+  pin_locked_until timestamp [note: 'lock after 5 wrong attempts']
+  collects_cash boolean [not null, default: false, note: 'true only on final leg of COD']
+  proof_photo varchar
+  decline_reason varchar
+  assigned_at timestamp
+  accepted_at timestamp
+  picked_up_at timestamp
+  delivered_at timestamp
+  created_at timestamp
+  updated_at timestamp
+
+  Indexes {
+    (sub_order_id, leg_number)
+    (rider_id, status)
+    status
+  }
+}
+
+// Admin-managed delivery pricing.
+//  local     -> distance based (first/last mile): base_fee + per_km_fee, min_fee
+//  intercity -> fixed station -> station fare (line-haul)
+Table delivery_rates {
+  id varchar [primary key, note: 'MongoDB ObjectId']
+  type varchar [not null, note: 'local | intercity']
+  city varchar [note: 'local only']
+  vehicle_type varchar [note: 'local only']
+  base_fee integer [note: 'local only']
+  per_km_fee integer [note: 'local only']
+  min_fee integer [note: 'local only']
+  from_station_id varchar [note: 'intercity only']
+  to_station_id varchar [note: 'intercity only']
+  fee integer [note: 'intercity only — fixed fare']
+  estimated_hours integer [note: 'intercity only']
+  is_active boolean [not null, default: true]
+  updated_by varchar
+  created_at timestamp
+  updated_at timestamp
+
+  Indexes {
+    (type, city, vehicle_type) [unique, note: 'PARTIAL: type = local']
+    (type, from_station_id, to_station_id) [unique, note: 'PARTIAL: type = intercity']
+  }
+}
+
+
+// ──────────────────────────────
+// FINANCE
+// ──────────────────────────────
+
+// Money IN to the platform (orders, subscriptions, job publish, CV unlock...).
+Table payments {
+  id varchar [primary key, note: 'MongoDB ObjectId']
+  payer_id varchar [not null]
+  purpose varchar [not null, note: 'order | subscription | job_publish | cv_unlock | spontaneous_application']
+  ref_id varchar [not null, note: 'orders / user_subscriptions / jobs / job_applications id; cv_unlock -> applicant users.id']
+  context_id varchar [note: 'optional extra link, e.g. job_applications.id for cv_unlock']
+  method varchar [not null, note: 'cod | orange_money | mobile_money | card']
+  provider varchar [note: 'gateway name']
+  amount integer [not null]
+  status varchar [not null, default: 'pending', note: 'pending | success | failed | refunded']
+  provider_ref varchar [note: 'external txn id']
+  idempotency_key varchar [unique, note: 'safe webhook / retry handling']
+  paid_at timestamp
+  raw json [note: 'gateway response']
+  created_at timestamp
+  updated_at timestamp
+
+  Indexes {
+    (purpose, ref_id)
+    (payer_id, created_at)
+    (status, created_at)
+    provider_ref
+    (payer_id, purpose, ref_id) [unique, note: 'PARTIAL: purpose = cv_unlock AND status = success — "has recruiter unlocked this candidate?"']
+  }
+}
+
+// One wallet per user per earning mode.
+Table wallets {
+  id varchar [primary key, note: 'MongoDB ObjectId']
+  owner_id varchar [not null, note: 'users.id']
+  owner_mode varchar [not null, note: 'vendor | rider']
+  held_balance integer [not null, default: 0, note: 'escrow, not yet released']
+  available_balance integer [not null, default: 0, note: 'withdrawable']
+  total_earned integer [not null, default: 0]
+  total_commission integer [not null, default: 0]
+  total_withdrawn integer [not null, default: 0]
+  cash_owed integer [not null, default: 0, note: 'rider COD cash not yet handed over']
+  created_at timestamp
+  updated_at timestamp
+
+  Indexes {
+    (owner_id, owner_mode) [unique]
+  }
+}
+
+// Embedded in wallets — chosen at withdrawal, set during vendor/rider onboarding.
+Table wallet_payout_methods {
+  id varchar [primary key, note: 'subdoc of wallets — max 5']
+  wallet_id varchar [not null]
+  type varchar [not null, note: 'orange_money | mobile_money | bank']
+  account_name varchar [not null]
+  account_number varchar [not null]
+  bank_name varchar
+  is_default boolean [not null, default: false]
+}
+
+// Append-only ledger — SOURCE OF TRUTH. Balances above are a cache.
+Table wallet_transactions {
+  id varchar [primary key, note: 'MongoDB ObjectId']
+  wallet_id varchar [not null]
+  type varchar [not null, note: 'earning_held | earning_released | commission | withdrawal | withdrawal_fee | withdrawal_reversal | refund_deduction | cod_collected | cod_settled | cod_offset | adjustment']
+  amount integer [not null, note: '+ credit / - debit']
+  balance_after integer [not null]
+  sub_order_id varchar
+  delivery_id varchar
+  withdrawal_id varchar
+  settlement_id varchar
+  note varchar
+  created_by varchar [note: 'users.id or system']
+  created_at timestamp [not null]
+
+  Indexes {
+    (wallet_id, created_at)
+    sub_order_id
+  }
+}
+
+Table withdrawals {
+  id varchar [primary key, note: 'MongoDB ObjectId']
+  request_number varchar [unique, not null, note: 'e.g. WD-10245']
+  wallet_id varchar [not null]
+  owner_id varchar [not null]
+  owner_mode varchar [not null, note: 'vendor | rider']
+  amount integer [not null]
+  fee integer [not null, default: 0]
+  net_amount integer [not null]
+  payout_method_snapshot json [not null, note: '{ type, accountName, accountNumber, bankName }']
+  status varchar [not null, default: 'pending', note: 'pending | approved | completed | rejected']
+  rejection_reason varchar
+  transaction_id varchar [note: 'admin-entered payout reference']
+  receipt_image varchar [note: 'Cloudinary URL uploaded by admin']
+  created_by_admin boolean [not null, default: false, note: 'true = admin "Create vendor payout"']
+  processed_by varchar
+  processed_at timestamp
+  created_at timestamp
+  updated_at timestamp
+
+  Indexes {
+    request_number [unique]
+    (status, created_at)
+    (owner_id, created_at)
+  }
+}
+
+// Rider hands over collected COD cash.
+Table cod_settlements {
+  id varchar [primary key, note: 'MongoDB ObjectId']
+  rider_id varchar [not null, note: 'rider_profiles.id']
+  amount integer [not null]
+  method varchar [not null, note: 'orange_money | mobile_money | cash_at_office | earnings_offset']
+  reference varchar
+  proof_image varchar
+  status varchar [not null, default: 'pending', note: 'pending | confirmed | rejected']
+  confirmed_by varchar
+  confirmed_at timestamp
+  created_at timestamp
+  updated_at timestamp
+
+  Indexes {
+    (rider_id, status)
+  }
+}
+
+Table refunds {
+  id varchar [primary key, note: 'MongoDB ObjectId']
+  order_id varchar [not null]
+  sub_order_id varchar
+  payment_id varchar
+  customer_id varchar [not null]
+  amount integer [not null]
+  reason varchar [not null]
+  notes text
+  status varchar [not null, default: 'pending', note: 'pending | completed | rejected']
+  issued_by varchar
+  created_at timestamp
+  updated_at timestamp
+
+  Indexes {
+    (status, created_at)
+    order_id
+  }
+}
+
+Table disputes {
+  id varchar [primary key, note: 'MongoDB ObjectId']
+  order_id varchar [not null]
+  sub_order_id varchar
+  customer_id varchar [not null]
+  amount integer
+  reason varchar [not null]
+  admin_resolution text
+  status varchar [not null, default: 'open', note: 'open | resolved | rejected']
+  notes text
+  resolved_by varchar
+  resolved_at timestamp
+  created_at timestamp
+  updated_at timestamp
+
+  Indexes {
+    (status, created_at)
+  }
+}
+
+
+// ──────────────────────────────
+// JOBS, CV & SUBSCRIPTIONS
+// ──────────────────────────────
+
+// AI CV + Worker listing. Any customer or vendor can have one.
+Table professional_profiles {
+  id varchar [primary key, note: 'MongoDB ObjectId']
+  user_id varchar [unique, not null]
+  profession varchar
+  summary text
+  photo varchar
+  city varchar
+  location json [note: 'GeoJSON Point']
+  uploaded_resume varchar [note: 'user-uploaded CV file (Cloudinary)']
+  generated_cv varchar [note: 'AI-generated CV file']
+  generated_at timestamp
+  skills json [note: 'string[]']
+  languages json [note: 'string[]']
+  achievements json [note: 'string[]']
+  is_worker_listed boolean [not null, default: false, note: 'shows in Popular Workers / worker search']
+  hourly_rate integer
+  experience_years integer
+  service_category_id varchar [note: 'categories.id (type = service)']
+  cv_visible boolean [not null, default: false, note: 'driven by active subscription']
+  visible_until timestamp
+  rating_avg float [not null, default: 0]
+  rating_count integer [not null, default: 0]
+  created_at timestamp
+  updated_at timestamp
+
+  Indexes {
+    user_id [unique]
+    (is_worker_listed, service_category_id)
+    (cv_visible, visible_until)
+    location [note: '2dsphere']
+  }
+}
+
+Table profile_education {
+  id varchar [primary key, note: 'subdoc of professional_profiles']
+  profile_id varchar [not null]
+  degree varchar [not null]
+  institution varchar [not null]
+  year varchar [note: 'year-only string']
+}
+
+Table profile_experience {
+  id varchar [primary key, note: 'subdoc of professional_profiles']
+  profile_id varchar [not null]
+  title varchar [not null]
+  company varchar
+  location varchar
+  start_date date
+  end_date date
+  is_current boolean [not null, default: false]
+  description text
+}
+
+Table jobs {
+  id varchar [primary key, note: 'MongoDB ObjectId']
+  posted_by varchar [not null, note: 'users.id']
+  posted_by_mode varchar [not null, note: 'customer | vendor | rider']
+  organization_name varchar [not null]
+  organization_logo varchar
+  is_verified_org boolean [not null, default: false]
+  title varchar [not null]
+  category_id varchar [note: 'categories.id (type = job)']
+  job_type varchar [not null, note: 'full_time | part_time | contract | internship']
+  workplace varchar [not null, note: 'on_site | remote | hybrid']
+  country varchar
+  city varchar
+  area varchar
+  location json [note: 'GeoJSON Point — Jobs near you']
+  salary_currency varchar [not null, default: 'GNF']
+  salary_min integer
+  salary_max integer
+  salary_frequency varchar [note: 'monthly | weekly | hourly']
+  about text [not null]
+  responsibilities json [note: 'string[]']
+  requirements json [note: 'string[]']
+  benefits json [note: 'string[]']
+  about_company text
+  pref_experience_level varchar
+  pref_min_education varchar
+  pref_skills json [note: 'string[] — used for % match']
+  pref_languages json [note: 'string[]']
+  application_method varchar
+  application_deadline date
+  vacancies integer
+  notification_email varchar
+  status varchar [not null, default: 'draft', note: 'draft | pending_payment | published | closed | expired']
+  publish_payment_id varchar [note: 'payments.id — 5000 GNF']
+  published_at timestamp
+  expires_at timestamp [note: '30-day active publication']
+  stats json [note: '{ views, applicants, shortlisted, interviews }']
+  is_deleted boolean [not null, default: false]
+  created_at timestamp
+  updated_at timestamp
+
+  Indexes {
+    (status, expires_at)
+    (posted_by, status)
+    category_id
+    location [note: '2dsphere']
+    // text index on (title, organization_name) — declared in Mongoose
+  }
+}
+
+Table job_applications {
+  id varchar [primary key, note: 'MongoDB ObjectId']
+  kind varchar [not null, default: 'offer', note: 'offer | spontaneous (paid, sent to a seller)']
+  job_id varchar [note: 'NULLABLE — set when kind = offer']
+  target_vendor_id varchar [note: 'NULLABLE — set when kind = spontaneous']
+  applicant_id varchar [not null]
+  cv_snapshot json [note: '{ file, profession, skills, summary } at apply time']
+  match_score integer [note: '0–100']
+  status varchar [not null, default: 'applied', note: 'applied | under_review | shortlisted | interview | hired | rejected | withdrawn']
+  interview json [note: '{ at, location, mapUrl, note, confirmedAt }']
+  payment_id varchar [note: 'spontaneous application fee']
+  conversation_id varchar
+  created_at timestamp
+  updated_at timestamp
+
+  Indexes {
+    (job_id, applicant_id) [unique, note: 'PARTIAL unique: partialFilterExpression { job_id: {$exists:true} }']
+    (applicant_id, created_at)
+    (target_vendor_id, status)
+  }
+}
+
+// CV unlock (5000 GNF) = a payments row with purpose = cv_unlock (see payments indexes).
+
+Table subscription_plans {
+  id varchar [primary key, note: 'MongoDB ObjectId']
+  name varchar [not null, note: 'e.g. Professional']
+  audience varchar [not null, note: 'job_seeker | service_provider']
+  price integer [not null]
+  duration_days integer [not null]
+  features json [note: 'string[]: cv_visibility | ai_cv | ai_job_description | priority_search']
+  is_active boolean [not null, default: true]
+  created_by varchar
+  created_at timestamp
+  updated_at timestamp
+}
+
+Table user_subscriptions {
+  id varchar [primary key, note: 'MongoDB ObjectId']
+  user_id varchar [not null]
+  plan_id varchar [not null]
+  plan_snapshot json [not null, note: '{ name, price, features } at purchase']
+  status varchar [not null, default: 'active', note: 'active | expired | cancelled']
+  starts_at timestamp [not null]
+  ends_at timestamp [not null]
+  payment_id varchar
+  created_at timestamp
+  updated_at timestamp
+
+  Indexes {
+    (user_id, status)
+    ends_at
+  }
+}
+
+
+// ──────────────────────────────
+// COMMUNICATION & TRUST
+// ──────────────────────────────
+
+Table conversations {
+  id varchar [primary key, note: 'MongoDB ObjectId']
+  type varchar [not null, note: 'order | buyer_seller | worker | job_application']
+  order_id varchar
+  sub_order_id varchar
+  application_id varchar
+  allow_voice boolean [not null, default: false, note: 'true only customer <-> rider']
+  last_message json [note: '{ text, type, senderId, at }']
+  created_at timestamp
+  updated_at timestamp
+
+  Indexes {
+    sub_order_id
+    application_id
+  }
+}
+
+Table conversation_participants {
+  id varchar [primary key, note: 'subdoc of conversations']
+  conversation_id varchar [not null]
+  user_id varchar [not null]
+  mode varchar [not null, note: 'customer | vendor | rider — filters chat list by mode']
+  unread_count integer [not null, default: 0]
+  last_read_at timestamp
+
+  Indexes {
+    (user_id, mode)
+  }
+}
+
+Table messages {
+  id varchar [primary key, note: 'MongoDB ObjectId']
+  conversation_id varchar [not null]
+  sender_id varchar [note: 'NULL for system messages']
+  type varchar [not null, note: 'text | voice | image | system']
+  text text
+  media_url varchar
+  media_duration_sec integer
+  moderation_status varchar [not null, default: 'clean', note: 'clean | masked | blocked']
+  moderation_rules json [note: 'string[] matched: phone | email | url | social']
+  created_at timestamp
+
+  Indexes {
+    (conversation_id, created_at)
+  }
+}
+
+// Every filter hit -> escalation: warn -> restrict chat -> suspend.
+Table moderation_violations {
+  id varchar [primary key, note: 'MongoDB ObjectId']
+  user_id varchar [not null]
+  conversation_id varchar
+  message_id varchar
+  rule varchar [not null, note: 'phone | email | url | social | off_platform_payment']
+  snippet varchar [note: 'redacted']
+  action varchar [not null, note: 'warned | restricted | suspended | banned']
+  action_by varchar [not null, default: 'system', note: 'system | users.id']
+  created_at timestamp
+
+  Indexes {
+    (user_id, created_at)
+  }
+}
+
+Table reports {
+  id varchar [primary key, note: 'MongoDB ObjectId']
+  reporter_id varchar [not null]
+  target_type varchar [not null, note: 'user | review | order | message']
+  target_id varchar [not null]
+  order_id varchar
+  conversation_id varchar
+  reason varchar [not null]
+  description text
+  status varchar [not null, default: 'pending', note: 'pending | reviewed | actioned | dismissed']
+  handled_by varchar
+  created_at timestamp
+  updated_at timestamp
+
+  Indexes {
+    (target_type, status)
+  }
+}
+
+Table notifications {
+  id varchar [primary key, note: 'MongoDB ObjectId']
+  user_id varchar [not null]
+  mode varchar [note: 'customer | vendor | rider | admin — which inbox']
+  type varchar [not null, note: 'order_placed | order_accepted | rider_on_the_way | order_delivered | order_cancelled | feedback_request | new_message | special_offer | new_delivery_assigned | ready_for_pickup | collect_payment | earnings_updated | withdrawal_update | application_update | profile_approved | ...']
+  title json [not null, note: '{ fr, en }']
+  body json [not null, note: '{ fr, en }']
+  data json [note: '{ orderId, subOrderId, jobId, ... } deep-link']
+  is_read boolean [not null, default: false]
+  created_at timestamp [note: 'TTL index — e.g. 90 days']
+
+  Indexes {
+    (user_id, is_read, created_at)
+  }
+}
+
+
+// ──────────────────────────────
+// PLATFORM & ADMIN
+// ──────────────────────────────
+
+Table support_tickets {
+  id varchar [primary key, note: 'MongoDB ObjectId']
+  ticket_number varchar [unique, not null, note: 'e.g. SUP-204']
+  user_id varchar [not null]
+  user_mode varchar [not null, note: 'customer | vendor | rider']
+  type varchar [not null]
+  subject varchar
+  urgency varchar [not null, default: 'medium', note: 'low | medium | high | critical']
+  description text [not null]
+  attachments json [note: 'string[] Cloudinary URLs']
+  status varchar [not null, default: 'open', note: 'open | in_progress | resolved | closed']
+  assigned_to varchar
+  resolution text
+  created_at timestamp
+  updated_at timestamp
+
+  Indexes {
+    (status, urgency)
+    user_id
+  }
+}
+
+Table advertisements {
+  id varchar [primary key, note: 'MongoDB ObjectId']
+  name varchar [not null]
+  advertiser_name varchar [not null, note: 'external, e.g. Coca Cola']
+  type varchar [not null, default: 'banner']
+  placement varchar [not null, note: 'home | category | search']
+  images json [note: 'string[]']
+  link_url varchar
+  description text
+  start_at timestamp [not null]
+  end_at timestamp [not null]
+  status varchar [not null, default: 'draft', note: 'draft | scheduled | active | paused | expired']
+  impressions integer [not null, default: 0]
+  clicks integer [not null, default: 0]
+  created_by varchar
+  created_at timestamp
+  updated_at timestamp
+
+  Indexes {
+    (placement, status, start_at, end_at)
+  }
+}
+
+// Singleton document.
+Table settings {
+  id varchar [primary key, note: 'single document']
+  platform_name varchar [not null, default: 'Kadou']
+  support_email varchar
+  contact_number varchar
+  whatsapp_support_number varchar
+  default_currency varchar [not null, default: 'GNF']
+  logo varchar
+  commission_rate float [not null, default: 10]
+  commission_min integer [not null, default: 1000]
+  platform_fee integer [not null, default: 1000]
+  tax_rate float [not null, default: 0]
+  withdrawal_fee json [note: '{ type: fixed|percent, value } per payout method']
+  rider_cash_limit_default integer
+  job_publish_fee integer [not null, default: 5000]
+  cv_unlock_fee integer [not null, default: 5000]
+  spontaneous_application_fee integer [default: 5000]
+  escrow_release_hours integer [not null, default: 0]
+  moderation json [note: '{ restrictAfter: 3, suspendAfter: 5, restrictHours: 24 }']
+  email_toggles json [note: '{ orderConfirmation, paymentVerification, invoice, disputeUpdates }']
+  updated_by varchar
+  updated_at timestamp
+}
+
+Table audit_logs {
+  id varchar [primary key, note: 'MongoDB ObjectId']
+  actor_id varchar [not null]
+  action varchar [not null, note: 'e.g. vendor.approve, withdrawal.complete, user.suspend']
+  target_type varchar [not null]
+  target_id varchar [not null]
+  before json
+  after json
+  ip varchar
+  created_at timestamp
+
+  Indexes {
+    (target_type, target_id)
+    (actor_id, created_at)
+  }
+}
+
+Table counters {
+  id varchar [primary key, note: 'order | sub_order | withdrawal | ticket']
+  seq integer [not null, default: 0]
+}
+
+
+// ──────────────────────────────
+// RELATIONSHIPS
+// ──────────────────────────────
+
+// Auth & user
+Ref identity_user:        auth_identities.user_id               > users.id
+Ref device_user:          device_tokens.user_id                 > users.id
+Ref address_user:         user_addresses.user_id                > users.id
+Ref referred_by_user:     users.referred_by                     > users.id   // nullable
+
+// Profiles
+Ref vendor_user:          vendor_profiles.user_id               - users.id
+Ref rider_user:           rider_profiles.user_id                - users.id
+Ref vendor_category:      vendor_profiles.business_category_id  > categories.id
+Ref doc_vendor:           verification_documents.profile_id     > vendor_profiles.id
+Ref doc_rider:            verification_documents.profile_id     > rider_profiles.id
+Ref apphist_vendor:       application_history.profile_id        > vendor_profiles.id
+Ref apphist_rider:        application_history.profile_id        > rider_profiles.id
+Ref route_rider:          rider_transit_routes.rider_profile_id > rider_profiles.id
+Ref route_from:           rider_transit_routes.from_station_id  > transit_stations.id
+Ref route_to:             rider_transit_routes.to_station_id    > transit_stations.id
+Ref link_vendor:          vendor_rider_links.vendor_id          > vendor_profiles.id
+Ref link_rider:           vendor_rider_links.rider_id           > rider_profiles.id
+
+// Catalog
+Ref category_parent:      categories.parent_id                  > categories.id   // nullable
+Ref product_vendor:       products.vendor_id                    > vendor_profiles.id
+Ref product_category:     products.category_id                  > categories.id
+Ref product_subcategory:  products.subcategory_id               > categories.id
+Ref fav_user:             favorites.user_id                     > users.id
+Ref fav_product:          favorites.product_id                  > products.id
+Ref review_author:        reviews.author_id                     > users.id
+Ref review_suborder:      reviews.sub_order_id                  - sub_orders.id
+Ref review_vendor:        reviews.vendor_id                     > vendor_profiles.id
+Ref review_rider:         reviews.rider_id                      > rider_profiles.id
+
+// Cart & orders
+Ref cart_user:            carts.user_id                         - users.id
+Ref cartitem_cart:        cart_items.cart_id                    > carts.id
+Ref cartitem_product:     cart_items.product_id                 > products.id
+Ref order_customer:       orders.customer_id                    > users.id
+Ref order_station:        orders.destination_station_id         > transit_stations.id
+Ref suborder_order:       sub_orders.order_id                   > orders.id
+Ref suborder_vendor:      sub_orders.vendor_id                  > vendor_profiles.id
+Ref suborder_rider:       sub_orders.current_rider_id           > rider_profiles.id
+Ref soitem_suborder:      sub_order_items.sub_order_id          > sub_orders.id
+Ref soitem_product:       sub_order_items.product_id            > products.id
+Ref timeline_suborder:    sub_order_timeline.sub_order_id       > sub_orders.id
+Ref modif_suborder:       sub_order_modifications.sub_order_id  > sub_orders.id
+Ref delivery_suborder:    deliveries.sub_order_id               > sub_orders.id
+Ref delivery_rider:       deliveries.rider_id                   > rider_profiles.id
+Ref rate_from:            delivery_rates.from_station_id        > transit_stations.id
+Ref rate_to:              delivery_rates.to_station_id          > transit_stations.id
+
+// Finance
+Ref payment_payer:        payments.payer_id                     > users.id
+Ref wallet_owner:         wallets.owner_id                      > users.id
+Ref payout_wallet:        wallet_payout_methods.wallet_id       > wallets.id
+Ref wtx_wallet:           wallet_transactions.wallet_id         > wallets.id
+Ref wtx_suborder:         wallet_transactions.sub_order_id      > sub_orders.id
+Ref wtx_withdrawal:       wallet_transactions.withdrawal_id     > withdrawals.id
+Ref wtx_settlement:       wallet_transactions.settlement_id     > cod_settlements.id
+Ref withdrawal_wallet:    withdrawals.wallet_id                 > wallets.id
+Ref settlement_rider:     cod_settlements.rider_id              > rider_profiles.id
+Ref refund_order:         refunds.order_id                      > orders.id
+Ref refund_payment:       refunds.payment_id                    > payments.id
+Ref dispute_order:        disputes.order_id                     > orders.id
+
+// Jobs, CV & subscriptions
+Ref proprofile_user:      professional_profiles.user_id         - users.id
+Ref edu_profile:          profile_education.profile_id          > professional_profiles.id
+Ref exp_profile:          profile_experience.profile_id         > professional_profiles.id
+Ref job_poster:           jobs.posted_by                        > users.id
+Ref job_category:         jobs.category_id                      > categories.id
+Ref job_payment:          jobs.publish_payment_id               - payments.id
+Ref app_job:              job_applications.job_id               > jobs.id            // nullable
+Ref app_vendor:           job_applications.target_vendor_id     > vendor_profiles.id // nullable
+Ref app_applicant:        job_applications.applicant_id         > users.id
+Ref sub_user:             user_subscriptions.user_id            > users.id
+Ref sub_plan:             user_subscriptions.plan_id            > subscription_plans.id
+
+// Communication & trust
+Ref conv_suborder:        conversations.sub_order_id            > sub_orders.id
+Ref conv_application:     conversations.application_id          - job_applications.id
+Ref participant_conv:     conversation_participants.conversation_id > conversations.id
+Ref participant_user:     conversation_participants.user_id     > users.id
+Ref message_conv:         messages.conversation_id              > conversations.id
+Ref message_sender:       messages.sender_id                    > users.id
+Ref violation_user:       moderation_violations.user_id         > users.id
+Ref violation_message:    moderation_violations.message_id      > messages.id
+Ref report_reporter:      reports.reporter_id                   > users.id
+Ref notif_user:           notifications.user_id                 > users.id
+
+// Platform & admin
+Ref ticket_user:          support_tickets.user_id               > users.id
+Ref ticket_assignee:      support_tickets.assigned_to           > users.id
+Ref ad_creator:           advertisements.created_by             > users.id
+Ref audit_actor:          audit_logs.actor_id                   > users.id
