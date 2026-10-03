@@ -77,6 +77,12 @@ export const initSocket = async (httpServer: HTTPServer): Promise<Server> => {
       socket.to(`conv:${conversationId}`).emit("stop_typing", { conversationId, userId });
     });
 
+    socket.on("message_read", ({ conversationId }: { conversationId: string }) => {
+      socket
+        .to(`conv:${conversationId}`)
+        .emit("message_read", { conversationId, userId, readAt: new Date() });
+    });
+
     // Delivery tracking room
     socket.on("join_delivery", (deliveryId: string) => {
       socket.join(`delivery:${deliveryId}`);

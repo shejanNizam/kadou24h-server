@@ -1019,6 +1019,37 @@ Errors: 409 already connected / already invited · 403 the inviter tried to answ
 | `POST /subscriptions/admin/plans` | Admin | create subscription plan (`{ name, audience, price, durationDays, features }`). |
 | `PATCH /subscriptions/admin/plans/:id` | Admin | update subscription plan. |
 
+### 7.26 Chat & Messaging
+
+| Endpoint | Who | Notes |
+|---|---|---|
+| `POST /conversations` | Signed-in | start or retrieve existing conversation: `{ recipientId, recipientMode, myMode, type, orderId?, subOrderId?, applicationId?, workerProfileId? }`. Auto-enforces voice note rule (`allowVoice = true` **strictly only** for customer ↔ rider) and auto-inserts initial safety warning. |
+| `GET /conversations` | Signed-in | list my conversations filtered by participant `mode` (`?mode=customer\|vendor\|rider&page=&limit=`). Segregates vendor and customer inboxes. |
+| `GET /conversations/:id` | Participant | get conversation details with populated participant profiles and context. |
+| `PATCH /conversations/:id/read` | Participant | mark conversation as read for active mode; resets `unreadCount = 0` and emits `message_read` socket event. |
+| `GET /conversations/:id/messages` | Participant | paginated message history (`?page=&limit=`). |
+| `POST /conversations/:id/messages` | Participant | send message: `{ type: "text" \| "voice" \| "image", text?, mediaUrl?, mediaDurationSec? }`. Anti-circumvention filter inspects phone, email, URL, and social keywords. Flags violations with progressive penalties (warn → restrict 24h → suspend). Voice notes restricted to allowed conversations. |
+| `GET /conversations/admin/moderation-violations` | Admin | view content moderation violations log with rule triggers and actions taken (`?rule=&action=&userId=&page=&limit=`). |
+| `POST /conversations/admin/users/:userId/lift-restriction` | Admin | lift temporary chat restrictions or account suspensions for a moderated user. |
+
+### 7.27 Trust, Safety & Reports
+
+| Endpoint | Who | Notes |
+|---|---|---|
+| `POST /reports` | Signed-in | submit report: `{ targetType: "user" \| "review" \| "order" \| "message", targetId, orderId?, conversationId?, reason, description? }`. |
+| `GET /reports/me` | Signed-in | list reports filed by the requesting user (`?status=&page=&limit=`). |
+| `GET /reports/admin/all` | Admin | admin review queue for all filed complaints (`?targetType=&status=&page=&limit=`). |
+| `PATCH /reports/admin/:id/action` | Admin | resolve report: `{ status: "reviewed" \| "actioned" \| "dismissed", actionTaken?, adminNotes? }`. |
+
+### 7.28 In-App Notifications
+
+| Endpoint | Who | Notes |
+|---|---|---|
+| `GET /notifications` | Signed-in | get in-app notifications inbox filtered by current mode (`?mode=&isRead=&page=&limit=`). Documents auto-expire after 90 days via TTL index. |
+| `GET /notifications/unread-count` | Signed-in | get count of unread notifications for active mode (`?mode=`). |
+| `PATCH /notifications/:id/read` | Signed-in | mark single notification as read. |
+| `PATCH /notifications/read-all` | Signed-in | mark all notifications as read for user's active mode (`?mode=`). |
+
 ---
 
 ## 8. Rate limits & OTP rules
@@ -1046,7 +1077,7 @@ const socket = io("http://localhost:5000", { auth: { token: accessToken } });
 ```
 
 - On connect the user joins a private room (`user:<userId>`) — server events for this user arrive here.
-- Chat rooms: emit `join_conversation` / `leave_conversation` with a conversation id; `typing` / `stop_typing` with `{ conversationId }`.
+- Chat rooms: emit `join_conversation` / `leave_conversation` with `{ conversationId }`; `typing` / `stop_typing` with `{ conversationId }`; `message_read` with `{ conversationId }`.
 - Delivery tracking rooms: emit `join_delivery` / `leave_delivery` with `{ deliveryId }`.
 - Rider location stream: rider emits `rider_location` with `{ deliveryId, lat, lng, heading }`.
 - Events available now:
@@ -1069,12 +1100,27 @@ const socket = io("http://localhost:5000", { auth: { token: accessToken } });
 | `job_application:new` | `{ jobId?, vendorId?, applicationId, matchScore? }` | sent to job poster or vendor on new candidate application |
 | `job_application:status_changed` | `{ applicationId, status }` | sent to applicant when status is updated |
 | `job_application:interview_scheduled` | `{ applicationId, interview }` | sent to candidate when interview date/location is booked |
+| `new_message` | `IMessage` | emitted to conversation room (`conv:<id>`) on new message |
+| `conversation_unread` | `{ conversationId, unreadCount }` | sent to recipient user room when unread messages count changes |
+| `message_read` | `{ conversationId, userId, readAt }` | relayed to conversation room when recipient opens/reads messages |
+| `new_notification` | `INotification` | sent to user room (`user:<id>`) on new in-app notification |
 
 ---
 
 ## Changelog
 
-### Step 7 — Jobs, Worker Profiles & CV (current)
+### Step 8 — Chat, Trust & Moderation (current)
+- **Multi-Mode Conversation Isolation:** `conversations` with embedded `conversation_participants[]` maintaining separate inboxes and independent `unreadCount` trackers for `customer`, `vendor`, and `rider` modes.
+- **Voice Note Policy:** Strictly enforced `allow_voice = true` exclusively for customer ↔ rider conversations (a key accessibility feature for illiterate users); disallows voice notes across standard buyer-seller and job threads.
+- **System Safety Warning:** Automatic system message created immediately upon conversation initiation advising users not to share bank details or make off-platform payments.
+- **Anti-Circumvention Content Moderation Pipeline:** Real-time regex inspection for phone numbers (Guinean `+224` and international formats), emails, URLs, and social messaging handles (@username, WhatsApp, Telegram, etc.). Masks sensitive contact details (`[CONTACT MASQUÉ - Kadou24h]`) and records infractions in `moderation_violations`.
+- **Progressive Violation Escalation:** Configurable thresholds (`settings.moderation`): 1st violation issues a safety warning; 3rd violation places a 24-hour restriction on chat (`chatRestrictedUntil`); 5th violation suspends the user account pending admin review.
+- **Admin Moderation & Safety Queue:** Endpoints for auditing contact filter violations and lifting restrictions or suspensions.
+- **Community Reports Queue:** Users can report bad actors, reviews, orders, or abusive messages; support/admin workflow with status updates and actions taken.
+- **In-App Notification Inbox:** Mode-specific inbox with bilingual titles/bodies (`{ fr, en }`), deep-link data payloads, and automatic 90-day TTL data retention.
+- **Real-Time Messaging Sockets:** Full integration with Socket.io conversation rooms (`conv:<id>`), `new_message`, `typing`, `stop_typing`, and `message_read` events.
+
+### Step 7 — Jobs, Worker Profiles & CV
 - **Professional Profiles & Worker Directory:** Dual-purpose profile system serving as an AI-powered CV and public service listing ("Popular Workers"); includes profession, bio, education, experience, skills, languages, achievements, hourly rates, and geo-radius distance searches (`2dsphere`).
 - **AI-Powered CV Generator:** Generates structured professional summaries and formatted markdown resumes tailored to the candidate's skills and chosen tone.
 - **Job Posting & Publishing Flow:** 3-step job creation (details, salary, candidate preferences); 5,000 GNF publishing payment unlocking 30-day active visibility (`expiresAt`); close/expire lifecycle management.
@@ -1133,4 +1179,5 @@ const socket = io("http://localhost:5000", { auth: { token: accessToken } });
 - **Breaking changes vs. the boilerplate:** `role` → `roles[]`; `POST /user/register` → `POST /auth/register`; `/otp/send` & `/otp/verify` → `/auth/verify-account` & `/auth/resend-otp`; login body `email` → `identifier`; web Google redirect flow (`/auth/google`) removed in favour of `POST /auth/social`; `PATCH /user/:id` replaced by `PATCH /user/me` (self) and `PATCH /user/:id/status` (admin).
 
 ### Next
-- **Step 8:** Chat, Trust & Moderation (Domain 7 — Real-time multi-mode conversations, voice notes for customer/driver, anti-circumvention contact filtering, moderation violation penalties, reporting queue).
+- **Step 9:** Admin Panel, Platform Settings, Support Tickets & Ads (Domain 8 — Platform & admin screens, ticket resolution system, dynamic advertising banners, platform configuration adjustments).
+

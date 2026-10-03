@@ -22,6 +22,9 @@ import { PaymentRoutes } from "../modules/payment/payment.route";
 import { ProfessionalProfileRoutes } from "../modules/professional_profile/professional_profile.route";
 import { JobRoutes } from "../modules/job/job.route";
 import { SubscriptionRoutes } from "../modules/subscription/subscription.route";
+import { ChatRoutes } from "../modules/chat/chat.route";
+import { ReportRoutes } from "../modules/report/report.route";
+import { NotificationRoutes } from "../modules/notification/notification.route";
 
 const router = Router();
 
@@ -49,6 +52,9 @@ const moduleRoutes = [
   { path: "/professional-profiles", route: ProfessionalProfileRoutes },
   { path: "/jobs", route: JobRoutes },
   { path: "/subscriptions", route: SubscriptionRoutes },
+  { path: "/conversations", route: ChatRoutes },
+  { path: "/reports", route: ReportRoutes },
+  { path: "/notifications", route: NotificationRoutes },
 ];
 
 moduleRoutes.forEach((route) => {
