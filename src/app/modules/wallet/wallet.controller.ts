@@ -65,9 +65,128 @@ const deletePayoutMethod = catchAsync(async (req: Request, res: Response) => {
   });
 });
 
+const requestWithdrawal = catchAsync(async (req: Request, res: Response) => {
+  const result = await WalletServices.requestWithdrawal(req.user._id, req.body);
+  sendResponse(res, {
+    statusCode: httpStatus.CREATED,
+    success: true,
+    message: "Withdrawal requested successfully!",
+    data: result,
+  });
+});
+
+const getMyWithdrawals = catchAsync(async (req: Request, res: Response) => {
+  const mode = modeFromQuery(req);
+  const result = await WalletServices.getMyWithdrawals(req.user._id, mode, {
+    page: Number(req.query.page),
+    limit: Number(req.query.limit),
+    status: req.query.status as any,
+  });
+  sendResponse(res, {
+    statusCode: httpStatus.OK,
+    success: true,
+    message: "Withdrawals retrieved successfully!",
+    meta: result.meta,
+    data: result.data,
+  });
+});
+
+const getMyTransactions = catchAsync(async (req: Request, res: Response) => {
+  const mode = modeFromQuery(req);
+  const result = await WalletServices.getMyTransactions(req.user._id, mode, {
+    page: Number(req.query.page),
+    limit: Number(req.query.limit),
+    type: req.query.type as any,
+  });
+  sendResponse(res, {
+    statusCode: httpStatus.OK,
+    success: true,
+    message: "Transactions retrieved successfully!",
+    meta: result.meta,
+    data: result.data,
+  });
+});
+
+const submitCodSettlement = catchAsync(async (req: Request, res: Response) => {
+  const result = await WalletServices.submitCodSettlement(req.user._id, req.body);
+  sendResponse(res, {
+    statusCode: httpStatus.CREATED,
+    success: true,
+    message: "COD settlement submitted successfully!",
+    data: result,
+  });
+});
+
+const getAllWithdrawalsAdmin = catchAsync(async (req: Request, res: Response) => {
+  const result = await WalletServices.getAllWithdrawalsAdmin({
+    page: Number(req.query.page),
+    limit: Number(req.query.limit),
+    status: req.query.status as any,
+    ownerMode: req.query.ownerMode as any,
+  });
+  sendResponse(res, {
+    statusCode: httpStatus.OK,
+    success: true,
+    message: "Withdrawals retrieved successfully!",
+    meta: result.meta,
+    data: result.data,
+  });
+});
+
+const processWithdrawal = catchAsync(async (req: Request, res: Response) => {
+  const result = await WalletServices.processWithdrawal(
+    req.user._id,
+    req.params.id as string,
+    req.body,
+  );
+  sendResponse(res, {
+    statusCode: httpStatus.OK,
+    success: true,
+    message: `Withdrawal ${req.body.status} successfully!`,
+    data: result,
+  });
+});
+
+const getAllCodSettlementsAdmin = catchAsync(async (req: Request, res: Response) => {
+  const result = await WalletServices.getAllCodSettlementsAdmin({
+    page: Number(req.query.page),
+    limit: Number(req.query.limit),
+    status: req.query.status as any,
+  });
+  sendResponse(res, {
+    statusCode: httpStatus.OK,
+    success: true,
+    message: "COD settlements retrieved successfully!",
+    meta: result.meta,
+    data: result.data,
+  });
+});
+
+const confirmCodSettlement = catchAsync(async (req: Request, res: Response) => {
+  const result = await WalletServices.confirmCodSettlement(
+    req.user._id,
+    req.params.id as string,
+    req.body.status,
+  );
+  sendResponse(res, {
+    statusCode: httpStatus.OK,
+    success: true,
+    message: `COD settlement ${req.body.status} successfully!`,
+    data: result,
+  });
+});
+
 export const WalletControllers = {
   getMyWallet,
   addPayoutMethod,
   updatePayoutMethod,
   deletePayoutMethod,
+  requestWithdrawal,
+  getMyWithdrawals,
+  getMyTransactions,
+  submitCodSettlement,
+  getAllWithdrawalsAdmin,
+  processWithdrawal,
+  getAllCodSettlementsAdmin,
+  confirmCodSettlement,
 };

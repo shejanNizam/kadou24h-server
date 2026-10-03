@@ -31,6 +31,8 @@ import {
 } from "./order.interface";
 import { Order } from "./order.model";
 import { SubOrder } from "./sub_order.model";
+import { TransactionType, WalletMode } from "../wallet/wallet.interface";
+import { WalletServices } from "../wallet/wallet.service";
 
 /**
  * Resolves address snapshot from direct snapshot, saved address ID, or user default address.
@@ -447,6 +449,28 @@ const placeOrder = async (
     });
 
     createdSubOrders.push(subOrder);
+
+    // Hold vendor earning in escrow
+    try {
+      const vendor = await VendorProfile.findById(split.vendorId);
+      if (vendor) {
+        const vendorWallet = await WalletServices.ensureWallet(
+          vendor.userId,
+          WalletMode.vendor,
+        );
+        await WalletServices.recordTransaction({
+          walletId: vendorWallet._id,
+          type: TransactionType.earning_held,
+          amount: split.vendorEarning,
+          subOrderId: subOrder._id,
+          note: `Escrow held for sub-order ${subOrderNumber}`,
+          createdBy: customerId,
+        });
+      }
+    } catch (err) {
+      console.error("Failed to hold vendor escrow:", err);
+    }
+
     await DeliveryServices.createDeliveryLegsForSubOrder(String(subOrder._id));
   }
 

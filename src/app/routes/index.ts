@@ -18,6 +18,10 @@ import { DeliveryRateRoutes } from "../modules/delivery_rate/delivery_rate.route
 import { CartRoutes } from "../modules/cart/cart.route";
 import { OrderRoutes } from "../modules/order/order.route";
 import { DeliveryRoutes } from "../modules/delivery/delivery.route";
+import { PaymentRoutes } from "../modules/payment/payment.route";
+import { ProfessionalProfileRoutes } from "../modules/professional_profile/professional_profile.route";
+import { JobRoutes } from "../modules/job/job.route";
+import { SubscriptionRoutes } from "../modules/subscription/subscription.route";
 
 const router = Router();
 
@@ -41,6 +45,10 @@ const moduleRoutes = [
   { path: "/cart", route: CartRoutes },
   { path: "/orders", route: OrderRoutes },
   { path: "/deliveries", route: DeliveryRoutes },
+  { path: "/payments", route: PaymentRoutes },
+  { path: "/professional-profiles", route: ProfessionalProfileRoutes },
+  { path: "/jobs", route: JobRoutes },
+  { path: "/subscriptions", route: SubscriptionRoutes },
 ];
 
 moduleRoutes.forEach((route) => {

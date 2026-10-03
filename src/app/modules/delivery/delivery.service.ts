@@ -8,7 +8,12 @@ import { emitToDelivery, emitToUser } from "../../../socket/socket";
 import { calculateDistanceKm } from "../delivery_rate/delivery_rate.service";
 import { Order } from "../order/order.model";
 import { SubOrder } from "../order/sub_order.model";
-import { DeliveryType, OrderStatus, SubOrderStatus } from "../order/order.interface";
+import {
+  DeliveryType,
+  OrderStatus,
+  PaymentStatus,
+  SubOrderStatus,
+} from "../order/order.interface";
 import { ApprovalStatus } from "../profile_common/profile.common";
 import { PartnerType } from "../rider_profile/rider_profile.interface";
 import { RiderProfile } from "../rider_profile/rider_profile.model";
@@ -25,6 +30,7 @@ import {
   LegType,
 } from "./delivery.interface";
 import { Delivery } from "./delivery.model";
+import { WalletServices } from "../wallet/wallet.service";
 
 /**
  * Generates a random 4-digit PIN and its bcrypt hash.
@@ -737,15 +743,30 @@ const verifyHandover = async (
     });
     await subOrder.save();
 
+    // Release escrow for sub-order (vendor earnings + partner delivery fee)
+    try {
+      await WalletServices.releaseEscrowForSubOrder(
+        String(subOrder._id),
+        riderUserId,
+      );
+    } catch (err) {
+      console.error("Failed to release escrow for sub-order:", err);
+    }
+
     // Check parent Order
     const allSubOrders = await SubOrder.find({ orderId: subOrder.orderId });
     const allDelivered = allSubOrders.every(
       (so) => so.status === SubOrderStatus.delivered,
     );
     if (allDelivered) {
-      await Order.findByIdAndUpdate(subOrder.orderId, {
+      const parentOrder = await Order.findById(subOrder.orderId);
+      const updateData: Record<string, unknown> = {
         status: OrderStatus.completed,
-      });
+      };
+      if (parentOrder && parentOrder.paymentMethod === "cod") {
+        updateData.paymentStatus = PaymentStatus.paid;
+      }
+      await Order.findByIdAndUpdate(subOrder.orderId, updateData);
     }
   }
 

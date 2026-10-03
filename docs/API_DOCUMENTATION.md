@@ -808,6 +808,33 @@ Body must include `mode`. **200** `data: PayoutMethod[]`.
 #### `DELETE /wallets/me/payout-methods/:methodId?mode=vendor`
 **200** `data: PayoutMethod[]`.
 
+#### `POST /wallets/me/withdrawals` — Signed-in
+`{ mode: "vendor" | "rider", amount: number (min 5,000 GNF), payoutMethodId: string }`. Deducts `amount` (+ fee) from `availableBalance` immediately and records `withdrawal` and `withdrawal_fee` in ledger. **201** `data: Withdrawal`.
+
+#### `GET /wallets/me/withdrawals?mode=vendor|rider&page=&limit=&status=`
+List my withdrawal requests and processing history.
+
+#### `GET /wallets/me/transactions?mode=vendor|rider&page=&limit=&type=`
+Paginated append-only ledger transaction history (`earning_held`, `earning_released`, `commission`, `withdrawal`, `withdrawal_fee`, `withdrawal_reversal`, `cod_collected`, `cod_settled`, `cod_offset`, `refund_deduction`, `adjustment`).
+
+#### `POST /wallets/me/cod-settlements` — Riders only
+`{ amount: number, method: "orange_money" | "mobile_money" | "cash_at_office" | "earnings_offset", reference?, proofImage? }`.
+If `method = "earnings_offset"`, instantly offsets `cashOwed` against `availableBalance` without manual admin approval (`status = confirmed`). Other methods submit for admin verification (`status = pending`).
+
+#### `GET /wallets/admin/withdrawals?page=&limit=&status=&ownerMode=` — Staff/Admin
+List all withdrawal requests.
+
+#### `PATCH /wallets/admin/withdrawals/:id` — Staff/Admin
+`{ status: "completed" | "rejected", transactionId?, receiptImage?, rejectionReason? }`.
+If `rejected`, automatically credits the funds back to the user's available balance via a `withdrawal_reversal` transaction.
+
+#### `GET /wallets/admin/cod-settlements?page=&limit=&status=` — Staff/Admin
+List all rider COD cash settlement submissions.
+
+#### `PATCH /wallets/admin/cod-settlements/:id` — Staff/Admin
+`{ status: "confirmed" | "rejected" }`.
+If `confirmed`, reduces rider's `cashOwed` balance and logs `cod_settled` ledger transaction.
+
 ---
 
 ### 7.14 Vendor ↔ rider network
@@ -924,6 +951,74 @@ Errors: 409 already connected / already invited · 403 the inviter tried to answ
 | `POST /deliveries/:id/assign` | Vendor / Admin | assign delivery leg to partner: `{ riderId }`; sends real-time push/socket alert |
 | `GET /deliveries/:id/track` | Signed-in | live delivery tracking; **secure PIN visibility**: shows `pickupPin` only to giver (vendor/station), shows `handoverPin` only to receiver (customer/station) |
 
+### 7.22 Payments, Refunds & Disputes
+
+#### Money IN & Customer Payments
+| Endpoint | Who | Notes |
+|---|---|---|
+| `POST /payments/initiate` | Signed-in | initiate payment for an order, subscription, job publishing, or CV unlock: `{ purpose, refId, method: "orange_money" \| "mobile_money" \| "card" \| "cod", provider?, idempotencyKey? }`. Validates ownership, checks idempotency key, simulates payment gateway, and marks order `paid`. |
+| `POST /payments/webhook` | Public | gateway webhook/callback for Orange Money / MTN Momo: `{ idempotencyKey?, providerRef?, paymentId?, status: "success" \| "failed", raw? }`. |
+| `GET /payments/me` | Signed-in | user's payment history with status and gateway references (`?purpose=&page=&limit=`) |
+
+#### Customer Disputes
+| Endpoint | Who | Notes |
+|---|---|---|
+| `POST /payments/disputes` | Customer | file dispute for an order or sub-order: `{ orderId, subOrderId?, reason, amount?, notes? }` |
+| `GET /payments/disputes` | Customer | list my disputes and resolution status |
+
+#### Admin Refunds & Dispute Resolution
+| Endpoint | Who | Notes |
+|---|---|---|
+| `GET /payments/admin/all` | Admin | list all transactions across the platform with filters (`?status=&purpose=&method=&page=&limit=`) |
+| `POST /payments/admin/refunds` | Admin | issue refund for an order: `{ orderId, subOrderId?, amount, reason, notes? }`. Updates order status to `refunded` or `partially_refunded`. If vendor earnings were already settled, logs `refund_deduction` on vendor ledger. |
+| `GET /payments/admin/refunds` | Admin | list of issued refunds |
+| `GET /payments/admin/disputes` | Admin | list of disputes submitted by customers |
+| `PATCH /payments/admin/disputes/:id/resolve` | Admin | resolve dispute: `{ status: "resolved" \| "rejected", adminResolution, notes?, issueRefund?: boolean, refundAmount?: number }`. Emits socket notification to customer. |
+
+### 7.23 Professional Profiles & Worker Directory
+
+| Endpoint | Who | Notes |
+|---|---|---|
+| `GET /professional-profiles/workers` | Public | search listed workers with filters (`?search=&categoryId=&city=&lat=&lng=&maxDistanceKm=&minRating=&page=&limit=`). |
+| `GET /professional-profiles/workers/:id` | Public | view single listed worker profile with skills, ratings, and experience. |
+| `GET /professional-profiles/me` | Signed-in | view own professional profile (CV, education, experience, worker listing status). |
+| `PUT /professional-profiles/me` | Signed-in | create or update professional profile (`profession, summary, photo, city, location, skills, languages, achievements, profileEducation, profileExperience, hourlyRate, experienceYears, serviceCategoryId`). |
+| `PATCH /professional-profiles/me/worker-listing` | Signed-in | toggle listing in "Popular Workers" directory (`{ isWorkerListed: boolean, hourlyRate?, experienceYears?, serviceCategoryId? }`). |
+| `POST /professional-profiles/me/generate-ai-cv` | Signed-in | generate AI-crafted CV summary and formatted markdown resume (`{ targetRole?, tone? }`). |
+
+### 7.24 Jobs & Job Applications
+
+#### Job Posts
+| Endpoint | Who | Notes |
+|---|---|---|
+| `GET /jobs` | Public | search active jobs with geo radius, workplace, category, and keyword filters (`?search=&categoryId=&jobType=&workplace=&city=&lat=&lng=&maxDistanceKm=`). |
+| `GET /jobs/:id` | Public | view job details; increments view counter for non-creators. |
+| `POST /jobs` | Signed-in | create job draft (`title, organizationName, categoryId, jobType, workplace, city, location, salaryMin, salaryMax, about, responsibilities, requirements, benefits, prefSkills, vacancies`). |
+| `PATCH /jobs/:id` | Creator | update job post details. |
+| `POST /jobs/:id/publish` | Creator | publish job post: requires 5,000 GNF publishing payment (`{ paymentMethod }`); activates job for 30 days (`expiresAt`). |
+| `POST /jobs/:id/close` | Creator | close active job post. |
+
+#### Job Applications & Recruiter Pipeline
+| Endpoint | Who | Notes |
+|---|---|---|
+| `POST /jobs/apply` | Candidate | apply to published job (`{ jobId, resume?, coverNote? }`). Auto-computes match score (0–100%) against job `prefSkills` and snapshots CV at apply time. |
+| `POST /jobs/apply-spontaneous` | Candidate | send spontaneous paid application to seller/vendor (`{ targetVendorId, resume?, coverNote?, paymentMethod }`). |
+| `GET /jobs/applications/my` | Candidate | list my submitted job applications with status and interview updates. |
+| `GET /jobs/:id/applicants` | Recruiter | view applicants for my job, sorted by match score or submission date (`?status=&sortBy=match\|date`). |
+| `PATCH /jobs/applications/:applicationId/status` | Recruiter | update application status (`applied`, `under_review`, `shortlisted`, `rejected`, `hired`). |
+| `POST /jobs/applications/:applicationId/interview` | Recruiter | schedule interview (`{ at, location?, mapUrl?, note? }`). Updates application and notifies candidate via socket/push. |
+| `POST /jobs/candidates/:applicantId/unlock-cv` | Recruiter | unlock candidate's full CV and contact info with 10,000 GNF payment (`{ paymentMethod }`). |
+
+### 7.25 Subscriptions
+
+| Endpoint | Who | Notes |
+|---|---|---|
+| `GET /subscriptions/plans` | Public | list active subscription plans (`?audience=job_seeker\|service_provider`). |
+| `POST /subscriptions/subscribe` | Signed-in | subscribe to a plan: `{ planId, paymentMethod }`. Automatically activates `cvVisible = true` and `visibleUntil` on user's professional profile. |
+| `GET /subscriptions/me` | Signed-in | view active subscription and feature entitlements. |
+| `POST /subscriptions/admin/plans` | Admin | create subscription plan (`{ name, audience, price, durationDays, features }`). |
+| `PATCH /subscriptions/admin/plans/:id` | Admin | update subscription plan. |
+
 ---
 
 ## 8. Rate limits & OTP rules
@@ -964,12 +1059,41 @@ const socket = io("http://localhost:5000", { auth: { token: accessToken } });
 | `delivery:status_changed` | `{ status, riderId?, proofPhoto? }` | emitted to `delivery:<id>` room on every lifecycle change |
 | `delivery:declined` | `{ deliveryId, subOrderId, reason }` | sent to vendor when rider declines a job |
 | `rider:location_updated` | `{ deliveryId, lat, lng, heading }` | broadcast to tracking room as rider travels |
+| `withdrawal:requested` | `{ withdrawalId, requestNumber, amount, netAmount }` | sent to user when withdrawal is submitted |
+| `withdrawal:completed` | `{ withdrawalId, requestNumber, transactionId }` | sent to user when payout is processed |
+| `withdrawal:rejected` | `{ withdrawalId, requestNumber, reason }` | sent to user when payout is rejected (funds restored) |
+| `cod_settlement:confirmed` | `{ settlementId, amount }` | sent to rider when cash handover is confirmed |
+| `payment:successful` | `{ paymentId, amount, purpose, refId }` | sent to payer when digital payment succeeds |
+| `refund:issued` | `{ refundId, orderId, amount, reason }` | sent to customer when admin issues a refund |
+| `dispute:resolved` | `{ disputeId, status, resolution }` | sent to customer when admin resolves dispute |
+| `job_application:new` | `{ jobId?, vendorId?, applicationId, matchScore? }` | sent to job poster or vendor on new candidate application |
+| `job_application:status_changed` | `{ applicationId, status }` | sent to applicant when status is updated |
+| `job_application:interview_scheduled` | `{ applicationId, interview }` | sent to candidate when interview date/location is booked |
 
 ---
 
 ## Changelog
 
-### Step 5 — Delivery Legs & Real-time Tracking (current)
+### Step 7 — Jobs, Worker Profiles & CV (current)
+- **Professional Profiles & Worker Directory:** Dual-purpose profile system serving as an AI-powered CV and public service listing ("Popular Workers"); includes profession, bio, education, experience, skills, languages, achievements, hourly rates, and geo-radius distance searches (`2dsphere`).
+- **AI-Powered CV Generator:** Generates structured professional summaries and formatted markdown resumes tailored to the candidate's skills and chosen tone.
+- **Job Posting & Publishing Flow:** 3-step job creation (details, salary, candidate preferences); 5,000 GNF publishing payment unlocking 30-day active visibility (`expiresAt`); close/expire lifecycle management.
+- **Candidate Match Scoring:** Automated 0–100% match score algorithm comparing applicant competencies and languages against job requirements (80% skill weight, 20% language weight).
+- **Recruiter Pipeline & Interviews:** Recruiter applicant tracking sorted by match score or submission date; status pipeline (`applied` → `under_review` → `shortlisted` → `interview` → `hired` / `rejected`); interview scheduling with map locations and real-time socket alerts.
+- **Spontaneous Vendor Applications:** Direct paid applications submitted to platform sellers.
+- **CV Unlock System:** Recruiter candidate unlock fee (10,000 GNF) tracked via `payments` purpose `cv_unlock`.
+- **Subscriptions & Visibility:** Admin subscription plan management (`job_seeker` / `service_provider`); user subscriptions that automatically grant public CV visibility (`cvVisible`) and feature entitlements.
+
+### Step 6 — Finance, Wallets & Payments
+- **Append-Only Ledger (`wallet_transactions`):** Source-of-truth double-entry bookkeeping tracking all money movements (`earning_held`, `earning_released`, `commission`, `withdrawal`, `withdrawal_fee`, `withdrawal_reversal`, `cod_collected`, `cod_settled`, `cod_offset`, `refund_deduction`, `adjustment`) with immutable `amount` and `balanceAfter` snapshots.
+- **Dual Wallet Architecture (`wallets`):** Strict compound index `(ownerId, ownerMode)` keeping vendor earnings and driver delivery income strictly isolated.
+- **Automated Escrow Hold & Release:** Order placement holds vendor earnings in escrow; delivery completion automatically releases escrow to vendor's available balance and credits driver delivery fees.
+- **COD Cash Settlements & Offsetting:** Riders can directly offset collected COD cash against their withdrawable earnings without waiting for admin approval (`earnings_offset`), or submit office/OM cash deposits for admin verification.
+- **Withdrawal Requests & Fee Calculations:** Minimum 5,000 GNF validation; dynamic fee rules (flat or percent); immediate balance debit on request; admin payout completion with transaction references and Cloudinary receipts; automatic fund reversal (`withdrawal_reversal`) upon rejection.
+- **Payments Gateway & Idempotency:** Support for Guinea payment channels (Orange Money, MTN Mobile Money, Card, COD); strict idempotency key checks preventing duplicate charges; automatic Order `paid` status updates.
+- **Disputes & Vendor Refund Deductions:** Customer dispute filing; admin resolution with integrated refund execution; automatic `refund_deduction` on vendor wallet ledger for orders already settled.
+
+### Step 5 — Delivery Legs & Real-time Tracking
 - **Multi-Leg Deliveries:** Automatic leg generation on order placement: 1 leg for local delivery, 3 legs for intercity (`first_mile` moto → `line_haul` bus → `last_mile` moto), and 2 legs for station pickup.
 - **PIN Handover Chain:** Cryptographic bcrypt verification for pickup and handover pins (physical proof of handover with zero SMS fees); automatic 15-minute lockout after 5 consecutive failed attempts; role-based PIN exposure (giver sees pickup PIN, receiver sees handover PIN, rider never sees either).
 - **Rider Assignment & Dispatch:** Vendor rider discovery prioritizing active linked store partners then nearest online drivers sorted by distance; accept/decline flows with COD cash limit guardrails.
@@ -1009,4 +1133,4 @@ const socket = io("http://localhost:5000", { auth: { token: accessToken } });
 - **Breaking changes vs. the boilerplate:** `role` → `roles[]`; `POST /user/register` → `POST /auth/register`; `/otp/send` & `/otp/verify` → `/auth/verify-account` & `/auth/resend-otp`; login body `email` → `identifier`; web Google redirect flow (`/auth/google`) removed in favour of `POST /auth/social`; `PATCH /user/:id` replaced by `PATCH /user/me` (self) and `PATCH /user/:id/status` (admin).
 
 ### Next
-- **Step 6:** Finance & Wallets (escrow release on delivery, COD cash settlements, withdrawal requests & admin payouts, transaction ledger).
+- **Step 8:** Chat, Trust & Moderation (Domain 7 — Real-time multi-mode conversations, voice notes for customer/driver, anti-circumvention contact filtering, moderation violation penalties, reporting queue).

@@ -1,0 +1,54 @@
+import z from "zod";
+import {
+  DisputeStatus,
+  PaymentMethod,
+  PaymentPurpose,
+  RefundStatus,
+} from "./payment.interface";
+
+export const initiatePaymentSchema = z.object({
+  purpose: z.enum(Object.values(PaymentPurpose) as [string, ...string[]]),
+  refId: z.string().min(1, "refId is required"),
+  contextId: z.string().optional(),
+  method: z.enum(Object.values(PaymentMethod) as [string, ...string[]]),
+  provider: z.string().optional(),
+  idempotencyKey: z.string().optional(),
+});
+
+export const webhookSchema = z.object({
+  idempotencyKey: z.string().optional(),
+  providerRef: z.string().optional(),
+  paymentId: z.string().optional(),
+  status: z.enum(["success", "failed"]),
+  raw: z.record(z.string(), z.unknown()).optional(),
+});
+
+export const issueRefundSchema = z.object({
+  orderId: z.string().regex(/^[0-9a-fA-F]{24}$/, "Valid orderId is required"),
+  subOrderId: z
+    .string()
+    .regex(/^[0-9a-fA-F]{24}$/, "Valid subOrderId is required")
+    .optional(),
+  amount: z.number().int().min(1, "Refund amount must be at least 1 GNF"),
+  reason: z.string().trim().min(3, "Reason is required"),
+  notes: z.string().optional(),
+});
+
+export const createDisputeSchema = z.object({
+  orderId: z.string().regex(/^[0-9a-fA-F]{24}$/, "Valid orderId is required"),
+  subOrderId: z
+    .string()
+    .regex(/^[0-9a-fA-F]{24}$/, "Valid subOrderId is required")
+    .optional(),
+  amount: z.number().int().min(1).optional(),
+  reason: z.string().trim().min(5, "Reason must be at least 5 characters"),
+  notes: z.string().optional(),
+});
+
+export const resolveDisputeSchema = z.object({
+  status: z.enum([DisputeStatus.resolved, DisputeStatus.rejected]),
+  adminResolution: z.string().trim().min(3, "adminResolution is required"),
+  notes: z.string().optional(),
+  issueRefund: z.boolean().optional(),
+  refundAmount: z.number().int().min(1).optional(),
+});

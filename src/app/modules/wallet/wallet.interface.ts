@@ -1,9 +1,44 @@
 import { Document, Types } from "mongoose";
+import { IFileRef } from "../../interfaces/common.types";
 import { PayoutMethodType } from "../settings/settings.interface";
 
 export enum WalletMode {
   vendor = "vendor",
   rider = "rider",
+}
+
+export enum TransactionType {
+  earning_held = "earning_held",
+  earning_released = "earning_released",
+  commission = "commission",
+  withdrawal = "withdrawal",
+  withdrawal_fee = "withdrawal_fee",
+  withdrawal_reversal = "withdrawal_reversal",
+  refund_deduction = "refund_deduction",
+  cod_collected = "cod_collected",
+  cod_settled = "cod_settled",
+  cod_offset = "cod_offset",
+  adjustment = "adjustment",
+}
+
+export enum WithdrawalStatus {
+  pending = "pending",
+  approved = "approved",
+  completed = "completed",
+  rejected = "rejected",
+}
+
+export enum CodSettlementMethod {
+  orange_money = "orange_money",
+  mobile_money = "mobile_money",
+  cash_at_office = "cash_at_office",
+  earnings_offset = "earnings_offset",
+}
+
+export enum CodSettlementStatus {
+  pending = "pending",
+  confirmed = "confirmed",
+  rejected = "rejected",
 }
 
 export interface IPayoutMethod {
@@ -18,7 +53,6 @@ export interface IPayoutMethod {
 export const MAX_PAYOUT_METHODS = 5;
 
 // One wallet per user per earning mode. All amounts are whole GNF.
-// Balances are a cache of the wallet_transactions ledger (Step 6).
 export interface IWalletInitial {
   ownerId: Types.ObjectId;
   ownerMode: WalletMode;
@@ -32,3 +66,58 @@ export interface IWalletInitial {
 }
 
 export type IWallet = IWalletInitial & Document;
+
+// Append-only ledger — SOURCE OF TRUTH for money movements
+export interface IWalletTransactionInitial {
+  walletId: Types.ObjectId;
+  type: TransactionType;
+  amount: number; // + credit / - debit
+  balanceAfter: number;
+  subOrderId?: Types.ObjectId;
+  deliveryId?: Types.ObjectId;
+  withdrawalId?: Types.ObjectId;
+  settlementId?: Types.ObjectId;
+  note?: string;
+  createdBy?: Types.ObjectId;
+  createdAt: Date;
+}
+
+export type IWalletTransaction = IWalletTransactionInitial & Document;
+
+export interface IWithdrawalInitial {
+  requestNumber: string;
+  walletId: Types.ObjectId;
+  ownerId: Types.ObjectId;
+  ownerMode: WalletMode;
+  amount: number;
+  fee: number;
+  netAmount: number;
+  payoutMethodSnapshot: {
+    type: PayoutMethodType;
+    accountName: string;
+    accountNumber: string;
+    bankName?: string;
+  };
+  status: WithdrawalStatus;
+  rejectionReason?: string;
+  transactionId?: string;
+  receiptImage?: IFileRef;
+  createdByAdmin: boolean;
+  processedBy?: Types.ObjectId;
+  processedAt?: Date;
+}
+
+export type IWithdrawal = IWithdrawalInitial & Document;
+
+export interface ICodSettlementInitial {
+  riderId: Types.ObjectId;
+  amount: number;
+  method: CodSettlementMethod;
+  reference?: string;
+  proofImage?: IFileRef;
+  status: CodSettlementStatus;
+  confirmedBy?: Types.ObjectId;
+  confirmedAt?: Date;
+}
+
+export type ICodSettlement = ICodSettlementInitial & Document;
