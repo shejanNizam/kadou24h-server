@@ -25,6 +25,10 @@ import { SubscriptionRoutes } from "../modules/subscription/subscription.route";
 import { ChatRoutes } from "../modules/chat/chat.route";
 import { ReportRoutes } from "../modules/report/report.route";
 import { NotificationRoutes } from "../modules/notification/notification.route";
+import { SupportTicketRoutes } from "../modules/support_ticket/support_ticket.route";
+import { AdvertisementRoutes } from "../modules/advertisement/advertisement.route";
+import { AdminDashboardRoutes } from "../modules/admin_dashboard/admin_dashboard.route";
+import { ReviewRoutes } from "../modules/review/review.route";
 
 const router = Router();
 
@@ -55,6 +59,10 @@ const moduleRoutes = [
   { path: "/conversations", route: ChatRoutes },
   { path: "/reports", route: ReportRoutes },
   { path: "/notifications", route: NotificationRoutes },
+  { path: "/support-tickets", route: SupportTicketRoutes },
+  { path: "/advertisements", route: AdvertisementRoutes },
+  { path: "/admin/dashboard", route: AdminDashboardRoutes },
+  { path: "/reviews", route: ReviewRoutes },
 ];
 
 moduleRoutes.forEach((route) => {
