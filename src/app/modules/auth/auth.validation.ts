@@ -40,10 +40,16 @@ export const resendOtpZodSchema = z.object({
   purpose: z.enum([OtpPurpose.verify_account, OtpPurpose.reset_password]),
 });
 
-export const loginZodSchema = z.object({
-  identifier: identifierSchema,
-  password: z.string({ error: "Password is required" }).min(1),
-});
+export const loginZodSchema = z
+  .object({
+    identifier: identifierSchema.optional(),
+    email: emailSchema.optional(),
+    password: z.string({ error: "Password is required" }).min(1),
+  })
+  .refine((data) => Boolean(data.identifier || data.email), {
+    message: "Enter a valid phone number (e.g. +224620123456) or email",
+    path: ["identifier"],
+  });
 
 export const socialLoginZodSchema = z.object({
   provider: z.enum(["google", "apple"]),

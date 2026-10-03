@@ -49,7 +49,8 @@ const resendOtp = catchAsync(async (req: Request, res: Response) => {
 });
 
 const login = catchAsync(async (req: Request, res: Response) => {
-  const result = await AuthServices.login(req.body.identifier, req.body.password);
+  const identifier = (req.body.identifier || req.body.email || req.body.phone)?.trim();
+  const result = await AuthServices.login(identifier, req.body.password);
 
   if ("requiresVerification" in result) {
     return sendResponse(res, {

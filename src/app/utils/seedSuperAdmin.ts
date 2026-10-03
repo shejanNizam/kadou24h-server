@@ -9,7 +9,13 @@ export const seedSuperAdmin = async () => {
   try {
     const exists = await User.findOne({ email: configs.super_admin_email });
     if (exists) {
-      logger.info("Super Admin already exists");
+      if (!exists.roles.includes(UserRole.super_admin)) {
+        exists.roles = [UserRole.super_admin];
+        await exists.save();
+        logger.info("Super Admin roles updated to super_admin.");
+      } else {
+        logger.info("Super Admin already exists with correct role.");
+      }
       return;
     }
 
