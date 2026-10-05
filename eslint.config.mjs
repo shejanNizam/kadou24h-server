@@ -19,6 +19,11 @@ export default defineConfig(
     },
     rules: {
       "no-console": "warn",
+      "@typescript-eslint/no-explicit-any": "warn",
+      "@typescript-eslint/no-non-null-assertion": "off",
+      "@typescript-eslint/array-type": "off",
+      "@typescript-eslint/no-empty-object-type": "off",
+      "@typescript-eslint/consistent-generic-constructors": "off",
     },
   },
 );

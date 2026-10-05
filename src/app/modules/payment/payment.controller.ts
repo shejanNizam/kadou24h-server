@@ -14,7 +14,26 @@ const initiatePayment = catchAsync(async (req: Request, res: Response) => {
   });
 });
 
+import AppError from "../../errorHelpers/AppError";
+import { configs } from "../../config/index";
+
 const handleWebhook = catchAsync(async (req: Request, res: Response) => {
+  const secretHeader =
+    (req.headers["x-webhook-secret"] as string) ||
+    (req.headers["x-webhook-signature"] as string) ||
+    (req.headers["stripe-signature"] as string);
+
+  if (
+    !secretHeader ||
+    (secretHeader !== configs.payment_webhook_secret &&
+      secretHeader !== configs.stripe_webhook_secret)
+  ) {
+    throw new AppError(
+      httpStatus.UNAUTHORIZED,
+      "Unauthorized: missing or invalid webhook signature/secret",
+    );
+  }
+
   const result = await PaymentServices.handleWebhook(req.body);
   sendResponse(res, {
     statusCode: httpStatus.OK,

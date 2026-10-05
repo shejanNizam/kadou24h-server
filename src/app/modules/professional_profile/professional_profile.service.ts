@@ -176,14 +176,14 @@ const generateAiCv = async (
   if (!user) throw new AppError(httpStatus.NOT_FOUND, "User not found");
 
   const profession = payload.targetRole || profile.profession || "Professional Specialist";
-  const tone = payload.tone || "professional";
+  const toneDesc = payload.tone ? ` characterized by a ${payload.tone} approach` : "";
 
   // Synthesize AI-crafted professional summary
   const skillsList = profile.skills.length > 0 ? profile.skills.join(", ") : "Industry best practices, problem solving, task execution";
   const expYears = profile.experienceYears ? `${profile.experienceYears}+ years` : "proven";
 
   const aiSummary =
-    `Dedicated and results-oriented ${profession} with ${expYears} of hands-on experience in dynamic environments. ` +
+    `Dedicated and results-oriented ${profession} with ${expYears} of hands-on experience in dynamic environments${toneDesc}. ` +
     `Proficient in ${skillsList}. Proven track record of delivering high quality work with attention to detail, reliability, and excellence.`;
 
   // Update profile with generated content

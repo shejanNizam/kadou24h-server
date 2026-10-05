@@ -9,6 +9,7 @@ export enum WalletMode {
 
 export enum TransactionType {
   earning_held = "earning_held",
+  earning_held_reversed = "earning_held_reversed",
   earning_released = "earning_released",
   commission = "commission",
   withdrawal = "withdrawal",

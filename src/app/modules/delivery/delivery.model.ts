@@ -106,18 +106,22 @@ const deliverySchema = new Schema<IDelivery>(
     pickupPin: {
       type: String,
       required: true,
+      select: false,
     },
     pickupPinHash: {
       type: String,
       required: true,
+      select: false,
     },
     handoverPin: {
       type: String,
       required: true,
+      select: false,
     },
     handoverPinHash: {
       type: String,
       required: true,
+      select: false,
     },
     pinAttempts: {
       type: Number,

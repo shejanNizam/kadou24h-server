@@ -32,6 +32,7 @@ const envSchema = z.object({
 
   STRIPE_SECRET_KEY: z.string().optional(),
   STRIPE_WEBHOOK_SECRET: z.string().optional(),
+  PAYMENT_WEBHOOK_SECRET: z.string().default("kadou24h_live_payment_webhook_secret_key"),
 
   CLOUDINARY_CLOUD_NAME: z.string().optional(),
   CLOUDINARY_API_KEY: z.string().optional(),
@@ -97,6 +98,9 @@ export const configs = {
   },
 
   frontend_url: env.FRONTEND_URL,
+  payment_webhook_secret: env.PAYMENT_WEBHOOK_SECRET,
+  stripe_secret_key: env.STRIPE_SECRET_KEY,
+  stripe_webhook_secret: env.STRIPE_WEBHOOK_SECRET,
 
   CLOUDINARY: {
     cloudinary_cloud_name: env.CLOUDINARY_CLOUD_NAME,

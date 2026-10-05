@@ -4,7 +4,6 @@ import { JobServices } from "../app/modules/job/job.service";
 import { ProfessionalProfileServices } from "../app/modules/professional_profile/professional_profile.service";
 import { SubscriptionServices } from "../app/modules/subscription/subscription.service";
 import {
-  ApplicationKind,
   ApplicationStatus,
   JobStatus,
   JobType,
@@ -17,7 +16,6 @@ import {
 } from "../app/modules/subscription/subscription.interface";
 import {
   createJobSchema,
-  applyJobSchema,
 } from "../app/modules/job/job.validation";
 import { toggleWorkerListingSchema } from "../app/modules/professional_profile/professional_profile.validation";
 import { createPlanSchema } from "../app/modules/subscription/subscription.validation";
@@ -152,6 +150,7 @@ describe("Jobs, Worker Profiles & CV Module (Step 7)", () => {
         "service_provider",
       ]);
       expect(Object.values(SubscriptionStatus)).toEqual([
+        "pending",
         "active",
         "expired",
         "cancelled",

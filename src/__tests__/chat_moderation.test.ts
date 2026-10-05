@@ -4,8 +4,6 @@ import {
   ConversationType,
   MessageType,
   ModerationAction,
-  ModerationRule,
-  ModerationStatus,
 } from "../app/modules/chat/chat.interface";
 import { ChatValidations } from "../app/modules/chat/chat.validation";
 import { inspectContent } from "../app/modules/chat/moderation.util";

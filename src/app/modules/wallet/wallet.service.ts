@@ -6,7 +6,6 @@ import { CounterServices } from "../counter/counter.service";
 import { DeliveryStatus } from "../delivery/delivery.interface";
 import { Delivery } from "../delivery/delivery.model";
 import { SettlementStatus } from "../order/order.interface";
-import { Order } from "../order/order.model";
 import { SubOrder } from "../order/sub_order.model";
 import { RiderProfile } from "../rider_profile/rider_profile.model";
 import { SettingsServices } from "../settings/settings.service";
@@ -75,6 +74,11 @@ const recordTransaction = async (params: {
     case TransactionType.earning_held:
       wallet.heldBalance += absAmount;
       wallet.totalEarned += absAmount;
+      break;
+
+    case TransactionType.earning_held_reversed:
+      wallet.heldBalance = Math.max(0, wallet.heldBalance - absAmount);
+      wallet.totalEarned = Math.max(0, wallet.totalEarned - absAmount);
       break;
 
     case TransactionType.earning_released:
@@ -232,6 +236,47 @@ const releaseEscrowForSubOrder = async (
 };
 
 /**
+ * Reverses escrow funds for a cancelled sub-order.
+ * Decrements vendor heldBalance and totalEarned, and marks settlement as cancelled.
+ */
+const reverseEscrowForSubOrder = async (
+  subOrderId: string,
+  actorId: string,
+) => {
+  const subOrder = await SubOrder.findById(subOrderId);
+  if (!subOrder) return null;
+
+  if (subOrder.settlement === SettlementStatus.released) {
+    return { subOrder, message: "Escrow was already released; handle via refund" };
+  }
+
+  if (
+    subOrder.settlement === SettlementStatus.refunded ||
+    subOrder.settlement === SettlementStatus.cancelled
+  ) {
+    return { subOrder, message: "Escrow already reversed or cancelled" };
+  }
+
+  const vendor = await VendorProfile.findById(subOrder.vendorId);
+  if (vendor && subOrder.vendorEarning > 0) {
+    const vendorWallet = await ensureWallet(vendor.userId, WalletMode.vendor);
+    await recordTransaction({
+      walletId: vendorWallet._id,
+      type: TransactionType.earning_held_reversed,
+      amount: subOrder.vendorEarning,
+      subOrderId: subOrder._id,
+      note: `Escrow reversed for cancelled sub-order ${subOrder.subOrderNumber}`,
+      createdBy: actorId,
+    });
+  }
+
+  subOrder.settlement = SettlementStatus.cancelled;
+  await subOrder.save();
+
+  return { subOrder };
+};
+
+/**
  * Payout methods management
  */
 const addPayoutMethod = async (
@@ -301,6 +346,7 @@ const deletePayoutMethod = async (
 
 /**
  * Requests a payout/withdrawal from available wallet balance.
+ * Uses atomic MongoDB operations, prevents double-fee deduction, and guards against outstanding rider COD cash.
  */
 const requestWithdrawal = async (
   ownerId: string,
@@ -317,6 +363,17 @@ const requestWithdrawal = async (
       httpStatus.BAD_REQUEST,
       `Insufficient available balance. Available: ${wallet.availableBalance} GNF, requested: ${payload.amount} GNF`,
     );
+  }
+
+  // Guard against rider unpaid cash debt: rider cannot withdraw if they hold unremitted COD cash
+  if (payload.mode === WalletMode.rider && (wallet.cashOwed || 0) > 0) {
+    const maxWithdrawable = Math.max(0, wallet.availableBalance - (wallet.cashOwed || 0));
+    if (payload.amount > maxWithdrawable) {
+      throw new AppError(
+        httpStatus.BAD_REQUEST,
+        `Cannot withdraw ${payload.amount.toLocaleString()} GNF: you owe ${wallet.cashOwed.toLocaleString()} GNF in unremitted COD cash. Maximum withdrawable: ${maxWithdrawable.toLocaleString()} GNF`,
+      );
+    }
   }
 
   const payoutMethod = wallet.payoutMethods.id(payload.payoutMethodId);
@@ -339,6 +396,7 @@ const requestWithdrawal = async (
     }
   }
 
+  // Net amount user receives = requested gross amount minus fee
   const netAmount = Math.max(0, payload.amount - fee);
   const requestNumber = await CounterServices.nextCode("withdrawal");
 
@@ -360,21 +418,48 @@ const requestWithdrawal = async (
     createdByAdmin: false,
   });
 
-  // Deduct from wallet immediately
-  await recordTransaction({
+  // Atomic deduction from wallet: prevents race conditions and overdrafts
+  // Total deduction from availableBalance is payload.amount (netAmount + fee)
+  const updatedWallet = await Wallet.findOneAndUpdate(
+    {
+      _id: wallet._id,
+      availableBalance: { $gte: payload.amount },
+    },
+    {
+      $inc: {
+        availableBalance: -payload.amount,
+        totalWithdrawn: netAmount,
+      },
+    },
+    { new: true },
+  );
+
+  if (!updatedWallet) {
+    await Withdrawal.findByIdAndDelete(withdrawal._id);
+    throw new AppError(
+      httpStatus.BAD_REQUEST,
+      `Insufficient available balance or concurrent withdrawal in progress.`,
+    );
+  }
+
+  // Record net withdrawal transaction
+  await WalletTransaction.create({
     walletId: wallet._id,
     type: TransactionType.withdrawal,
-    amount: payload.amount,
+    amount: netAmount,
+    balanceAfter: updatedWallet.availableBalance + fee,
     withdrawalId: withdrawal._id,
-    note: `Withdrawal request ${requestNumber}`,
+    note: `Withdrawal request ${requestNumber} (net payout)`,
     createdBy: ownerId,
   });
 
+  // Record platform withdrawal fee if applicable (part of total requested amount, NOT charged on top)
   if (fee > 0) {
-    await recordTransaction({
+    await WalletTransaction.create({
       walletId: wallet._id,
       type: TransactionType.withdrawal_fee,
       amount: fee,
+      balanceAfter: updatedWallet.availableBalance,
       withdrawalId: withdrawal._id,
       note: `Fee for withdrawal request ${requestNumber}`,
       createdBy: ownerId,
@@ -689,6 +774,7 @@ export const WalletServices = {
   getMyWallet,
   recordTransaction,
   releaseEscrowForSubOrder,
+  reverseEscrowForSubOrder,
   addPayoutMethod,
   updatePayoutMethod,
   deletePayoutMethod,

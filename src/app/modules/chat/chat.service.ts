@@ -319,7 +319,7 @@ const sendMessage = async (
       sender.moderation.violationCount = (sender.moderation.violationCount || 0) + 1;
       sender.moderation.lastViolationAt = new Date();
 
-      let action = ModerationAction.warned;
+      let action: ModerationAction;
 
       if (sender.moderation.violationCount >= suspendAfter) {
         action = ModerationAction.suspended;

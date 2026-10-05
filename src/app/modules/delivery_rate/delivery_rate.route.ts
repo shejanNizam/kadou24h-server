@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { checkAuth } from "../../middlewares/checkAuth";
 import validateRequest from "../../middlewares/validateRequest";
-import { ADMIN_ROLES, ALL_ROLES, UserRole } from "../user/user.interface";
+import { ALL_ROLES, UserRole } from "../user/user.interface";
 import { DeliveryRateControllers } from "./delivery_rate.controller";
 import { DeliveryRateValidations } from "./delivery_rate.validation";
 

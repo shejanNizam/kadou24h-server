@@ -60,7 +60,9 @@ const subscribe = async (
   const startsAt = new Date();
   const endsAt = new Date(Date.now() + plan.durationDays * 24 * 60 * 60 * 1000);
 
-  // 2. Create user subscription
+  const isPaid = (payment as any).status === "success";
+
+  // 2. Create user subscription (starts pending until gateway confirms payment)
   const subscription = await UserSubscription.create({
     userId: new Types.ObjectId(userId),
     planId: plan._id,
@@ -69,14 +71,14 @@ const subscribe = async (
       price: plan.price,
       features: plan.features,
     },
-    status: SubscriptionStatus.active,
+    status: isPaid ? SubscriptionStatus.active : SubscriptionStatus.pending,
     startsAt,
     endsAt,
     paymentId: payment._id,
   });
 
-  // 3. If plan includes CV visibility, unlock on professional profile
-  if (plan.features.includes("cv_visibility")) {
+  // 3. If payment confirmed and plan includes CV visibility, unlock on professional profile
+  if (isPaid && plan.features.includes("cv_visibility")) {
     await ProfessionalProfile.findOneAndUpdate(
       { userId },
       { $set: { cvVisible: true, visibleUntil: endsAt } },

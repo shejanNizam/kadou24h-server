@@ -1,4 +1,5 @@
 import bcrypt from "bcrypt";
+import crypto from "crypto";
 import httpStatus from "http-status";
 import { Types } from "mongoose";
 import { configs } from "../../config";
@@ -19,6 +20,8 @@ import { PartnerType } from "../rider_profile/rider_profile.interface";
 import { RiderProfile } from "../rider_profile/rider_profile.model";
 import { SettingsServices } from "../settings/settings.service";
 import { TransitStation } from "../transit_station/transit_station.model";
+import { UserRole } from "../user/user.interface";
+import { User } from "../user/user.model";
 import { VendorProfile } from "../vendor_profile/vendor_profile.model";
 import { LinkStatus } from "../vendor_rider_link/vendor_rider_link.interface";
 import { VendorRiderLink } from "../vendor_rider_link/vendor_rider_link.model";
@@ -30,13 +33,14 @@ import {
   LegType,
 } from "./delivery.interface";
 import { Delivery } from "./delivery.model";
+import { WalletMode } from "../wallet/wallet.interface";
 import { WalletServices } from "../wallet/wallet.service";
 
 /**
  * Generates a random 4-digit PIN and its bcrypt hash.
  */
 const generatePinPair = async (): Promise<{ pin: string; hash: string }> => {
-  const pin = Math.floor(1000 + Math.random() * 9000).toString();
+  const pin = crypto.randomInt(1000, 10000).toString();
   const saltRounds = Number(configs.bcrypt_salt_round) || 10;
   const hash = await bcrypt.hash(pin, saltRounds);
   return { pin, hash };
@@ -108,7 +112,23 @@ const createDeliveryLegsForSubOrder = async (
     await subOrder.save();
   } else if (order.deliveryType === DeliveryType.intercity) {
     // 3 Legs: first_mile (moto) -> line_haul (bus) -> last_mile (moto)
-    const departureStation = await TransitStation.findOne({ isActive: true });
+    let departureStation = null;
+    if (vendorCoords) {
+      departureStation = await TransitStation.findOne({
+        isActive: true,
+        location: {
+          $near: {
+            $geometry: {
+              type: "Point",
+              coordinates: vendorCoords,
+            },
+          },
+        },
+      });
+    }
+    if (!departureStation) {
+      departureStation = await TransitStation.findOne({ isActive: true });
+    }
     const destinationStation = order.destinationStationId
       ? await TransitStation.findById(order.destinationStationId)
       : null;
@@ -210,7 +230,23 @@ const createDeliveryLegsForSubOrder = async (
     await subOrder.save();
   } else if (order.deliveryType === DeliveryType.station_pickup) {
     // 2 Legs: first_mile -> line_haul (customer collects at station)
-    const departureStation = await TransitStation.findOne({ isActive: true });
+    let departureStation = null;
+    if (vendorCoords) {
+      departureStation = await TransitStation.findOne({
+        isActive: true,
+        location: {
+          $near: {
+            $geometry: {
+              type: "Point",
+              coordinates: vendorCoords,
+            },
+          },
+        },
+      });
+    }
+    if (!departureStation) {
+      departureStation = await TransitStation.findOne({ isActive: true });
+    }
     const destinationStation = order.destinationStationId
       ? await TransitStation.findById(order.destinationStationId)
       : null;
@@ -361,8 +397,29 @@ const assignRider = async (
   deliveryId: string,
   riderId: string,
 ) => {
+  const actor = await User.findById(actorUserId);
+  if (!actor) throw new AppError(httpStatus.UNAUTHORIZED, "User not found");
+
+  const isAdminOrStaff = actor.roles?.some((r) =>
+    [UserRole.staff, UserRole.admin, UserRole.super_admin].includes(r),
+  );
+
   const delivery = await Delivery.findById(deliveryId);
   if (!delivery) throw new AppError(httpStatus.NOT_FOUND, "Delivery leg not found");
+
+  const subOrder = await SubOrder.findById(delivery.subOrderId);
+  if (!subOrder) throw new AppError(httpStatus.NOT_FOUND, "Sub-order not found");
+
+  // Authorization check: Only staff/admin or the order's vendor can assign riders
+  if (!isAdminOrStaff) {
+    const vendorProfile = await VendorProfile.findOne({ userId: actorUserId });
+    if (!vendorProfile || !subOrder.vendorId.equals(vendorProfile._id)) {
+      throw new AppError(
+        httpStatus.FORBIDDEN,
+        "You are not authorized to assign riders for this order",
+      );
+    }
+  }
 
   if (
     ![DeliveryStatus.pending_assignment, DeliveryStatus.declined].includes(
@@ -379,7 +436,21 @@ const assignRider = async (
     _id: riderId,
     approvalStatus: ApprovalStatus.approved,
   });
-  if (!rider) throw new AppError(httpStatus.NOT_FOUND, "Delivery partner not found");
+  if (!rider) throw new AppError(httpStatus.NOT_FOUND, "Approved delivery partner not found");
+
+  if (String(rider.userId) === actorUserId) {
+    throw new AppError(
+      httpStatus.BAD_REQUEST,
+      "You cannot assign yourself as the delivery partner",
+    );
+  }
+
+  if (!rider.isOnline) {
+    throw new AppError(
+      httpStatus.BAD_REQUEST,
+      "Cannot assign delivery partner who is currently offline",
+    );
+  }
 
   delivery.riderId = rider._id as Types.ObjectId;
   delivery.assignedBy = new Types.ObjectId(actorUserId);
@@ -435,11 +506,14 @@ const acceptDelivery = async (riderUserId: string, deliveryId: string) => {
   if (delivery.collectsCash) {
     const settings = await SettingsServices.getSettings();
     const maxCash = rider.cashLimit || settings.riderCashLimitDefault || 500000;
-    // (In Step 6 wallet cashOwed is tracked; safety boundary verified)
-    if (delivery.fee > maxCash) {
+    const subOrder = await SubOrder.findById(delivery.subOrderId);
+    const codAmount = subOrder?.codAmountToCollect || 0;
+    const riderWallet = await WalletServices.ensureWallet(rider.userId, WalletMode.rider);
+    const totalCashRisk = (riderWallet.cashOwed || 0) + codAmount;
+    if (totalCashRisk > maxCash) {
       throw new AppError(
         httpStatus.BAD_REQUEST,
-        "Cash on delivery amount exceeds authorized partner limit",
+        `Cash on delivery amount (${totalCashRisk.toLocaleString()} GNF) exceeds authorized partner limit (${maxCash.toLocaleString()} GNF)`,
       );
     }
   }
@@ -570,7 +644,7 @@ const verifyPickup = async (
   const delivery = await Delivery.findOne({
     _id: deliveryId,
     riderId: rider._id,
-  });
+  }).select("+pickupPinHash");
 
   if (!delivery) {
     throw new AppError(httpStatus.NOT_FOUND, "Delivery not found");
@@ -652,7 +726,7 @@ const verifyHandover = async (
   const delivery = await Delivery.findOne({
     _id: deliveryId,
     riderId: rider._id,
-  });
+  }).select("+handoverPinHash");
 
   if (!delivery) {
     throw new AppError(httpStatus.NOT_FOUND, "Delivery not found");
@@ -744,14 +818,10 @@ const verifyHandover = async (
     await subOrder.save();
 
     // Release escrow for sub-order (vendor earnings + partner delivery fee)
-    try {
-      await WalletServices.releaseEscrowForSubOrder(
-        String(subOrder._id),
-        riderUserId,
-      );
-    } catch (err) {
-      console.error("Failed to release escrow for sub-order:", err);
-    }
+    await WalletServices.releaseEscrowForSubOrder(
+      String(subOrder._id),
+      riderUserId,
+    );
 
     // Check parent Order
     const allSubOrders = await SubOrder.find({ orderId: subOrder.orderId });
@@ -786,6 +856,7 @@ const trackDelivery = async (
   deliveryId: string,
 ) => {
   const delivery = await Delivery.findById(deliveryId)
+    .select("+pickupPin +handoverPin")
     .populate("riderId", "partnerType vehicle stats lastLocation lastLocationAt")
     .populate("subOrderId", "subOrderNumber status total")
     .populate("orderId", "orderNumber addressSnapshot paymentMethod");
@@ -796,17 +867,29 @@ const trackDelivery = async (
   const order = await Order.findById(delivery.orderId);
   const vendor = subOrder ? await VendorProfile.findById(subOrder.vendorId) : null;
   const riderProfile = await RiderProfile.findOne({ userId });
+  const user = await User.findById(userId);
+
+  const isStaffOrAdmin = user?.roles?.some((r) =>
+    [UserRole.staff, UserRole.admin, UserRole.super_admin].includes(r),
+  );
 
   // Security: only giver gets pickupPin, only receiver gets handoverPin
   const isGiver =
     String(vendor?.userId) === userId ||
-    (delivery.fromKind === EndpointKind.station && String(delivery.fromRefId) === userId);
+    (delivery.fromKind === EndpointKind.station && Boolean(isStaffOrAdmin));
 
   const isReceiver =
     String(order?.customerId) === userId ||
-    (delivery.toKind === EndpointKind.station && String(delivery.toRefId) === userId);
+    (delivery.toKind === EndpointKind.station && Boolean(isStaffOrAdmin));
 
   const isRider = String(riderProfile?._id) === String(delivery.riderId);
+
+  if (!isGiver && !isReceiver && !isRider && !isStaffOrAdmin) {
+    throw new AppError(
+      httpStatus.FORBIDDEN,
+      "You are not authorized to view tracking for this delivery",
+    );
+  }
 
   const deliveryObj = delivery.toObject();
 

@@ -3,7 +3,6 @@ import {
   DisputeStatus,
   PaymentMethod,
   PaymentPurpose,
-  RefundStatus,
 } from "./payment.interface";
 
 export const initiatePaymentSchema = z.object({

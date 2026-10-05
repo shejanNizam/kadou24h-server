@@ -6,6 +6,7 @@ export enum PlanAudience {
 }
 
 export enum SubscriptionStatus {
+  pending = "pending",
   active = "active",
   expired = "expired",
   cancelled = "cancelled",

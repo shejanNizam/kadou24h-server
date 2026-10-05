@@ -1,7 +1,6 @@
 import httpStatus from "http-status";
 import { Types } from "mongoose";
 import AppError from "../../errorHelpers/AppError";
-import { IGeoPoint } from "../../interfaces/common.types";
 import { Cart } from "../cart/cart.model";
 import { CounterServices } from "../counter/counter.service";
 import {
@@ -11,7 +10,10 @@ import {
 import { DeliveryRateServices } from "../delivery_rate/delivery_rate.service";
 import { Product } from "../product/product.model";
 import { ProductApprovalStatus } from "../product/product.interface";
+import { ApprovalStatus } from "../profile_common/profile.common";
 import { DeliveryServices } from "../delivery/delivery.service";
+import { Delivery } from "../delivery/delivery.model";
+import { DeliveryStatus } from "../delivery/delivery.interface";
 import { SettingsServices } from "../settings/settings.service";
 import { TransitStation } from "../transit_station/transit_station.model";
 import { User } from "../user/user.model";
@@ -136,7 +138,7 @@ const calculateCheckout = async (
   });
 
   // Determine items to checkout
-  let itemInputs: ICheckoutItemInput[] = [];
+  let itemInputs: ICheckoutItemInput[];
   if (payload.items && payload.items.length > 0) {
     itemInputs = payload.items;
   } else {
@@ -236,6 +238,31 @@ const calculateCheckout = async (
     const vendorProfile = vendorProfileMap.get(vendorId);
     const storeName = vendorProfile?.storeName || "Vendor";
 
+    if (!vendorProfile) {
+      throw new AppError(httpStatus.NOT_FOUND, `Vendor not found for product`);
+    }
+
+    if (vendorProfile.approvalStatus !== ApprovalStatus.approved) {
+      throw new AppError(
+        httpStatus.BAD_REQUEST,
+        `Vendor "${storeName}" is not currently approved to accept orders`,
+      );
+    }
+
+    if (vendorProfile.isOpen === false) {
+      throw new AppError(
+        httpStatus.BAD_REQUEST,
+        `Store "${storeName}" is currently closed`,
+      );
+    }
+
+    if (String(vendorProfile.userId) === customerId) {
+      throw new AppError(
+        httpStatus.BAD_REQUEST,
+        `You cannot purchase items from your own store ("${storeName}")`,
+      );
+    }
+
     let vendorSubtotal = 0;
     const subOrderItems: ISubOrderItem[] = [];
 
@@ -281,11 +308,28 @@ const calculateCheckout = async (
         );
       }
 
+      const vendorCoords: [number, number] = vendorProfile?.address?.location
+        ?.coordinates || [-13.6785, 9.537];
+
       // Find nearest station to vendor or default
-      const defaultFromStation = await TransitStation.findOne({
-        isActive: true,
-      });
-      if (!defaultFromStation) {
+      let fromStation = null;
+      if (vendorCoords) {
+        fromStation = await TransitStation.findOne({
+          isActive: true,
+          location: {
+            $near: {
+              $geometry: {
+                type: "Point",
+                coordinates: vendorCoords,
+              },
+            },
+          },
+        });
+      }
+      if (!fromStation) {
+        fromStation = await TransitStation.findOne({ isActive: true });
+      }
+      if (!fromStation) {
         throw new AppError(
           httpStatus.BAD_REQUEST,
           "No active transit stations configured for intercity delivery",
@@ -294,7 +338,7 @@ const calculateCheckout = async (
 
       const rateResult = await DeliveryRateServices.calculateDeliveryFee({
         type: DeliveryRateType.intercity,
-        fromStationId: String(defaultFromStation._id),
+        fromStationId: String(fromStation._id),
         toStationId: payload.destinationStationId,
       });
       vendorDeliveryFee = rateResult.fee;
@@ -303,11 +347,14 @@ const calculateCheckout = async (
       vendorDeliveryFee = 10000;
     }
 
-    const commissionAmount = Math.max(
-      Math.round((commissionRate / 100) * vendorSubtotal),
-      commissionMin,
+    // Safe commission: never exceeds 90% of subtotal so vendor earning is never negative
+    const rawCommission = Math.round((commissionRate / 100) * vendorSubtotal);
+    const cappedMin = Math.min(commissionMin, Math.round(vendorSubtotal * 0.9));
+    const commissionAmount = Math.min(
+      Math.max(rawCommission, cappedMin),
+      Math.round(vendorSubtotal * 0.9),
     );
-    const vendorEarning = vendorSubtotal - commissionAmount;
+    const vendorEarning = Math.max(0, vendorSubtotal - commissionAmount);
     const vendorTotal = vendorSubtotal + vendorDeliveryFee;
 
     overallSubtotal += vendorSubtotal;
@@ -617,6 +664,25 @@ const cancelOrder = async (
           });
         }
       }
+
+      // Reverse vendor escrow
+      await WalletServices.reverseEscrowForSubOrder(String(so._id), customerId);
+
+      // Cancel any active/assigned delivery legs
+      await Delivery.updateMany(
+        {
+          subOrderId: so._id,
+          status: {
+            $in: [
+              DeliveryStatus.pending_assignment,
+              DeliveryStatus.assigned,
+              DeliveryStatus.accepted,
+              DeliveryStatus.going_to_pickup,
+            ],
+          },
+        },
+        { status: DeliveryStatus.cancelled },
+      );
     }
   }
 
@@ -658,9 +724,27 @@ const getVendorSubOrders = async (
     SubOrder.countDocuments(filter),
   ]);
 
+  const sanitizedSubOrders = subOrders.map((so) => {
+    const obj = so.toObject();
+    const isActiveFulfillment = [
+      SubOrderStatus.accepted,
+      SubOrderStatus.preparing,
+      SubOrderStatus.ready_for_pickup,
+      SubOrderStatus.in_delivery,
+    ].includes(so.status);
+
+    if (!isActiveFulfillment && obj.customerId && typeof obj.customerId === "object") {
+      const cust = obj.customerId as any;
+      if (cust.phone && cust.phone.length > 4) {
+        cust.phone = cust.phone.slice(0, 4) + " •••• " + cust.phone.slice(-2);
+      }
+    }
+    return obj;
+  });
+
   return {
     meta: { page, limit, total, totalPages: Math.ceil(total / limit) },
-    data: subOrders,
+    data: sanitizedSubOrders,
   };
 };
 
@@ -721,7 +805,7 @@ const updateSubOrderStatus = async (
     throw new AppError(httpStatus.NOT_FOUND, "Sub-order not found");
   }
 
-  // Allowed transitions
+  // Allowed transitions (Vendor cannot mark in_delivery or delivered; only rider PIN verification does)
   const validTransitions: Record<SubOrderStatus, SubOrderStatus[]> = {
     [SubOrderStatus.new]: [SubOrderStatus.accepted, SubOrderStatus.cancelled],
     [SubOrderStatus.accepted]: [
@@ -732,8 +816,8 @@ const updateSubOrderStatus = async (
       SubOrderStatus.ready_for_pickup,
       SubOrderStatus.cancelled,
     ],
-    [SubOrderStatus.ready_for_pickup]: [SubOrderStatus.in_delivery],
-    [SubOrderStatus.in_delivery]: [SubOrderStatus.delivered],
+    [SubOrderStatus.ready_for_pickup]: [SubOrderStatus.cancelled],
+    [SubOrderStatus.in_delivery]: [],
     [SubOrderStatus.delivered]: [],
     [SubOrderStatus.cancelled]: [],
   };
@@ -742,6 +826,24 @@ const updateSubOrderStatus = async (
     throw new AppError(
       httpStatus.BAD_REQUEST,
       `Cannot transition sub-order from "${subOrder.status}" to "${newStatus}"`,
+    );
+  }
+
+  if (newStatus === SubOrderStatus.cancelled) {
+    await WalletServices.reverseEscrowForSubOrder(String(subOrder._id), vendorUserId);
+    await Delivery.updateMany(
+      {
+        subOrderId: subOrder._id,
+        status: {
+          $in: [
+            DeliveryStatus.pending_assignment,
+            DeliveryStatus.assigned,
+            DeliveryStatus.accepted,
+            DeliveryStatus.going_to_pickup,
+          ],
+        },
+      },
+      { status: DeliveryStatus.cancelled },
     );
   }
 
@@ -885,15 +987,55 @@ const modifySubOrderItems = async (
   const activeItems = subOrder.items.filter((i) => !i.removed);
   const newSubtotal = activeItems.reduce((sum, i) => sum + i.lineTotal, 0);
 
-  // Recalculate commission
+  // Recalculate commission safely
   const commissionRate = subOrder.commissionRate || 10;
-  const newCommissionAmount = Math.max(
-    Math.round((commissionRate / 100) * newSubtotal),
-    1000,
+  const rawCommission = Math.round((commissionRate / 100) * newSubtotal);
+  const cappedMin = Math.min(1000, Math.round(newSubtotal * 0.9));
+  const newCommissionAmount = Math.min(
+    Math.max(rawCommission, cappedMin),
+    Math.round(newSubtotal * 0.9),
   );
-  const newVendorEarning = newSubtotal - newCommissionAmount;
+  const newVendorEarning = Math.max(0, newSubtotal - newCommissionAmount);
   const newTotal = newSubtotal + subOrder.deliveryFee - subOrder.discountShare;
   const refundAmount = Math.max(0, oldTotal - newTotal);
+
+  const oldVendorEarning = subOrder.vendorEarning;
+  const earningDiff = oldVendorEarning - newVendorEarning;
+
+  // Synchronize vendor escrow with wallet
+  if (earningDiff > 0 && subOrder.settlement === SettlementStatus.held) {
+    const vendorProfile = await VendorProfile.findById(subOrder.vendorId);
+    if (vendorProfile) {
+      const vendorWallet = await WalletServices.ensureWallet(
+        vendorProfile.userId,
+        WalletMode.vendor,
+      );
+      await WalletServices.recordTransaction({
+        walletId: vendorWallet._id,
+        type: TransactionType.earning_held_reversed,
+        amount: earningDiff,
+        subOrderId: subOrder._id,
+        note: `Escrow reduced due to sub-order items modification (${subOrder.subOrderNumber})`,
+        createdBy: vendorUserId,
+      });
+    }
+  } else if (earningDiff < 0 && subOrder.settlement === SettlementStatus.held) {
+    const vendorProfile = await VendorProfile.findById(subOrder.vendorId);
+    if (vendorProfile) {
+      const vendorWallet = await WalletServices.ensureWallet(
+        vendorProfile.userId,
+        WalletMode.vendor,
+      );
+      await WalletServices.recordTransaction({
+        walletId: vendorWallet._id,
+        type: TransactionType.earning_held,
+        amount: Math.abs(earningDiff),
+        subOrderId: subOrder._id,
+        note: `Escrow increased due to sub-order items modification (${subOrder.subOrderNumber})`,
+        createdBy: vendorUserId,
+      });
+    }
+  }
 
   subOrder.subtotal = newSubtotal;
   subOrder.commissionAmount = newCommissionAmount;
@@ -1004,6 +1146,25 @@ const cancelVendorSubOrder = async (
     }
   }
 
+  // Reverse vendor escrow
+  await WalletServices.reverseEscrowForSubOrder(String(subOrder._id), vendorUserId);
+
+  // Cancel any active/assigned delivery legs
+  await Delivery.updateMany(
+    {
+      subOrderId: subOrder._id,
+      status: {
+        $in: [
+          DeliveryStatus.pending_assignment,
+          DeliveryStatus.assigned,
+          DeliveryStatus.accepted,
+          DeliveryStatus.going_to_pickup,
+        ],
+      },
+    },
+    { status: DeliveryStatus.cancelled },
+  );
+
   // Update parent order status
   const allSubOrders = await SubOrder.find({ orderId: subOrder.orderId });
   const newOrderStatus = deriveOrderStatus(allSubOrders.map((s) => s.status));
@@ -1091,6 +1252,25 @@ const adminCancelSubOrder = async (
       });
     }
   }
+
+  // Reverse vendor escrow
+  await WalletServices.reverseEscrowForSubOrder(String(subOrder._id), adminUserId);
+
+  // Cancel any active/assigned delivery legs
+  await Delivery.updateMany(
+    {
+      subOrderId: subOrder._id,
+      status: {
+        $in: [
+          DeliveryStatus.pending_assignment,
+          DeliveryStatus.assigned,
+          DeliveryStatus.accepted,
+          DeliveryStatus.going_to_pickup,
+        ],
+      },
+    },
+    { status: DeliveryStatus.cancelled },
+  );
 
   // Update parent order
   const allSubOrders = await SubOrder.find({ orderId: subOrder.orderId });

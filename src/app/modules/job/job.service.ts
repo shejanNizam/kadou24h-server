@@ -11,7 +11,6 @@ import {
   ApplicationKind,
   ApplicationStatus,
   IJob,
-  IJobApplication,
   JobStatus,
 } from "./job.interface";
 import { Job } from "./job.model";
@@ -126,10 +125,14 @@ const publishJob = async (
     method: paymentMethod,
   });
 
-  // 2. Set job to published for 30 days
-  job.status = JobStatus.published;
-  job.publishedAt = new Date();
-  job.expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+  const isPaid = (payment as any).status === "success";
+
+  // 2. Set job to published for 30 days only if payment is confirmed; otherwise pending_payment
+  job.status = isPaid ? JobStatus.published : JobStatus.pending_payment;
+  if (isPaid) {
+    job.publishedAt = new Date();
+    job.expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+  }
   job.publishPaymentId = payment._id;
   await job.save();
 
@@ -497,7 +500,9 @@ const unlockCandidateCv = async (
     method: paymentMethod,
   });
 
-  return { unlocked: true, payment };
+  const isPaid = (payment as any).status === "success";
+
+  return { unlocked: isPaid, payment };
 };
 
 export const JobServices = {

@@ -3,9 +3,7 @@ import app from "../app";
 import {
   CodSettlementMethod,
   MAX_PAYOUT_METHODS,
-  TransactionType,
   WalletMode,
-  WithdrawalStatus,
 } from "../app/modules/wallet/wallet.interface";
 import {
   DisputeStatus,

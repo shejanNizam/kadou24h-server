@@ -8,9 +8,16 @@ import { PaymentStatus as OrderPaymentStatus } from "../order/order.interface";
 import { VendorProfile } from "../vendor_profile/vendor_profile.model";
 import { TransactionType, WalletMode } from "../wallet/wallet.interface";
 import { WalletServices } from "../wallet/wallet.service";
+import { SettingsServices } from "../settings/settings.service";
+import { SubscriptionPlan } from "../subscription/subscription_plan.model";
+import { UserSubscription } from "../subscription/user_subscription.model";
+import { SubscriptionStatus } from "../subscription/subscription.interface";
+import { ProfessionalProfile } from "../professional_profile/professional_profile.model";
+import { Job } from "../job/job.model";
+import { JobStatus } from "../job/job.interface";
+import { JobApplication } from "../job/job_application.model";
 import {
   DisputeStatus,
-  IPayment,
   PaymentMethod,
   PaymentPurpose,
   PaymentStatus,
@@ -22,7 +29,7 @@ import { Dispute } from "./dispute.model";
 
 /**
  * Initiates a payment.
- * Supports idempotency, validates reference entity, and in test/dev simulates immediate gateway processing.
+ * Supports secure idempotency, validates reference entity, and uses dynamic settings pricing.
  */
 const initiatePayment = async (
   payerId: string,
@@ -35,23 +42,30 @@ const initiatePayment = async (
     idempotencyKey?: string;
   },
 ) => {
-  // Idempotency check
+  // 1. Secure Idempotency check: MUST belong to the same payer
   if (payload.idempotencyKey) {
     const existing = await Payment.findOne({
       idempotencyKey: payload.idempotencyKey,
     });
     if (existing) {
+      if (String(existing.payerId) !== String(payerId)) {
+        throw new AppError(
+          httpStatus.CONFLICT,
+          "Idempotency key belongs to another user account",
+        );
+      }
       return existing;
     }
   }
 
-  let amount = 0;
+  const settings = await SettingsServices.getSettings();
+  let amount: number;
 
   if (payload.purpose === PaymentPurpose.order) {
     const order = await Order.findById(payload.refId);
     if (!order) throw new AppError(httpStatus.NOT_FOUND, "Order not found");
 
-    if (String(order.customerId) !== payerId) {
+    if (String(order.customerId) !== String(payerId)) {
       throw new AppError(httpStatus.FORBIDDEN, "Not authorized to pay for this order");
     }
 
@@ -61,21 +75,26 @@ const initiatePayment = async (
 
     amount = order.total;
   } else if (payload.purpose === PaymentPurpose.job_publish) {
-    // 5,000 GNF fixed publishing fee
-    amount = 5000;
+    amount = settings.pricing?.jobPublishFee ?? 5000;
   } else if (payload.purpose === PaymentPurpose.cv_unlock) {
-    // 10,000 GNF fixed candidate unlock fee
-    amount = 10000;
+    // Client specified 5,000 GNF for candidate CV unlock
+    amount = settings.pricing?.cvUnlockFee ?? 5000;
   } else if (payload.purpose === PaymentPurpose.subscription) {
-    amount = 50000; // standard subscription default
+    const plan = await SubscriptionPlan.findById(payload.refId);
+    if (!plan || !plan.isActive) {
+      throw new AppError(httpStatus.NOT_FOUND, "Active subscription plan not found");
+    }
+    amount = plan.price;
+  } else if (payload.purpose === PaymentPurpose.spontaneous_application) {
+    amount = settings.pricing?.spontaneousApplicationFee ?? 1000;
   } else {
     amount = 1000;
   }
 
-  // Generate provider reference if none
+  // Generate provider reference
   const providerRef = `${payload.method.toUpperCase()}_${Date.now()}_${Math.floor(1000 + Math.random() * 9000)}`;
 
-  // Create payment record
+  // Create payment record in PENDING status (no fake immediate success)
   const payment = await Payment.create({
     payerId: new Types.ObjectId(payerId),
     purpose: payload.purpose,
@@ -89,38 +108,12 @@ const initiatePayment = async (
     idempotencyKey: payload.idempotencyKey,
   });
 
-  // Simulated immediate gateway processing for OM, Momo, Card, or COD
-  if (
-    [
-      PaymentMethod.orange_money,
-      PaymentMethod.mobile_money,
-      PaymentMethod.card,
-    ].includes(payload.method)
-  ) {
-    payment.status = PaymentStatus.success;
-    payment.paidAt = new Date();
-    payment.raw = { simulated: true, gateway: payload.method, success: true };
-    await payment.save();
-
-    if (payload.purpose === PaymentPurpose.order) {
-      await Order.findByIdAndUpdate(payload.refId, {
-        paymentStatus: OrderPaymentStatus.paid,
-      });
-    }
-
-    emitToUser(payerId, "payment:successful", {
-      paymentId: payment._id,
-      amount: payment.amount,
-      purpose: payment.purpose,
-      refId: payment.refId,
-    });
-  }
-
   return payment;
 };
 
 /**
- * Webhook handler for external gateway notifications (Orange Money, MTN Momo).
+ * Webhook handler for external gateway notifications (Orange Money, MTN Momo, Stripe).
+ * Securely verifies payment, transitions status, and triggers downstream fulfillment.
  */
 const handleWebhook = async (payload: {
   idempotencyKey?: string;
@@ -134,7 +127,10 @@ const handleWebhook = async (payload: {
   else if (payload.idempotencyKey) filter.idempotencyKey = payload.idempotencyKey;
   else if (payload.providerRef) filter.providerRef = payload.providerRef;
   else {
-    throw new AppError(httpStatus.BAD_REQUEST, "paymentId, idempotencyKey, or providerRef is required");
+    throw new AppError(
+      httpStatus.BAD_REQUEST,
+      "paymentId, idempotencyKey, or providerRef is required",
+    );
   }
 
   const payment = await Payment.findOne(filter);
@@ -150,16 +146,52 @@ const handleWebhook = async (payload: {
     if (payload.raw) payment.raw = payload.raw;
     await payment.save();
 
+    // 1. Order fulfillment
     if (payment.purpose === PaymentPurpose.order) {
       await Order.findByIdAndUpdate(payment.refId, {
         paymentStatus: OrderPaymentStatus.paid,
       });
     }
 
+    // 2. Job publish fulfillment
+    if (payment.purpose === PaymentPurpose.job_publish) {
+      await Job.findByIdAndUpdate(payment.refId, {
+        status: JobStatus.published,
+        publishedAt: new Date(),
+        expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+        publishPaymentId: payment._id,
+      });
+    }
+
+    // 3. Subscription fulfillment
+    if (payment.purpose === PaymentPurpose.subscription) {
+      const sub = await UserSubscription.findOneAndUpdate(
+        { paymentId: payment._id },
+        { status: SubscriptionStatus.active },
+        { new: true },
+      );
+      if (sub && sub.planSnapshot?.features?.includes("cv_visibility")) {
+        await ProfessionalProfile.findOneAndUpdate(
+          { userId: payment.payerId },
+          { $set: { cvVisible: true, visibleUntil: sub.endsAt } },
+          { upsert: true },
+        );
+      }
+    }
+
+    // 4. CV Unlock fulfillment
+    if (payment.purpose === PaymentPurpose.cv_unlock) {
+      await JobApplication.updateMany(
+        { applicantId: payment.refId },
+        { $set: { paymentId: payment._id } },
+      );
+    }
+
     emitToUser(String(payment.payerId), "payment:successful", {
       paymentId: payment._id,
       amount: payment.amount,
       purpose: payment.purpose,
+      refId: payment.refId,
     });
   } else {
     payment.status = PaymentStatus.failed;

@@ -42,6 +42,7 @@ export enum SettlementStatus {
   held = "held",
   released = "released",
   refunded = "refunded",
+  cancelled = "cancelled",
 }
 
 export interface IAddressSnapshot {
