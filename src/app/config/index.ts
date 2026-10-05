@@ -97,7 +97,7 @@ export const configs = {
     sender_id: env.SMS_SENDER_ID,
   },
 
-  frontend_url: env.FRONTEND_URL,
+  frontend_url: env.FRONTEND_URL === "*" ? "*" : splitList(env.FRONTEND_URL),
   payment_webhook_secret: env.PAYMENT_WEBHOOK_SECRET,
   stripe_secret_key: env.STRIPE_SECRET_KEY,
   stripe_webhook_secret: env.STRIPE_WEBHOOK_SECRET,
