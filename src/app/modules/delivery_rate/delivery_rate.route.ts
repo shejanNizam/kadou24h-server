@@ -8,24 +8,78 @@ import { DeliveryRateValidations } from "./delivery_rate.validation";
 const router = Router();
 const manageRoles = [UserRole.admin, UserRole.super_admin];
 
-/** Calculate delivery fee (local distance or intercity route) */
+/**
+ * @swagger
+ * /delivery-rates/calculate:
+ *   get:
+ *     tags: [Delivery]
+ *     summary: Calculate delivery fee (local distance or intercity route)
+ *     parameters:
+ *       - in: query
+ *         name: originLat
+ *         schema:
+ *           type: number
+ *       - in: query
+ *         name: originLng
+ *         schema:
+ *           type: number
+ *       - in: query
+ *         name: destinationLat
+ *         schema:
+ *           type: number
+ *       - in: query
+ *         name: destinationLng
+ *         schema:
+ *           type: number
+ *     responses:
+ *       200:
+ *         description: Calculated delivery fee
+ */
 router.get("/calculate", DeliveryRateControllers.calculateDeliveryFee);
 
-/** List delivery rates */
+/**
+ * @swagger
+ * /delivery-rates:
+ *   get:
+ *     tags: [Delivery]
+ *     summary: List delivery rates
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: List of delivery rates
+ *   post:
+ *     tags: [Settings]
+ *     summary: Create a new delivery rate tier (Admin)
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [name, baseFee, perKmRate]
+ *             properties:
+ *               name: { type: string, example: "Standard City Delivery" }
+ *               baseFee: { type: number, example: 5000 }
+ *               perKmRate: { type: number, example: 1000 }
+ *     responses:
+ *       201:
+ *         description: Delivery rate created
+ */
 router.get(
   "/",
   checkAuth(...ALL_ROLES),
   DeliveryRateControllers.getAllDeliveryRates,
 );
 
-/** Get delivery rate by ID */
 router.get(
   "/:id",
   checkAuth(...ALL_ROLES),
   DeliveryRateControllers.getDeliveryRateById,
 );
 
-/** Create a new delivery rate (admin only) */
 router.post(
   "/",
   checkAuth(...manageRoles),
@@ -33,7 +87,6 @@ router.post(
   DeliveryRateControllers.createDeliveryRate,
 );
 
-/** Update delivery rate (admin only) */
 router.patch(
   "/:id",
   checkAuth(...manageRoles),
@@ -41,7 +94,6 @@ router.patch(
   DeliveryRateControllers.updateDeliveryRate,
 );
 
-/** Deactivate delivery rate (admin only) */
 router.delete(
   "/:id",
   checkAuth(...manageRoles),

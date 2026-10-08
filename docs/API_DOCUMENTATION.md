@@ -1,7 +1,7 @@
 # Kadou24h API Documentation
 
-> **Audience:** mobile app (customer / vendor / rider) and admin panel developers.
-> **Status:** grows step by step with the backend. See [Changelog](#changelog) for what is available now.
+> **Audience:** mobile app (customer / vendor / rider) and admin panel developers following Figma designs.
+> **Status:** Full production-ready API documentation with screen-by-screen flows.
 > **Live explorer:** Swagger UI at `GET /api/docs` (non-production only); raw spec at `/api/docs.json`.
 
 ---
@@ -13,7 +13,7 @@
 3. [Request & response format](#3-request--response-format)
 4. [Conventions](#4-conventions)
 5. [Enums](#5-enums)
-6. [Flows (screen by screen)](#6-flows-screen-by-screen)
+6. [Flows (screen by screen for Figma)](#6-flows-screen-by-screen)
 7. [Endpoint reference](#7-endpoint-reference)
    - [7.1 Auth](#71-auth)
    - [7.2 My account](#72-my-account-user)
@@ -46,10 +46,11 @@
 
 | Environment | Base URL |
 |---|---|
-| Local | `http://localhost:5000/api/v1` |
+| Local | `http://localhost:7000/api/v1` |
+| Staging | `https://pagla7000.ilmifygroup.com/api/v1` |
 | Production | `https://<your-domain>/api/v1` |
 
-- Every endpoint below is relative to the base URL (e.g. `POST /auth/login` → `POST http://localhost:5000/api/v1/auth/login`).
+- Every endpoint below is relative to the base URL (e.g. `POST /auth/login` → `POST http://localhost:7000/api/v1/auth/login`).
 - Send JSON with `Content-Type: application/json` (except file uploads → `multipart/form-data`).
 - Health checks live **outside** `/api/v1`: `GET /health/live`, `GET /health`.
 
@@ -322,6 +323,119 @@ Vendor: PATCH /vendor-rider-links/:id/respond { accept: true }
 - If both sides ask each other, the link becomes `active` immediately.
 - Linked riders are offered first when the vendor assigns a delivery (Step 5).
 - Only local (`moto`) riders join store networks. Nobody can link their own store to their own rider account.
+
+### 6.12 Customer: Home & Catalog Discovery Screen
+- **Figma Screens:** Home / Discovery, Category List, Search & Filters Sheet
+- **Initial Data on Screen Mount:**
+  - `GET /categories?type=product&isActive=true` (Category pills)
+  - `GET /products?isFeatured=true&limit=10` (Featured items banner carousel)
+  - `GET /vendors?isFeatured=true&limit=5` (Popular / verified stores)
+  - `GET /advertisements?status=active` (Platform banner ads)
+- **Search & Filtering:**
+  - `GET /products?searchTerm=&categoryId=&minPrice=&maxPrice=&sort=-createdAt`
+
+### 6.13 Customer: Product Details & Reviews Screen
+- **Figma Screen:** Product Detail (Photos, Price, Store badge, Stock, Add to Cart, Reviews)
+- **Initial Data on Mount:**
+  - `GET /products/:idOrSlug`
+  - `GET /reviews?productId=:id&page=1&limit=5`
+  - `GET /favorites/check/:productId` (Check if heart icon is filled)
+- **User Actions:**
+  - Toggle Wishlist: `POST /favorites/toggle` with `{ productId }`
+  - Add to Cart: `POST /cart/items` with `{ productId, qty: 1 }`
+
+### 6.14 Customer: Cart Screen
+- **Figma Screen:** Cart (Items grouped by store, quantity stepper, clear, checkout button)
+- **Initial Data on Mount:** `GET /cart`
+- **User Actions:**
+  - Quantity update: `PATCH /cart/items/:productId` with `{ qty }`
+  - Delete item: `DELETE /cart/items/:productId`
+  - Clear cart: `DELETE /cart`
+
+### 6.15 Customer: Checkout & Order Placement Screen
+- **Figma Screen:** Checkout (Select delivery address, Calculate rates, Choose payment method, Place Order)
+- **Initial Data on Mount:**
+  - `GET /addresses` (User's saved delivery addresses)
+  - `POST /orders/checkout-summary` with `{ addressId, deliveryType: "direct" | "transit", paymentMethod: "cod" | "orange_money" | "card" }`
+    - Returns product cost, delivery fee per vendor sub-order, and total breakdown.
+- **User Action (Confirm & Place Order):**
+  - `POST /orders` with `{ addressId, deliveryType, paymentMethod, specialInstructions? }`
+  - Returns created Order. Route user to Live Tracking Screen (6.16).
+
+### 6.16 Customer & Rider: Live Order Tracking & Real-Time Navigation
+- **Figma Screen:** Active Order Timeline & Map Tracking
+- **Initial Data on Mount:**
+  - `GET /orders/:id` (Order summary, sub-orders, statuses)
+  - `GET /deliveries/:id/track` (Real-time tracking timeline, delivery legs, rider phone/name)
+- **Real-time Socket Updates:**
+  - Listen on event: `delivery:location` for rider GPS coordinates `{ lat, lng, heading }`
+  - Listen on event: `delivery:status_changed` for timeline progression (`going_to_pickup` -> `picked_up` -> `delivered`)
+
+### 6.17 Vendor: Dashboard & Order Fulfillment Screen
+- **Figma Screens:** Vendor Overview, Orders Kanban / List, Product Management
+- **Vendor Overview Mount:**
+  - `GET /vendors/my-store` (Store profile & open/close status)
+  - `GET /orders/vendor/sub-orders?status=pending` (Orders waiting for acceptance)
+  - `GET /wallets/me` (Store wallet balance)
+- **Order Actions:**
+  - Accept / Mark Preparing: `PATCH /orders/vendor/sub-orders/:id/status` with `{ status: "preparing" }`
+  - Ready for Pickup: `PATCH /orders/vendor/sub-orders/:id/status` with `{ status: "ready_for_pickup" }`
+  - Cancel / Out of Stock: `POST /orders/vendor/sub-orders/:id/cancel` with `{ reason }`
+- **Product Management:**
+  - `GET /products/my-products`
+  - `POST /products` (Add new product)
+  - `PATCH /products/:id/stock` (Quick stock & availability toggle)
+
+### 6.18 Vendor: Assign Delivery to Rider
+- **Figma Screen:** Assign Delivery Modal / Sheet
+- **Initial Data:** `GET /deliveries/:id/available-riders` (Lists connected store network riders + nearby platform riders)
+- **User Action:** `POST /deliveries/:id/assign` with `{ riderId }`
+
+### 6.19 Rider: Duty Screen & Turn-by-Turn Leg Navigation
+- **Figma Screens:** Rider Duty (Online / Offline), Incoming Delivery Modal, Active Trip Navigation
+- **Duty State:**
+  - Toggle Online / Offline: `PATCH /deliveries/rider/online-status` with `{ isOnline: true }`
+  - Send GPS update: `PATCH /deliveries/rider/location` with `{ lat, lng, heading }`
+  - Active assigned jobs: `GET /deliveries/rider/my-deliveries?status=assigned`
+- **Incoming Job Alert:**
+  - Accept: `POST /deliveries/:id/accept`
+  - Decline: `POST /deliveries/:id/decline` with `{ reason }`
+- **Delivery Trip Steps:**
+  1. En route to store: `PATCH /deliveries/:id/going-to-pickup`
+  2. Verify pickup from store with PIN: `POST /deliveries/:id/verify-pickup` with `{ pin: "1234", proofPhoto? }`
+  3. Verify handover to customer with PIN: `POST /deliveries/:id/verify-handover` with `{ pin: "5678", proofPhoto? }`
+
+### 6.20 Vendor & Rider: Wallet, Payouts & COD Cash Settlements
+- **Figma Screens:** Wallet Overview, Request Withdrawal, Cash-on-Delivery (COD) Collection Tracker
+- **Wallet Overview:** `GET /wallets/me` (Shows current balance, pending withdrawals, cash-in-hand limit)
+- **Payout Request:**
+  - Add payout method: `POST /wallets/me/payout-methods` with `{ mode, type: "orange_money" | "mobile_money" | "bank", accountName, accountNumber }`
+  - Request payout: `POST /wallets/me/withdrawals` with `{ amount, payoutMethodId }`
+  - Transaction history: `GET /wallets/me/transactions`
+- **Rider COD Cash Settlement (Deposit collected cash):**
+  - `POST /wallets/me/cod-settlements` with `{ amount, paymentMethod, transactionReference }`
+
+### 6.21 Admin: Platform Overview & Management Screens
+- **Next.js Web Dashboard Screens:** Overview Analytics, Applications Review, User Management, Settings
+- **Overview Dashboard:** `GET /admin/dashboard/overview` (Monthly revenue, orders status donut, 12-month platform growth)
+- **Vendor Applications:** `GET /vendors/admin/applications?status=pending` -> Approve/Reject: `POST /vendors/admin/:id/review` with `{ action: "approve" | "reject", note? }`
+- **Rider Applications:** `GET /riders/admin/applications?status=pending` -> Approve/Reject: `POST /riders/admin/:id/review` with `{ action: "approve" | "reject", note? }`
+- **User Management:** `GET /user/admin/users` -> Suspend/Ban: `PATCH /user/admin/users/:id/status` with `{ status, reason }`
+- **Team Members:** `GET /user/team` -> Create Staff/Admin: `POST /user/team` with `{ name, email, password, role }` (Super Admin)
+- **Platform Financials:** `GET /wallets/admin/withdrawals?status=pending` -> Approve: `PATCH /wallets/admin/withdrawals/:id` with `{ action: "approve", transactionReference }`
+- **Platform Settings:** `GET /settings` -> Update: `PATCH /settings` with `{ commission, platformFee, taxRate }`
+
+### 6.22 In-App Real-Time Messaging & Notifications
+- **Figma Screens:** Conversation List, Chat Screen, Notifications Center
+- **Chat:**
+  - Conversations list: `GET /conversations`
+  - Start chat: `POST /conversations` with `{ participantId, orderId? }`
+  - Get messages: `GET /conversations/:id/messages`
+  - Send message: `POST /conversations/:id/messages` with `{ text }` (Emits socket `chat:message`)
+- **Notifications:**
+  - Notification list: `GET /notifications?page=1&limit=20`
+  - Unread count badge: `GET /notifications/unread-count`
+  - Mark read: `PATCH /notifications/:id/read` or `PATCH /notifications/read-all`
 
 ---
 

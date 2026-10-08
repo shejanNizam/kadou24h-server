@@ -14,6 +14,29 @@ import {
 const router = Router();
 
 // Customer / App Payment endpoints
+
+/**
+ * @swagger
+ * /payments/initiate:
+ *   post:
+ *     tags: [Wallet]
+ *     summary: Initiate order payment (Orange Money, Card, Mobile Money)
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [orderId, paymentMethod]
+ *             properties:
+ *               orderId: { type: string, example: "65b4c1a2d3e4f5a6b7c8d9e0" }
+ *               paymentMethod: { type: string, enum: [orange_money, mobile_money, card, stripe] }
+ *     responses:
+ *       200:
+ *         description: Payment intent or checkout session created
+ */
 router.post(
   "/initiate",
   checkAuth(...APP_ROLES),

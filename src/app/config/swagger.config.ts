@@ -1,5 +1,6 @@
 import path from "path";
 import swaggerJsdoc from "swagger-jsdoc";
+import { configs } from "./index";
 
 const options: swaggerJsdoc.Options = {
   definition: {
@@ -11,8 +12,9 @@ const options: swaggerJsdoc.Options = {
         "Kadou24h marketplace, delivery & jobs API. Full guide: docs/API_DOCUMENTATION.md",
     },
     servers: [
-      { url: "http://localhost:5000/api/v1", description: "Local development" },
-      { url: "https://your-domain.com/api/v1", description: "Production" },
+      { url: "/api/v1", description: "Current Server (Auto-detect domain & port)" },
+      { url: `http://localhost:${configs.port}/api/v1`, description: `Local development (port ${configs.port})` },
+      { url: "https://pagla7000.ilmifygroup.com/api/v1", description: "Staging / Live Server" },
     ],
     components: {
       securitySchemes: {
@@ -477,22 +479,114 @@ const options: swaggerJsdoc.Options = {
       },
     },
     tags: [
-      { name: "Auth", description: "Sign up, OTP verification, login, passwords" },
-      { name: "User", description: "My profile, mode switch, phone, preferences" },
-      { name: "User — Admin", description: "Manage app users and admin team members" },
-      { name: "Address", description: "My saved delivery addresses" },
-      { name: "Category", description: "Product, business, service and job categories" },
-      { name: "Vendor", description: "Become a Vendor, my store, public stores" },
-      { name: "Vendor — Admin", description: "Review vendor applications and documents" },
-      { name: "Rider", description: "Become a Delivery Partner, my rider profile, rider search" },
-      { name: "Rider — Admin", description: "Review rider applications and documents" },
-      { name: "Vendor–Rider Link", description: "A store's rider network (invite / request / accept)" },
-      { name: "Wallet", description: "Vendor / rider wallet and payout methods" },
-      { name: "Transit Station", description: "Bus stations for intercity delivery" },
-      { name: "Settings", description: "Platform fees, commission and support contacts" },
-      { name: "Audit Log", description: "History of admin and money actions" },
-      { name: "Upload", description: "File uploads via Cloudinary" },
-      { name: "Device Token", description: "Push notification device tokens" },
+      // ── Persona 0: Authentication & Session ──
+      {
+        name: "Auth",
+        description: "Screens: Sign In, Sign Up, Verify OTP (6 digits), Forgot Password, Reset Password",
+      },
+      // ── Persona 1: Customer (Buyer) ──
+      {
+        name: "User",
+        description: "[Customer / Common] Screens: My Profile, Edit Profile, Switch Mode (Customer/Vendor/Rider), Phone Change",
+      },
+      {
+        name: "Address",
+        description: "[Customer] Screens: Saved Delivery Addresses, Checkout Address Selector",
+      },
+      {
+        name: "Category",
+        description: "[Customer & Public] Screens: Home Categories, Browse Products by Category",
+      },
+      {
+        name: "Product",
+        description: "[Customer & Vendor] Screens: Home Discovery, Search & Filters, Product Details, Vendor Product CRUD",
+      },
+      {
+        name: "Cart",
+        description: "[Customer] Screen: Shopping Cart, Quantity Stepper, Subtotal Calculation",
+      },
+      {
+        name: "Order",
+        description: "[Customer & Vendor] Screens: Checkout Summary, Place Order, Customer Order History, Vendor Sub-Orders",
+      },
+      {
+        name: "Delivery",
+        description: "[Customer & Rider] Screens: Live Order Tracking Timeline, Rider Duty, Turn-by-Turn Leg Navigation & PIN Verification",
+      },
+      {
+        name: "Favorite",
+        description: "[Customer] Screen: Wishlist / Favorited Products",
+      },
+      {
+        name: "Review",
+        description: "[Customer] Screens: Product Reviews, Star Ratings & Store Feedback",
+      },
+      // ── Persona 2: Vendor (Merchant) ──
+      {
+        name: "Vendor",
+        description: "[Vendor] Screens: Become a Vendor Wizard, Store Profile & Hours, Public Store View",
+      },
+      {
+        name: "Vendor–Rider Link",
+        description: "[Vendor & Rider] Screen: Store's Rider Network, Search & Invite Local Riders",
+      },
+      // ── Persona 3: Rider (Delivery Partner) ──
+      {
+        name: "Rider",
+        description: "[Rider] Screens: Become a Delivery Partner Wizard (Moto/Transit), Rider Profile & Vehicle Info",
+      },
+      {
+        name: "Transit Station",
+        description: "[Rider & Customer] Screens: Bus Stations for Intercity Transit Delivery",
+      },
+      // ── Finances & Wallet ──
+      {
+        name: "Wallet",
+        description: "[Vendor & Rider] Screens: Wallet Balance, Payout Methods (Orange Money, Bank), Withdrawal Requests & COD Settlements",
+      },
+      // ── Communication & Alerts ──
+      {
+        name: "Chat",
+        description: "[Common] Screens: In-App Messaging (Customer ↔ Vendor ↔ Rider)",
+      },
+      {
+        name: "Notification",
+        description: "[Common] Screens: Push Notifications & Activity Center",
+      },
+      // ── Persona 4: Admin Panel ──
+      {
+        name: "Admin Dashboard",
+        description: "[Admin] Screen: Overview Analytics, Revenue Charts, Orders Status Donut, Platform Growth",
+      },
+      {
+        name: "Vendor — Admin",
+        description: "[Admin] Screens: Store Applications Review & License Document Verification",
+      },
+      {
+        name: "Rider — Admin",
+        description: "[Admin] Screens: Rider Applications Review & Driver License Verification",
+      },
+      {
+        name: "User — Admin",
+        description: "[Admin] Screens: All Users Management (Suspend/Ban) & Admin Team Members (Super Admin)",
+      },
+      {
+        name: "Settings",
+        description: "[Admin] Screen: Platform Commission %, Delivery Base Fees, Support Contacts",
+      },
+      {
+        name: "Audit Log",
+        description: "[Admin] Screen: Security Audit Trail & Financial Logs",
+      },
+      // ── Utilities & Infrastructure ──
+      {
+        name: "Upload",
+        description: "[Utilities] Screen: File & Image Uploads via Cloudinary",
+      },
+      {
+        name: "Device Token",
+        description: "[Utilities] Screen: FCM / APNs Mobile Push Notification Token Registration",
+      },
     ],
   },
   // Glob patterns need forward slashes — path.join gives backslashes on Windows
