@@ -35,11 +35,11 @@ const deliveryRateSchema = new Schema<IDeliveryRate>(
     },
     fromStationId: {
       type: Schema.Types.ObjectId,
-      ref: "transit_stations",
+      ref: "TransitStation",
     },
     toStationId: {
       type: Schema.Types.ObjectId,
-      ref: "transit_stations",
+      ref: "TransitStation",
     },
     fee: {
       type: Number,
@@ -56,7 +56,7 @@ const deliveryRateSchema = new Schema<IDeliveryRate>(
     },
     updatedBy: {
       type: Schema.Types.ObjectId,
-      ref: "users",
+      ref: "User",
     },
   },
   {

@@ -12,7 +12,7 @@ const subOrderItemSchema = new Schema<ISubOrderItem>(
   {
     productId: {
       type: Schema.Types.ObjectId,
-      ref: "products",
+      ref: "Product",
       required: true,
     },
     name: {
@@ -74,7 +74,7 @@ const subOrderModificationSchema = new Schema<ISubOrderModification>(
   {
     removedItems: [
       {
-        productId: { type: Schema.Types.ObjectId, ref: "products" },
+        productId: { type: Schema.Types.ObjectId, ref: "Product" },
         name: { type: String },
         qty: { type: Number },
         unitPrice: { type: Number },

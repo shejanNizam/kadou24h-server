@@ -2,6 +2,7 @@ import { model, Schema } from "mongoose";
 import {
   ISubscriptionPlan,
   PlanAudience,
+  PlanFeature,
 } from "./subscription.interface";
 
 const subscriptionPlanSchema = new Schema<ISubscriptionPlan>(
@@ -14,7 +15,8 @@ const subscriptionPlanSchema = new Schema<ISubscriptionPlan>(
     },
     price: { type: Number, required: true, min: 0 },
     durationDays: { type: Number, required: true, min: 1, default: 30 },
-    features: { type: [String], default: [] },
+    features: { type: [String], enum: Object.values(PlanFeature), default: [] },
+    highlights: { type: [String], default: [] },
     isActive: { type: Boolean, default: true },
     createdBy: { type: Schema.Types.ObjectId, ref: "User" },
   },

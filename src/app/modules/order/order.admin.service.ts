@@ -3,10 +3,12 @@
  */
 import httpStatus from "http-status";
 import AppError from "../../errorHelpers/AppError";
-import { OrderStatus, PaymentStatus, SubOrderStatus } from "./order.interface";
+import { Types } from "mongoose";
+import { OrderStatus, PaymentMethod, PaymentStatus, SubOrderStatus } from "./order.interface";
 import { Order } from "./order.model";
 import { SubOrder } from "./sub_order.model";
 import { cancelSubOrder } from "./order.utils";
+import { containsRegex } from "../../utils/queryParams";
 
 /**
  * Admin: List all orders with filters.
@@ -16,6 +18,8 @@ const getAllOrdersAdmin = async (query: {
   limit?: number;
   status?: OrderStatus;
   paymentStatus?: PaymentStatus;
+  paymentMethod?: PaymentMethod;
+  customerId?: string;
   search?: string;
 }) => {
   const page = Math.max(1, Number(query.page) || 1);
@@ -25,11 +29,18 @@ const getAllOrdersAdmin = async (query: {
   const filter: Record<string, unknown> = {};
   if (query.status) filter.status = query.status;
   if (query.paymentStatus) filter.paymentStatus = query.paymentStatus;
+  if (query.paymentMethod) filter.paymentMethod = query.paymentMethod;
+  if (query.customerId) {
+    if (!Types.ObjectId.isValid(query.customerId)) {
+      throw new AppError(httpStatus.BAD_REQUEST, "Invalid customerId");
+    }
+    filter.customerId = new Types.ObjectId(query.customerId);
+  }
   if (query.search) {
     filter.$or = [
-      { orderNumber: new RegExp(query.search, "i") },
-      { "addressSnapshot.fullName": new RegExp(query.search, "i") },
-      { "addressSnapshot.phone": new RegExp(query.search, "i") },
+      { orderNumber: containsRegex(query.search) },
+      { "addressSnapshot.fullName": containsRegex(query.search) },
+      { "addressSnapshot.phone": containsRegex(query.search) },
     ];
   }
 

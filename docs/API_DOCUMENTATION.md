@@ -134,12 +134,12 @@ password change (other devices), password reset, `POST /auth/logout-all`, suspen
 }
 ```
 
-**Validation error (400)** — one entry per invalid field; show `message` under the matching input:
+**Validation error (400)** — `message` is the first problem in readable form (safe to show in a toast); `errorSources` has one entry per invalid field — show each `message` under the matching input:
 
 ```json
 {
   "success": false,
-  "message": "Zod Error",
+  "message": "phone: Phone must be in international format, e.g. +224620123456",
   "errorSources": [
     { "path": "phone", "message": "Phone must be in international format, e.g. +224620123456" },
     { "path": "password", "message": "Password must contain at least 1 number." }
@@ -1308,6 +1308,26 @@ const socket = io("http://localhost:5000", { auth: { token: accessToken } });
 - **Cancellation rules:** customer — while `new` / `accepted`; store — until `preparing`; admin — anything not yet delivered (a delivered sub-order → **400**, issue a refund instead). If an admin cancels a parcel already out with a rider, stock is not restored.
 - **Order status:** a multi-store order becomes `completed` / `partially_cancelled` only when every sub-order is finished (delivered or cancelled).
 - **Testing:** `npm run test:e2e` runs the full money / delivery / security journey against a throwaway database (needs local MongoDB + Redis).
+
+### Admin panel support & fixes (2026-10-10, admin review)
+- **Validation errors:** `message` is now the first problem in readable form (e.g. `"note: A note is required to reject…"`) instead of `"Zod Error"`; `errorSources` is unchanged.
+- **Fixed 500s:** several model references used wrong names, so any `populate` on them crashed — `GET /delivery-rates` (station names), dispute/refund lists (order), cart (product/store). All fixed.
+- **Search is safe:** every search box (products, jobs, orders, tickets, ads, admin lists) treats the text literally — characters like `(` no longer cause a 500. Admin lists cap `limit` at 100.
+- **Subscription plans:**
+  - `features` only accepts keys the backend implements — currently `cv_visibility`. New `highlights: string[]` holds the selling points the app displays.
+  - New `GET /subscriptions/admin/plans` (admin): all plans, including inactive ones, with `activeSubscribers`.
+  - `PATCH /subscriptions/admin/plans/:id` accepts `isActive`. It is a true partial update: before, a PATCH silently reset `durationDays` / `features` to their defaults.
+- **Orders (admin):**
+  - `GET /orders/admin/all` adds the `paymentMethod` and `customerId` filters; invalid enum values return 400.
+  - `GET /orders/admin/:id` populates the customer and the partner on each delivery leg (name, phone).
+- **Refunds:** refused for an unpaid order (COD before delivery). Refunds can never add up to more than the order total.
+- **Disputes:** resolving is atomic. If the requested refund fails, the dispute stays `open`.
+- **Categories:** a category used by products, stores, jobs or worker profiles can't be deleted (409). Deactivate it with `isActive: false` instead.
+- **Withdrawals (admin):** `search` (request number, account) and `method` filters.
+- **Admin detail views:** vendor and rider detail include `wallet` (available, escrow, earned, withdrawn, cash owed); the COD settlement list includes the rider's name and phone.
+- **Ads (admin list):** `meta.summary` = totals across all ads (`impressions`, `clicks`, `active`, `ctr`).
+- **Overview:** money figures exclude cancelled orders. `orders.totalRevenue` = platform fees + commission on paid-out orders (also `totalCommission`). Chart values use the same definition.
+- **Chat moderation:** lifting a restriction also resets the warning count, and only re-activates a suspension that chat moderation caused. An admin's own suspension stays.
 
 ### Step 9 — Admin Panel, Platform Settings, Support Tickets & Ads (current)
 - **Order & Product Reviews (`reviews`):** Verified customer feedback on delivered sub-orders (`(author_id, sub_order_id) [unique]`), 1–5 star ratings, feedback comments, automatic recalculation of average ratings and total counts on `vendor_profiles` and `products`, public review feeds, and admin visibility moderation.

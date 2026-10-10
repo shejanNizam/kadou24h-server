@@ -3,8 +3,8 @@ import { IRefund, RefundStatus } from "./payment.interface";
 
 const refundSchema = new Schema<IRefund>(
   {
-    orderId: { type: Schema.Types.ObjectId, ref: "Order", required: true },
-    subOrderId: { type: Schema.Types.ObjectId, ref: "SubOrder" },
+    orderId: { type: Schema.Types.ObjectId, ref: "orders", required: true },
+    subOrderId: { type: Schema.Types.ObjectId, ref: "sub_orders" },
     paymentId: { type: Schema.Types.ObjectId, ref: "Payment" },
     customerId: { type: Schema.Types.ObjectId, ref: "User", required: true },
     amount: { type: Number, required: true, min: 1 },

@@ -21,6 +21,7 @@ import {
 } from "./job.interface";
 import { Job } from "./job.model";
 import { JobApplication } from "./job_application.model";
+import { containsRegex } from "../../utils/queryParams";
 
 /**
  * Calculates a match score (0–100%) between an applicant's skills and a job's preferences.
@@ -187,7 +188,7 @@ const searchJobs = async (query: {
   }
   if (query.jobType) filter.jobType = query.jobType;
   if (query.workplace) filter.workplace = query.workplace;
-  if (query.city) filter.city = { $regex: query.city, $options: "i" };
+  if (query.city) filter.city = containsRegex(query.city);
 
   if (query.search) {
     filter.$text = { $search: query.search };

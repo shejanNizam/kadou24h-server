@@ -112,9 +112,19 @@ describe("Jobs, Worker Profiles & CV Module (Step 7)", () => {
         audience: PlanAudience.job_seeker,
         price: 50000,
         durationDays: 30,
-        features: ["cv_visibility", "ai_cv", "priority_search"],
+        features: ["cv_visibility"],
+        highlights: ["Seen first by employers"],
       });
       expect(valid.success).toBe(true);
+
+      // Only features the backend implements are accepted
+      const unknownFeature = createPlanSchema.safeParse({
+        name: "Professional",
+        audience: PlanAudience.job_seeker,
+        price: 50000,
+        features: ["ai_cv"],
+      });
+      expect(unknownFeature.success).toBe(false);
     });
 
     it("verifies Domain 6 enums conform to database design", () => {

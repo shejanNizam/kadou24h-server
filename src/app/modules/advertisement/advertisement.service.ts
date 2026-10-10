@@ -8,6 +8,7 @@ import {
   IAdvertisement,
 } from "./advertisement.interface";
 import { Advertisement } from "./advertisement.model";
+import { containsRegex } from "../../utils/queryParams";
 
 interface ICreateAdPayload {
   name: string;
@@ -108,12 +109,12 @@ const getAllAdsAdmin = async (query: {
   if (query.placement) filter.placement = query.placement;
   if (query.search) {
     filter.$or = [
-      { name: { $regex: query.search, $options: "i" } },
-      { advertiserName: { $regex: query.search, $options: "i" } },
+      { name: containsRegex(query.search) },
+      { advertiserName: containsRegex(query.search) },
     ];
   }
 
-  const [docs, total] = await Promise.all([
+  const [docs, total, totals] = await Promise.all([
     Advertisement.find(filter)
       .populate("createdBy", "name email")
       .sort({ createdAt: -1 })
@@ -121,7 +122,19 @@ const getAllAdsAdmin = async (query: {
       .limit(limit)
       .lean(),
     Advertisement.countDocuments(filter),
+    // Whole-platform totals for the dashboard cards (not just this page)
+    Advertisement.aggregate<{ impressions: number; clicks: number; active: number }>([
+      {
+        $group: {
+          _id: null,
+          impressions: { $sum: "$impressions" },
+          clicks: { $sum: "$clicks" },
+          active: { $sum: { $cond: [{ $eq: ["$status", "active"] }, 1, 0] } },
+        },
+      },
+    ]),
   ]);
+  const summary = totals[0] ?? { impressions: 0, clicks: 0, active: 0 };
 
   const data = docs.map((ad) => {
     const impressions = ad.impressions || 0;
@@ -138,6 +151,12 @@ const getAllAdsAdmin = async (query: {
       page,
       limit,
       total,
+      summary: {
+        impressions: summary.impressions,
+        clicks: summary.clicks,
+        active: summary.active,
+        ctr: summary.impressions > 0 ? Number(((summary.clicks / summary.impressions) * 100).toFixed(2)) : 0,
+      },
       totalPage: Math.ceil(total / limit),
     },
     data,

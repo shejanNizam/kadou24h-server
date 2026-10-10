@@ -11,6 +11,7 @@ const isAdminRole = (roles: string[]) =>
 import { VendorProfile } from "../vendor_profile/vendor_profile.model";
 import { IProduct, IProductFilterQuery, ProductApprovalStatus } from "./product.interface";
 import { Product } from "./product.model";
+import { containsRegex } from "../../utils/queryParams";
 
 const generateSlug = (name: string): string => {
   const base = name
@@ -289,7 +290,7 @@ const getPublicProducts = async (filters: IProductFilterQuery) => {
   }
 
   if (filters.searchTerm) {
-    const searchRegex = new RegExp(filters.searchTerm.trim(), "i");
+    const searchRegex = containsRegex(filters.searchTerm);
     conditions.$or = [{ name: searchRegex }, { description: searchRegex }, { tags: searchRegex }];
   }
 
@@ -414,7 +415,7 @@ const getAdminProducts = async (query: Record<string, string>) => {
     conditions.categoryId = new Types.ObjectId(query.categoryId);
   }
   if (query.searchTerm) {
-    const searchRegex = new RegExp(query.searchTerm.trim(), "i");
+    const searchRegex = containsRegex(query.searchTerm);
     conditions.$or = [{ name: searchRegex }, { description: searchRegex }];
   }
 

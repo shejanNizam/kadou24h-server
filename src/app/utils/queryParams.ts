@@ -47,3 +47,9 @@ export const numberQuery = (value: unknown): number | undefined => {
   const n = Number(text);
   return Number.isFinite(n) ? n : undefined;
 };
+
+/** Escapes user text so it matches literally inside a RegExp (no ReDoS, no 500 on "("). */
+export const escapeRegex = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/** Case-insensitive "contains" regex built from user text. */
+export const containsRegex = (text: string): RegExp => new RegExp(escapeRegex(text.trim()), "i");

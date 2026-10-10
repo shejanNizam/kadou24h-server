@@ -49,7 +49,7 @@ const orderSchema = new Schema<IOrder>(
     },
     destinationStationId: {
       type: Schema.Types.ObjectId,
-      ref: "transit_stations",
+      ref: "TransitStation",
     },
     specialInstructions: {
       type: String,

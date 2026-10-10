@@ -5,6 +5,12 @@ export enum PlanAudience {
   service_provider = "service_provider",
 }
 
+// Machine keys the backend acts on (e.g. cv_visibility puts the worker first in
+// the directory). Marketing text shown to users goes in `highlights`.
+export enum PlanFeature {
+  cv_visibility = "cv_visibility",
+}
+
 export enum SubscriptionStatus {
   pending = "pending",
   active = "active",
@@ -17,7 +23,8 @@ export interface ISubscriptionPlanInitial {
   audience: PlanAudience;
   price: number;
   durationDays: number;
-  features: string[];
+  features: PlanFeature[];
+  highlights: string[];
   isActive: boolean;
   createdBy?: Types.ObjectId;
 }

@@ -26,6 +26,7 @@ import { Wallet } from "./wallet.model";
 import { WalletTransaction } from "./wallet_transaction.model";
 import { Withdrawal } from "./withdrawal.model";
 import { CodSettlement } from "./cod_settlement.model";
+import { containsRegex } from "../../utils/queryParams";
 
 /**
  * Creates the wallet if missing. Called when a vendor / rider application starts.
@@ -836,6 +837,8 @@ const getAllWithdrawalsAdmin = async (query: {
   limit?: number;
   status?: WithdrawalStatus;
   ownerMode?: WalletMode;
+  method?: string;
+  search?: string;
 }) => {
   const page = Math.max(1, Number(query.page) || 1);
   const limit = Math.max(1, Math.min(50, Number(query.limit) || 20));
@@ -844,6 +847,15 @@ const getAllWithdrawalsAdmin = async (query: {
   const filter: Record<string, unknown> = {};
   if (query.status) filter.status = query.status;
   if (query.ownerMode) filter.ownerMode = query.ownerMode;
+  if (query.method) filter["payoutMethodSnapshot.type"] = query.method;
+  if (query.search) {
+    const text = containsRegex(query.search);
+    filter.$or = [
+      { requestNumber: text },
+      { "payoutMethodSnapshot.accountNumber": text },
+      { "payoutMethodSnapshot.accountName": text },
+    ];
+  }
 
   const [withdrawals, total] = await Promise.all([
     Withdrawal.find(filter)
@@ -874,7 +886,11 @@ const getAllCodSettlementsAdmin = async (query: {
 
   const [settlements, total] = await Promise.all([
     CodSettlement.find(filter)
-      .populate("riderId")
+      .populate({
+        path: "riderId",
+        select: "userId partnerType vehicle cityArea",
+        populate: { path: "userId", select: "name phone avatar" },
+      })
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit),
@@ -886,6 +902,16 @@ const getAllCodSettlementsAdmin = async (query: {
     data: settlements,
   };
 };
+
+/** The balances an admin needs on a vendor / rider profile. */
+export const walletSummary = (wallet: IWallet) => ({
+  availableBalance: wallet.availableBalance,
+  heldBalance: wallet.heldBalance,
+  totalEarned: wallet.totalEarned,
+  totalWithdrawn: wallet.totalWithdrawn,
+  totalCommission: wallet.totalCommission,
+  cashOwed: wallet.cashOwed,
+});
 
 export const WalletServices = {
   ensureWallet,

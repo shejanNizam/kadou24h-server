@@ -7,7 +7,6 @@ import { Schema, Types } from "mongoose";
 import z from "zod";
 import { IFileRef } from "../../interfaces/common.types";
 import AppError from "../../errorHelpers/AppError";
-import { emitToUser } from "../../../socket/socket";
 import { fileRefSchema, fileRefZodSchema } from "../../utils/commonSchemas";
 import { AppMode, UserRole } from "../user/user.interface";
 import { User } from "../user/user.model";
@@ -217,10 +216,3 @@ export const syncRole = async (
   }
 };
 
-/** Real-time heads-up to the applicant (the stored/pushed notification is sent by the caller). */
-export const notifyApplicant = (
-  userId: Types.ObjectId | string,
-  kind: "vendor" | "rider",
-  status: ApprovalStatus,
-  note?: string,
-) => emitToUser(String(userId), "application:reviewed", { kind, status, note });

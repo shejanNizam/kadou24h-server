@@ -14,6 +14,7 @@ import {
   TicketUrgency,
 } from "./support_ticket.interface";
 import { SupportTicket } from "./support_ticket.model";
+import { containsRegex } from "../../utils/queryParams";
 
 interface ICreateTicketPayload {
   type: TicketType;
@@ -145,9 +146,9 @@ const getAllTicketsAdmin = async (query: {
   if (query.type) filter.type = query.type;
   if (query.search) {
     filter.$or = [
-      { ticketNumber: { $regex: query.search, $options: "i" } },
-      { subject: { $regex: query.search, $options: "i" } },
-      { description: { $regex: query.search, $options: "i" } },
+      { ticketNumber: containsRegex(query.search) },
+      { subject: containsRegex(query.search) },
+      { description: containsRegex(query.search) },
     ];
   }
 

@@ -7,6 +7,7 @@ import { ProfessionalProfile } from "../professional_profile/professional_profil
 import {
   ISubscriptionPlan,
   PlanAudience,
+  PlanFeature,
   SubscriptionStatus,
 } from "./subscription.interface";
 import { SubscriptionPlan } from "./subscription_plan.model";
@@ -39,6 +40,19 @@ const getActivePlans = async (audience?: PlanAudience) => {
   if (audience) filter.audience = audience;
 
   return SubscriptionPlan.find(filter).sort({ price: 1 });
+};
+
+/** Admin: every plan (active or not) with how many people are on it right now. */
+const getAllPlansForAdmin = async () => {
+  const [plans, counts] = await Promise.all([
+    SubscriptionPlan.find().sort({ audience: 1, price: 1 }).lean(),
+    UserSubscription.aggregate<{ _id: Types.ObjectId; active: number }>([
+      { $match: { status: SubscriptionStatus.active, endsAt: { $gt: new Date() } } },
+      { $group: { _id: "$planId", active: { $sum: 1 } } },
+    ]),
+  ]);
+  const activeByPlan = new Map(counts.map((c) => [String(c._id), c.active]));
+  return plans.map((plan) => ({ ...plan, activeSubscribers: activeByPlan.get(String(plan._id)) ?? 0 }));
 };
 
 const subscribe = async (
@@ -78,7 +92,7 @@ const subscribe = async (
   });
 
   // 3. If payment confirmed and plan includes CV visibility, unlock on professional profile
-  if (isPaid && plan.features.includes("cv_visibility")) {
+  if (isPaid && plan.features.includes(PlanFeature.cv_visibility)) {
     await ProfessionalProfile.findOneAndUpdate(
       { userId },
       { $set: { cvVisible: true, visibleUntil: endsAt } },
@@ -102,6 +116,7 @@ const getMySubscription = async (userId: string) => {
 };
 
 export const SubscriptionServices = {
+  getAllPlansForAdmin,
   createPlan,
   updatePlan,
   getActivePlans,

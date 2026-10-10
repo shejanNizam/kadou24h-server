@@ -9,6 +9,7 @@ import {
   IDeliveryRateInitial,
 } from "./delivery_rate.interface";
 import { DeliveryRate } from "./delivery_rate.model";
+import { containsRegex, escapeRegex } from "../../utils/queryParams";
 
 /**
  * Calculates Haversine distance in KM between two [lng, lat] coordinates.
@@ -87,7 +88,7 @@ const calculateDeliveryFee = async (
   if (params.city) {
     rate = await DeliveryRate.findOne({
       type: DeliveryRateType.local,
-      city: new RegExp(`^${params.city}$`, "i"),
+      city: new RegExp(`^${escapeRegex(params.city)}$`, "i"),
       vehicleType,
       isActive: true,
     });
@@ -156,7 +157,7 @@ const getAllDeliveryRates = async (query: {
 }) => {
   const filter: Record<string, unknown> = {};
   if (query.type) filter.type = query.type;
-  if (query.city) filter.city = new RegExp(query.city, "i");
+  if (query.city) filter.city = containsRegex(query.city);
   if (query.isActive !== undefined) filter.isActive = query.isActive;
 
   return DeliveryRate.find(filter)

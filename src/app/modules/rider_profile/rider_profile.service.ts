@@ -12,7 +12,6 @@ import {
   DocumentStatus,
   IVerificationDocument,
   markSubmitted,
-  notifyApplicant,
   ReviewAction,
   syncRole,
 } from "../profile_common/profile.common";
@@ -20,7 +19,7 @@ import { TransitStationServices } from "../transit_station/transit_station.servi
 import { UserRole } from "../user/user.interface";
 import { User } from "../user/user.model";
 import { WalletMode } from "../wallet/wallet.interface";
-import { WalletServices } from "../wallet/wallet.service";
+import { WalletServices, walletSummary } from "../wallet/wallet.service";
 import {
   IRiderProfile,
   IVehicle,
@@ -239,7 +238,12 @@ const getRiderForAdmin = async (id: string) => {
   ]);
 
   if (!rider) throw new AppError(httpStatus.NOT_FOUND, "Delivery partner not found");
-  return { ...present(rider), payoutMethods: wallet.payoutMethods, cashOwed: wallet.cashOwed };
+  return {
+    ...present(rider),
+    payoutMethods: wallet.payoutMethods,
+    cashOwed: wallet.cashOwed,
+    wallet: walletSummary(wallet),
+  };
 };
 
 const reviewDocument = async (
@@ -284,7 +288,6 @@ const reviewApplication = async (
   await rider.save();
 
   await syncRole(rider.userId, UserRole.rider, status);
-  notifyApplicant(rider.userId, "rider", status, payload.note);
   Notify.profileReviewed(rider.userId, "rider", status, payload.note);
 
   await AuditLogServices.record({

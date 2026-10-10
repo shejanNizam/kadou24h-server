@@ -5,6 +5,7 @@ import { toGeoPoint } from "../../utils/commonSchemas";
 import { User } from "../user/user.model";
 import { IProfessionalProfile } from "./professional_profile.interface";
 import { ProfessionalProfile } from "./professional_profile.model";
+import { escapeRegex } from "../../utils/queryParams";
 
 /**
  * Gets or initializes the user's professional profile.
@@ -157,7 +158,6 @@ const expireCvVisibility = () =>
     { $set: { cvVisible: false } },
   );
 
-const escapeRegex = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 /**
  * Public view of a single listed worker profile.

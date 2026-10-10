@@ -20,6 +20,10 @@ import { Message } from "./message.model";
 import { inspectContent } from "./moderation.util";
 import { ModerationViolation } from "./moderation_violation.model";
 
+// Set when chat moderation suspends someone — lets an admin lift exactly that suspension
+const CHAT_SUSPENSION_REASON =
+  "Suspended for repeated off-platform contact sharing / circumvention violations.";
+
 const SYSTEM_SAFETY_WARNING =
   "Notice: Pour votre sécurité, effectuez tous vos paiements via Kadou24h. Ne partagez jamais vos coordonnées bancaires ou numéros de téléphone en dehors de l'application.";
 
@@ -325,7 +329,7 @@ const sendMessage = async (
         action = ModerationAction.suspended;
         sender.status = UserStatus.suspended;
         sender.statusReason =
-          "Suspended for repeated off-platform contact sharing / circumvention violations.";
+          CHAT_SUSPENSION_REASON;
 
         await NotificationServices.createNotification({
           userId: sender._id,
@@ -504,7 +508,10 @@ const getModerationViolationsAdmin = async (query: {
   const filter: Record<string, unknown> = {};
   if (query.rule) filter.rule = query.rule;
   if (query.action) filter.action = query.action;
-  if (query.userId) filter.userId = new Types.ObjectId(query.userId);
+  if (query.userId) {
+    if (!Types.ObjectId.isValid(query.userId)) throw new AppError(400, "Invalid userId");
+    filter.userId = new Types.ObjectId(query.userId);
+  }
 
   const [data, total] = await Promise.all([
     ModerationViolation.find(filter)
@@ -534,10 +541,11 @@ const liftUserChatRestrictionAdmin = async (targetUserId: string) => {
     throw new AppError(404, "User not found");
   }
 
-  user.moderation = user.moderation || { violationCount: 0 };
-  user.moderation.chatRestrictedUntil = undefined;
+  // Fresh start: otherwise the very next flagged message suspends them again
+  user.moderation = { ...(user.moderation ?? {}), violationCount: 0, chatRestrictedUntil: undefined };
 
-  if (user.status === UserStatus.suspended) {
+  // Only undo a suspension that chat moderation caused — not one an admin set for another reason
+  if (user.status === UserStatus.suspended && user.statusReason?.startsWith(CHAT_SUSPENSION_REASON)) {
     user.status = UserStatus.active;
     user.statusReason = "Suspension lifted by administrator";
   }

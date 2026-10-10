@@ -3,8 +3,8 @@ import { DisputeStatus, IDispute } from "./payment.interface";
 
 const disputeSchema = new Schema<IDispute>(
   {
-    orderId: { type: Schema.Types.ObjectId, ref: "Order", required: true },
-    subOrderId: { type: Schema.Types.ObjectId, ref: "SubOrder" },
+    orderId: { type: Schema.Types.ObjectId, ref: "orders", required: true },
+    subOrderId: { type: Schema.Types.ObjectId, ref: "sub_orders" },
     customerId: { type: Schema.Types.ObjectId, ref: "User", required: true },
     amount: { type: Number, min: 0 },
     reason: { type: String, required: true, trim: true },

@@ -4,6 +4,10 @@ import { AuditLogServices } from "../audit_log/audit_log.service";
 import { IFileRef } from "../../interfaces/common.types";
 import { CategoryType, ILocalizedText } from "./category.interface";
 import { Category } from "./category.model";
+import { Job } from "../job/job.model";
+import { Product } from "../product/product.model";
+import { ProfessionalProfile } from "../professional_profile/professional_profile.model";
+import { VendorProfile } from "../vendor_profile/vendor_profile.model";
 
 interface CreateCategoryInput {
   name: ILocalizedText;
@@ -161,6 +165,26 @@ const deleteCategory = async (id: string, actorId: string) => {
     throw new AppError(
       httpStatus.CONFLICT,
       "This category has subcategories. Delete them first or deactivate it (isActive: false).",
+    );
+  }
+
+  // A category in use stays: deleting it would leave products / stores / jobs pointing nowhere
+  const [products, vendors, jobs, workers] = await Promise.all([
+    Product.countDocuments({ $or: [{ categoryId: id }, { subcategoryId: id }], isDeleted: { $ne: true } }),
+    VendorProfile.countDocuments({ businessCategoryId: id }),
+    Job.countDocuments({ categoryId: id }),
+    ProfessionalProfile.countDocuments({ serviceCategoryId: id }),
+  ]);
+  const inUse = [
+    products && `${products} product(s)`,
+    vendors && `${vendors} store(s)`,
+    jobs && `${jobs} job(s)`,
+    workers && `${workers} worker profile(s)`,
+  ].filter(Boolean);
+  if (inUse.length) {
+    throw new AppError(
+      httpStatus.CONFLICT,
+      `This category is used by ${inUse.join(", ")}. Deactivate it instead (it disappears from the app but the data stays valid).`,
     );
   }
 

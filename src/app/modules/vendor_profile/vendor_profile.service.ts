@@ -14,14 +14,13 @@ import {
   DocumentStatus,
   IVerificationDocument,
   markSubmitted,
-  notifyApplicant,
   ReviewAction,
   syncRole,
 } from "../profile_common/profile.common";
 import { UserRole } from "../user/user.interface";
 import { User } from "../user/user.model";
 import { WalletMode } from "../wallet/wallet.interface";
-import { WalletServices } from "../wallet/wallet.service";
+import { WalletServices, walletSummary } from "../wallet/wallet.service";
 import { IStoreAvailability, IVendorProfile } from "./vendor_profile.interface";
 import { VendorProfile } from "./vendor_profile.model";
 import { Notify } from "../notification/notification.events";
@@ -238,7 +237,7 @@ const getVendorForAdmin = async (id: string) => {
   ]);
 
   if (!vendor) throw new AppError(httpStatus.NOT_FOUND, "Vendor not found");
-  return { ...present(vendor), payoutMethods: wallet.payoutMethods };
+  return { ...present(vendor), payoutMethods: wallet.payoutMethods, wallet: walletSummary(wallet) };
 };
 
 const reviewDocument = async (
@@ -282,7 +281,6 @@ const reviewApplication = async (
   await vendor.save();
 
   await syncRole(vendor.userId, UserRole.vendor, status);
-  notifyApplicant(vendor.userId, "vendor", status, payload.note);
   Notify.profileReviewed(vendor.userId, "vendor", status, payload.note);
 
   await AuditLogServices.record({

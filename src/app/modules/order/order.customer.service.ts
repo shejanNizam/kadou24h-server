@@ -59,11 +59,18 @@ const getMyOrders = async (
 /**
  * Get detailed view of an order with its sub-orders.
  */
-const getOrderDetails = async (orderId: string, customerId?: string) => {
+const getOrderDetails = async (
+  orderId: string,
+  customerId?: string,
+  options: { admin?: boolean } = {},
+) => {
   const filter: Record<string, unknown> = { _id: orderId };
   if (customerId) filter.customerId = customerId;
 
-  const order = await Order.findOne(filter);
+  const orderQuery = Order.findOne(filter);
+  // Admins also see who the customer is
+  if (options.admin) orderQuery.populate("customerId", "name phone email avatar");
+  const order = await orderQuery;
   if (!order) {
     throw new AppError(httpStatus.NOT_FOUND, "Order not found");
   }
@@ -75,10 +82,22 @@ const getOrderDetails = async (orderId: string, customerId?: string) => {
     .sort({ createdAt: 1 });
 
   // Delivery legs (1 local, 2–3 intercity) so the app can track each leg; PINs are never included
-  const legs = await Delivery.find({ subOrderId: { $in: subOrders.map((s) => s._id) } })
-    .select("subOrderId legNumber legType status fromKind fromName toKind toName riderId")
-    .sort({ legNumber: 1 })
-    .lean();
+  const legsQuery = Delivery.find({ subOrderId: { $in: subOrders.map((s) => s._id) } })
+    .select(
+      options.admin
+        ? "subOrderId legNumber legType status fromKind fromName toKind toName riderId fee collectsCash assignedAt pickedUpAt deliveredAt"
+        : "subOrderId legNumber legType status fromKind fromName toKind toName riderId",
+    )
+    .sort({ legNumber: 1 });
+  // Admins see which partner holds each leg
+  if (options.admin) {
+    legsQuery.populate({
+      path: "riderId",
+      select: "userId partnerType vehicle",
+      populate: { path: "userId", select: "name phone" },
+    });
+  }
+  const legs = await legsQuery.lean();
 
   return {
     order,

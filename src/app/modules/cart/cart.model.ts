@@ -5,12 +5,12 @@ const cartItemSchema = new Schema<ICartItem>(
   {
     productId: {
       type: Schema.Types.ObjectId,
-      ref: "products",
+      ref: "Product",
       required: true,
     },
     vendorId: {
       type: Schema.Types.ObjectId,
-      ref: "vendor_profiles",
+      ref: "VendorProfile",
       required: true,
     },
     qty: {
@@ -26,7 +26,7 @@ const cartSchema = new Schema<ICart>(
   {
     userId: {
       type: Schema.Types.ObjectId,
-      ref: "users",
+      ref: "User",
       required: true,
       unique: true,
       index: true,

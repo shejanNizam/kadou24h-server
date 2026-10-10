@@ -1,4 +1,5 @@
 import { Query } from "mongoose";
+import { escapeRegex } from "./queryParams";
 import { excludeField } from "../constants";
 
 export class QueryBuilder<T> {
@@ -27,7 +28,7 @@ export class QueryBuilder<T> {
     const searchTerm = this.query.searchTerm || "";
     this.modelQuery = this.modelQuery.find({
       $or: searchableField.map((field) => ({
-        [field]: { $regex: searchTerm, $options: "i" },
+        [field]: { $regex: escapeRegex(searchTerm), $options: "i" },
       })),
     });
     return this;
@@ -51,6 +52,13 @@ export class QueryBuilder<T> {
     const skip = (page - 1) * limit;
     this.modelQuery = this.modelQuery.skip(skip).limit(limit);
     return this;
+  }
+
+  /** page >= 1; limit 1–100 (default 10), so one request cannot dump a whole collection */
+  private pageAndLimit() {
+    const page = Math.max(1, Math.floor(Number(this.query.page)) || 1);
+    const limit = Math.min(100, Math.max(1, Math.floor(Number(this.query.limit)) || 10));
+    return { page, limit };
   }
 
   build() {

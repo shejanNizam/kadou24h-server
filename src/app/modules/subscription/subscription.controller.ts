@@ -44,6 +44,16 @@ const getActivePlans = catchAsync(async (req: Request, res: Response) => {
   });
 });
 
+const getAllPlansForAdmin = catchAsync(async (_req: Request, res: Response) => {
+  const result = await SubscriptionServices.getAllPlansForAdmin();
+  sendResponse(res, {
+    statusCode: httpStatus.OK,
+    success: true,
+    message: "Subscription plans retrieved successfully!",
+    data: result,
+  });
+});
+
 const subscribe = catchAsync(async (req: Request, res: Response) => {
   const result = await SubscriptionServices.subscribe(req.user._id, req.body);
   sendResponse(res, {
@@ -65,6 +75,7 @@ const getMySubscription = catchAsync(async (req: Request, res: Response) => {
 });
 
 export const SubscriptionControllers = {
+  getAllPlansForAdmin,
   createPlan,
   updatePlan,
   getActivePlans,

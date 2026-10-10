@@ -37,6 +37,11 @@ if (!/e2e|test/i.test(dbName)) {
   process.exit(1);
 }
 
+// Start from an empty database (a kept or crashed earlier run must not leak in)
+await mongoose.connect(DATABASE_URL);
+await mongoose.connection.dropDatabase();
+await mongoose.disconnect();
+
 // ── Server ───────────────────────────────────────────────────────────
 const dotenv = fs.existsSync(path.join(ROOT, ".env"))
   ? parseEnv(fs.readFileSync(path.join(ROOT, ".env"), "utf8"))
@@ -461,6 +466,94 @@ const run = async () => {
   check("relay: bus driver picks up leg 2 with that PIN", r.status === 200, brief(r));
   r = await call("GET", `/deliveries/${leg2}/track`, null, X.token);
   check("relay: strangers still cannot see station PINs", r.status === 403 || r.status === 401, brief(r));
+
+  // ═════ 10b. Admin panel: the exact requests the dashboard sends ═════
+  // Categories: in use → cannot delete, can deactivate
+  r = await call("DELETE", `/categories/${prodCat}`, null, admin);
+  check("admin: a category used by products cannot be deleted (409)", r.status === 409, brief(r));
+  r = await call("POST", "/categories", { name: { fr: "Vide", en: "Empty" }, type: "product" }, admin);
+  const emptyCat = r.body.data?._id;
+  r = await call("PATCH", `/categories/${emptyCat}`, { isActive: false }, admin);
+  check("admin: deactivate a category", r.status === 200 && r.body.data?.isActive === false, brief(r));
+  r = await call("DELETE", `/categories/${emptyCat}`, null, admin);
+  check("admin: an unused category can be deleted", r.status === 200, brief(r));
+
+  // Products with uploaded images ({ url, publicId }) for a chosen store; null clears a sale price
+  const image = { url: "https://res.cloudinary.com/demo/image/upload/sample.jpg", publicId: "sample" };
+  r = await call("POST", "/products", { name: "Admin product", vendorId, categoryId: prodCat, price: 30000, discountPrice: 25000, images: [image], stockQty: 5 }, admin);
+  check("admin: create a product with an uploaded image for a store", ok(r) && r.body.data?.images?.[0]?.url === image.url, brief(r));
+  const adminProductId = r.body.data?._id;
+  r = await call("PATCH", `/products/${adminProductId}`, { discountPrice: null }, admin);
+  check("admin: clearing the sale price removes it", r.status === 200 && r.body.data?.discountPrice == null, JSON.stringify(r.body.data?.discountPrice));
+
+  // Delivery rates with the dashboard's field names
+  r = await call("POST", "/delivery-rates", { type: "local", city: "Kindia", vehicleType: "motorbike", baseFee: 4000, perKmFee: 800, minFee: 6000 }, admin);
+  check("admin: create a local delivery rate", ok(r), brief(r));
+
+  // Team member (super admin) with a password → can sign in
+  r = await call("POST", "/user/team", { name: "Staff Member", email: `staff${stamp}@kadou24h.test`, password: "Staff2026x", role: "staff" }, admin);
+  check("admin: create a staff account", ok(r), brief(r));
+  r = await call("POST", "/auth/login", { identifier: `staff${stamp}@kadou24h.test`, password: "Staff2026x" });
+  check("admin: the new staff member can sign in", r.status === 200 && r.body.data?.user?.roles?.includes("staff"), brief(r));
+
+  // Plans: machine features + highlights; a PATCH of one field keeps the rest
+  r = await call("POST", "/subscriptions/admin/plans", { name: "Pro", audience: "job_seeker", price: 50000, durationDays: 60, features: ["cv_visibility"], highlights: ["Seen first"] }, admin);
+  const planId = r.body.data?._id;
+  check("admin: create a plan", ok(r), brief(r));
+  r = await call("PATCH", `/subscriptions/admin/plans/${planId}`, { isActive: false }, admin);
+  check(
+    "admin: deactivating a plan keeps its features & duration",
+    r.status === 200 && r.body.data?.isActive === false && r.body.data?.durationDays === 60 && r.body.data?.features?.[0] === "cv_visibility",
+    JSON.stringify(r.body.data),
+  );
+  r = await call("GET", "/subscriptions/admin/plans", null, admin);
+  check("admin: plan list includes inactive plans", r.body.data?.some((p) => p._id === planId && p.activeSubscribers === 0), brief(r));
+  r = await call("POST", "/subscriptions/admin/plans", { name: "Bad", audience: "job_seeker", price: 1, features: ["unlimited everything"] }, admin);
+  check("admin: unknown plan features are refused", r.status === 400, brief(r));
+
+  // Vendor review: suspend needs a note
+  r = await call("PATCH", `/vendors/admin/${vendorId}/review`, { action: "suspend" }, admin);
+  check("admin: suspending a store without a note is refused", r.status === 400 && /note/i.test(r.body.message), brief(r));
+  r = await call("GET", `/vendors/admin/${vendorId}`, null, admin);
+  check("admin: store detail includes the wallet summary", typeof r.body.data?.wallet?.availableBalance === "number", JSON.stringify(r.body.data?.wallet));
+
+  // Orders: admin detail shows the customer and the partner on each leg; customer filter
+  r = await call("GET", `/orders/admin/${paidOrder._id}`, null, admin);
+  const firstLegRider = r.body.data?.subOrders?.[0]?.deliveries?.[0]?.riderId;
+  check("admin: order detail has the customer and the rider names", r.body.data?.order?.customerId?.name === "Customer One" && firstLegRider?.userId?.name === "Moto Rider", JSON.stringify(firstLegRider));
+  r = await call("GET", `/orders/admin/all?customerId=${X.id}`, null, admin);
+  check("admin: orders filtered by customer", r.status === 200 && r.body.meta?.total === 0, brief(r));
+  r = await call("GET", "/orders/admin/all?status=placed", null, admin);
+  check("admin: an unknown order status is a clear 400", r.status === 400, brief(r));
+
+  // Refunds: never for an unpaid order; a failed refund leaves the dispute open
+  r = await order([{ productId, qty: 1 }]);
+  const unpaid = r.body.data.order;
+  r = await call("POST", "/payments/admin/refunds", { orderId: unpaid._id, amount: 1000, reason: "Test" }, admin);
+  check("admin: no refund for an unpaid order", r.status === 400, brief(r));
+  r = await call("POST", "/payments/disputes", { orderId: unpaid._id, reason: "Never arrived here" }, C.token);
+  const disputeId = r.body.data?._id;
+  r = await call("PATCH", `/payments/admin/disputes/${disputeId}/resolve`, { status: "resolved", adminResolution: "Refunding", issueRefund: true, refundAmount: 1000 }, admin);
+  const disputeAfter = (await call("GET", "/payments/admin/disputes?status=open", null, admin)).body.data?.find((d) => d._id === disputeId);
+  check("admin: a failed refund keeps the dispute open", r.status === 400 && !!disputeAfter, brief(r));
+  await call("POST", `/orders/${unpaid._id}/cancel`, { reason: "Cleanup run" }, C.token);
+
+  // Withdrawals search, overview money, safe search text
+  r = await call("GET", "/wallets/admin/withdrawals?search=WD-", null, admin);
+  check("admin: withdrawals can be searched", r.status === 200 && r.body.meta?.total >= 1, brief(r));
+  r = await call("GET", "/admin/dashboard/overview", null, admin);
+  const money = r.body.data?.orders;
+  check("admin: revenue = platform fees + earned commission", money && money.totalRevenue === money.totalPlatformFees + money.totalCommission && money.totalCommission > 0, JSON.stringify(money));
+  r = await call("GET", "/products?searchTerm=((((((a", null);
+  check("search text with regex characters is safe (no 500)", r.status === 200, brief(r));
+
+  // Lifting a chat restriction never undoes an admin's own suspension
+  r = await call("PATCH", `/user/${X.id}/status`, { status: "suspended", reason: "Fraud check" }, admin);
+  check("admin: suspend a user with a reason", r.status === 200, brief(r));
+  await call("POST", `/conversations/admin/users/${X.id}/lift-restriction`, null, admin);
+  r = await call("GET", `/user/${X.id}`, null, admin);
+  check("lifting a chat restriction keeps a non-chat suspension", r.body.data?.status === "suspended", r.body.data?.status);
+  await call("PATCH", `/user/${X.id}/status`, { status: "active" }, admin);
 
   // ═════ 11. Checkout rollback under a stock race ═════
   r = await call("POST", "/products", { name: "Last item", categoryId: prodCat, price: 50000, stockQty: 1 }, V.token);

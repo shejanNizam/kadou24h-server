@@ -24,6 +24,8 @@ router.post(
 );
 
 // Admin plan management
+router.get("/admin/plans", checkAuth(...ADMIN_ROLES), SubscriptionControllers.getAllPlansForAdmin);
+
 router.post(
   "/admin/plans",
   checkAuth(...ADMIN_ROLES),

@@ -51,7 +51,10 @@ export const createJobSchema = z.object({
   notificationEmail: z.string().email().optional(),
 });
 
-export const updateJobSchema = createJobSchema.partial();
+// Without the salaryCurrency default: a partial update must not reset stored values
+export const updateJobSchema = createJobSchema
+  .extend({ salaryCurrency: z.string().trim() })
+  .partial();
 
 export const publishJobSchema = z.object({
   paymentMethod: z.enum(Object.values(PaymentMethod) as [string, ...string[]]),

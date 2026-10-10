@@ -21,7 +21,7 @@ export const reportSchema = new Schema<IReport>(
     },
     orderId: {
       type: Schema.Types.ObjectId,
-      ref: "Order",
+      ref: "orders",
     },
     conversationId: {
       type: Schema.Types.ObjectId,

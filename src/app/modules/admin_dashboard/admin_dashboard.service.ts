@@ -1,6 +1,6 @@
 import { Order } from "../order/order.model";
 import { SubOrder } from "../order/sub_order.model";
-import { SubOrderStatus, OrderStatus } from "../order/order.interface";
+import { OrderStatus, SettlementStatus, SubOrderStatus } from "../order/order.interface";
 import { ApprovalStatus } from "../profile_common/profile.common";
 import { Report } from "../report/report.model";
 import { ReportStatus } from "../report/report.interface";
@@ -12,6 +12,44 @@ import { User } from "../user/user.model";
 import { VendorProfile } from "../vendor_profile/vendor_profile.model";
 import { Withdrawal } from "../wallet/withdrawal.model";
 import { WithdrawalStatus } from "../wallet/wallet.interface";
+
+// $sum helper: the field value for orders that are not cancelled, else 0
+const notCancelled = (field: string) => ({
+  $cond: [{ $eq: ["$status", OrderStatus.cancelled] }, 0, field],
+});
+
+// Commission counts as earned only once the vendor earning is released
+const earnedCommission = {
+  $cond: [{ $eq: ["$settlement", SettlementStatus.released] }, "$commissionAmount", 0],
+};
+
+/** Per-period GMV and earned commission from non-cancelled sub-orders. */
+const subOrderSeries = (format: string, since: Date) =>
+  SubOrder.aggregate<{ _id: string; gmv: number; commission: number }>([
+    { $match: { createdAt: { $gte: since }, status: { $ne: SubOrderStatus.cancelled } } },
+    {
+      $group: {
+        _id: { $dateToString: { format, date: "$createdAt" } },
+        gmv: { $sum: "$total" },
+        commission: { $sum: earnedCommission },
+      },
+    },
+  ]);
+
+/** Chart point = revenue (platform fee + commission) and GMV (sub-orders + platform fee). */
+const mergeSeries = (
+  target: Map<string, { platformFee: number; gmv: number }>,
+  orderAgg: { _id: string; totalPlatformFees: number }[],
+  subOrderAgg: { _id: string; gmv: number; commission: number }[],
+) => {
+  const fees = new Map(orderAgg.map((o) => [o._id, o.totalPlatformFees || 0]));
+  const keys = new Set([...fees.keys(), ...subOrderAgg.map((s) => s._id)]);
+  for (const key of keys) {
+    const sub = subOrderAgg.find((s) => s._id === key);
+    const fee = fees.get(key) ?? 0;
+    target.set(key, { platformFee: fee + (sub?.commission ?? 0), gmv: (sub?.gmv ?? 0) + fee });
+  }
+};
 
 const getPlatformOverview = async () => {
   const now = new Date();
@@ -43,6 +81,9 @@ const getPlatformOverview = async () => {
     monthlyRevenueAgg,
     usersGrowthAgg,
     vendorsGrowthAgg,
+    subOrderMoneyAgg,
+    weeklySubOrderAgg,
+    monthlySubOrderAgg,
   ] = await Promise.all([
     User.countDocuments({ isDeleted: false }),
     VendorProfile.countDocuments({ approvalStatus: ApprovalStatus.approved }),
@@ -54,8 +95,7 @@ const getPlatformOverview = async () => {
       {
         $group: {
           _id: null,
-          totalGmv: { $sum: "$total" },
-          totalPlatformFees: { $sum: "$platformFee" },
+          totalPlatformFees: { $sum: notCancelled("$platformFee") },
           completedOrders: {
             $sum: { $cond: [{ $eq: ["$status", OrderStatus.completed] }, 1, 0] },
           },
@@ -100,24 +140,22 @@ const getPlatformOverview = async () => {
 
     // 7-day revenue aggregation
     Order.aggregate([
-      { $match: { createdAt: { $gte: sevenDaysAgo } } },
+      { $match: { createdAt: { $gte: sevenDaysAgo }, status: { $ne: OrderStatus.cancelled } } },
       {
         $group: {
           _id: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } },
           totalPlatformFees: { $sum: "$platformFee" },
-          totalGmv: { $sum: "$total" },
         },
       },
     ]),
 
     // 12-month revenue aggregation
     Order.aggregate([
-      { $match: { createdAt: { $gte: twelveMonthsAgo } } },
+      { $match: { createdAt: { $gte: twelveMonthsAgo }, status: { $ne: OrderStatus.cancelled } } },
       {
         $group: {
           _id: { $dateToString: { format: "%Y-%m", date: "$createdAt" } },
           totalPlatformFees: { $sum: "$platformFee" },
-          totalGmv: { $sum: "$total" },
         },
       },
     ]),
@@ -143,10 +181,18 @@ const getPlatformOverview = async () => {
         },
       },
     ]),
+
+    // GMV (non-cancelled sub-orders) and commission actually earned (released)
+    SubOrder.aggregate([
+      { $match: { status: { $ne: SubOrderStatus.cancelled } } },
+      { $group: { _id: null, gmv: { $sum: "$total" }, commission: { $sum: earnedCommission } } },
+    ]),
+    subOrderSeries("%Y-%m-%d", sevenDaysAgo),
+    subOrderSeries("%Y-%m", twelveMonthsAgo),
   ]);
 
+  const subOrderMoney = subOrderMoneyAgg[0] || { gmv: 0, commission: 0 };
   const orderStats = ordersAgg[0] || {
-    totalGmv: 0,
     totalPlatformFees: 0,
     completedOrders: 0,
     activeOrders: 0,
@@ -177,12 +223,7 @@ const getPlatformOverview = async () => {
   // Build weekly revenue series (Mon - Sun / last 7 calendar days)
   const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
   const weeklyRevenueMap = new Map<string, { platformFee: number; gmv: number }>();
-  weeklyRevenueAgg.forEach((item: { _id: string; totalPlatformFees: number; totalGmv: number }) => {
-    weeklyRevenueMap.set(item._id, {
-      platformFee: item.totalPlatformFees || 0,
-      gmv: item.totalGmv || 0,
-    });
-  });
+  mergeSeries(weeklyRevenueMap, weeklyRevenueAgg, weeklySubOrderAgg);
 
   const weeklyRevenueData: Array<{ day: string; date: string; value: number; gmv: number }> = [];
   for (let i = 6; i >= 0; i--) {
@@ -212,12 +253,7 @@ const getPlatformOverview = async () => {
   });
 
   const monthlyRevenueMap = new Map<string, { platformFee: number; gmv: number }>();
-  monthlyRevenueAgg.forEach((item: { _id: string; totalPlatformFees: number; totalGmv: number }) => {
-    monthlyRevenueMap.set(item._id, {
-      platformFee: item.totalPlatformFees || 0,
-      gmv: item.totalGmv || 0,
-    });
-  });
+  mergeSeries(monthlyRevenueMap, monthlyRevenueAgg, monthlySubOrderAgg);
 
   const platformGrowth: Array<{ month: string; year: number; users: number; vendors: number }> = [];
   const monthlyRevenueData: Array<{ month: string; year: number; value: number; gmv: number }> = [];
@@ -258,8 +294,12 @@ const getPlatformOverview = async () => {
       inProgress,
       cancelled,
       reported,
-      totalGmv: orderStats.totalGmv,
+      // Cancelled orders are excluded from every money figure
+      totalGmv: subOrderMoney.gmv + orderStats.totalPlatformFees,
       totalPlatformFees: orderStats.totalPlatformFees,
+      totalCommission: subOrderMoney.commission,
+      // What the platform earned: platform fees + commission on paid-out sub-orders
+      totalRevenue: orderStats.totalPlatformFees + subOrderMoney.commission,
     },
     finance: {
       pendingWithdrawalsCount: withdrawalStats.count,

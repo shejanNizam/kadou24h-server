@@ -10,7 +10,8 @@ import {
   WithdrawalStatus,
 } from "./wallet.interface";
 import { WalletServices } from "./wallet.service";
-import { enumQuery } from "../../utils/queryParams";
+import { enumQuery, queryString } from "../../utils/queryParams";
+import { PayoutMethodType } from "../settings/settings.interface";
 
 const modeFromQuery = (req: Request) => {
   const mode = req.query.mode as WalletMode;
@@ -129,6 +130,8 @@ const getAllWithdrawalsAdmin = catchAsync(async (req: Request, res: Response) =>
     limit: Number(req.query.limit),
     status: enumQuery(req.query.status, WithdrawalStatus, "status"),
     ownerMode: enumQuery(req.query.ownerMode, WalletMode, "ownerMode"),
+    method: enumQuery(req.query.method, PayoutMethodType, "method"),
+    search: queryString(req.query.search),
   });
   sendResponse(res, {
     statusCode: httpStatus.OK,

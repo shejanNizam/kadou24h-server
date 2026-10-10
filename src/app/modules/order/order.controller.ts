@@ -3,6 +3,8 @@ import httpStatus from "http-status";
 import catchAsync from "../../utils/catchAsync";
 import sendResponse from "../../utils/sendResponse";
 import { OrderServices } from "./order.service";
+import { enumQuery, numberQuery, queryString } from "../../utils/queryParams";
+import { OrderStatus, PaymentMethod, PaymentStatus } from "./order.interface";
 
 const checkoutSummary = catchAsync(async (req: Request, res: Response) => {
   const result = await OrderServices.calculateCheckout(req.user._id, req.body);
@@ -141,7 +143,15 @@ const cancelVendorSubOrder = catchAsync(async (req: Request, res: Response) => {
 
 // Admin Controllers
 const getAllOrdersAdmin = catchAsync(async (req: Request, res: Response) => {
-  const result = await OrderServices.getAllOrdersAdmin(req.query);
+  const result = await OrderServices.getAllOrdersAdmin({
+    page: numberQuery(req.query.page),
+    limit: numberQuery(req.query.limit),
+    status: enumQuery(req.query.status, OrderStatus, "status"),
+    paymentStatus: enumQuery(req.query.paymentStatus, PaymentStatus, "paymentStatus"),
+    paymentMethod: enumQuery(req.query.paymentMethod, PaymentMethod, "paymentMethod"),
+    customerId: queryString(req.query.customerId),
+    search: queryString(req.query.search),
+  });
   sendResponse(res, {
     statusCode: httpStatus.OK,
     success: true,
@@ -152,7 +162,7 @@ const getAllOrdersAdmin = catchAsync(async (req: Request, res: Response) => {
 });
 
 const getAdminOrderDetail = catchAsync(async (req: Request, res: Response) => {
-  const result = await OrderServices.getOrderDetails(req.params.id as string);
+  const result = await OrderServices.getOrderDetails(req.params.id as string, undefined, { admin: true });
   sendResponse(res, {
     statusCode: httpStatus.OK,
     success: true,

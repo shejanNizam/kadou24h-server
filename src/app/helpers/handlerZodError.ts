@@ -1,25 +1,25 @@
-﻿/* eslint-disable @typescript-eslint/no-explicit-any */
+import { ZodError } from "zod";
 import {
   TErrorSources,
   TGenericErrorResponse,
 } from "../interfaces/error.types";
 
-export const handlerZodError = (err: any): TGenericErrorResponse => {
-  const errorSources: TErrorSources[] = [];
+export const handlerZodError = (err: ZodError): TGenericErrorResponse => {
+  const errorSources: TErrorSources[] = err.issues.map((issue) => ({
+    path: String(issue.path[issue.path.length - 1] ?? ""),
+    message: issue.message,
+  }));
 
-  err.issues.forEach((issue: any) => {
-    errorSources.push({
-      //path : "nickname iside lastname inside name"
-      // path: issue.path.length > 1 && issue.path.reverse().join(" inside "),
-
-      path: issue.path[issue.path.length - 1],
-      message: issue.message,
-    });
-  });
+  // The first problem as a readable message, so clients that only show
+  // `message` (dashboard toasts, the app) tell the user what to fix
+  const first = errorSources[0];
+  const message = first
+    ? `${first.path ? `${first.path}: ` : ""}${first.message}`
+    : "Validation failed";
 
   return {
     statusCode: 400,
-    message: "Zod Error",
+    message,
     errorSources,
   };
 };

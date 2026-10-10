@@ -5,6 +5,7 @@
  * action that triggered it — errors are only logged.
  */
 import { Types } from "mongoose";
+import { emitToUser } from "../../../socket/socket";
 import { logger } from "../../utils/logger";
 import { ISubOrder } from "../order/order.interface";
 import { RiderProfile } from "../rider_profile/rider_profile.model";
@@ -283,8 +284,12 @@ const withdrawalProcessed = (
 // ── Accounts & applications ─────────────────────────────────────────
 
 /** Vendor / rider KYC reviewed → applicant. */
-// status is an ApprovalStatus value (plain string: profile.common imports this module)
+/**
+ * Vendor / rider KYC reviewed → applicant: live socket event + stored/pushed notification.
+ * status is an ApprovalStatus value (plain string, so this module never imports profile.common).
+ */
 const profileReviewed = (userId: Id, kind: "vendor" | "rider", status: string, note?: string) => {
+  emitToUser(String(userId), "application:reviewed", { kind, status, note });
   const what = kind === "vendor" ? { fr: "boutique", en: "store" } : { fr: "livreur", en: "delivery partner" };
   const approved = status === "approved";
   send({

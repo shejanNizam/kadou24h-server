@@ -264,10 +264,24 @@ const issueRefund = async (
   const order = await Order.findById(payload.orderId);
   if (!order) throw new AppError(httpStatus.NOT_FOUND, "Order not found");
 
-  if (payload.amount > order.total) {
+  // Only money the customer actually paid can go back
+  if (order.paymentStatus === OrderPaymentStatus.unpaid) {
     throw new AppError(
       httpStatus.BAD_REQUEST,
-      `Refund amount (${payload.amount} GNF) cannot exceed order total (${order.total} GNF)`,
+      "This order has not been paid (COD orders are paid at delivery) — nothing to refund. Cancel it instead.",
+    );
+  }
+
+  const previous = await Refund.aggregate<{ total: number }>([
+    { $match: { orderId: order._id, status: RefundStatus.completed } },
+    { $group: { _id: null, total: { $sum: "$amount" } } },
+  ]);
+  const alreadyRefunded = previous[0]?.total ?? 0;
+  const refundable = order.total - alreadyRefunded;
+  if (payload.amount > refundable) {
+    throw new AppError(
+      httpStatus.BAD_REQUEST,
+      `Refund amount (${payload.amount} GNF) exceeds what is left to refund (${refundable} GNF of ${order.total} GNF)`,
     );
   }
 
@@ -384,29 +398,52 @@ const resolveDispute = async (
     refundAmount?: number;
   },
 ) => {
-  const dispute = await Dispute.findById(disputeId);
-  if (!dispute) throw new AppError(httpStatus.NOT_FOUND, "Dispute not found");
-
-  if (dispute.status !== DisputeStatus.open) {
-    throw new AppError(httpStatus.BAD_REQUEST, `Dispute has already been ${dispute.status}`);
+  const existing = await Dispute.findById(disputeId);
+  if (!existing) throw new AppError(httpStatus.NOT_FOUND, "Dispute not found");
+  if (existing.status !== DisputeStatus.open) {
+    throw new AppError(httpStatus.BAD_REQUEST, `Dispute has already been ${existing.status}`);
   }
 
-  dispute.status = payload.status;
-  dispute.adminResolution = payload.adminResolution;
-  if (payload.notes) dispute.notes = payload.notes;
-  dispute.resolvedBy = new Types.ObjectId(adminUserId);
-  dispute.resolvedAt = new Date();
-  await dispute.save();
+  const withRefund = payload.status === DisputeStatus.resolved && payload.issueRefund;
+  const refundAmount = payload.refundAmount ?? existing.amount;
+  if (withRefund && !refundAmount) {
+    throw new AppError(httpStatus.BAD_REQUEST, "Enter the refund amount");
+  }
 
-  // If resolved and refund is requested
-  if (payload.status === DisputeStatus.resolved && payload.issueRefund) {
-    const refundAmount = payload.refundAmount || dispute.amount || 1;
-    await issueRefund(adminUserId, {
-      orderId: String(dispute.orderId),
-      subOrderId: dispute.subOrderId ? String(dispute.subOrderId) : undefined,
-      amount: refundAmount,
-      reason: `Dispute resolved: ${payload.adminResolution}`,
-    });
+  // Claim it atomically — two admins cannot resolve (and refund) the same dispute
+  const dispute = await Dispute.findOneAndUpdate(
+    { _id: disputeId, status: DisputeStatus.open },
+    {
+      $set: {
+        status: payload.status,
+        adminResolution: payload.adminResolution,
+        ...(payload.notes && { notes: payload.notes }),
+        resolvedBy: new Types.ObjectId(adminUserId),
+        resolvedAt: new Date(),
+      },
+    },
+    { returnDocument: "after" },
+  );
+  if (!dispute) {
+    throw new AppError(httpStatus.CONFLICT, "This dispute was just handled by someone else");
+  }
+
+  if (withRefund) {
+    try {
+      await issueRefund(adminUserId, {
+        orderId: String(dispute.orderId),
+        subOrderId: dispute.subOrderId ? String(dispute.subOrderId) : undefined,
+        amount: refundAmount as number,
+        reason: `Dispute resolved: ${payload.adminResolution}`,
+      });
+    } catch (error) {
+      // No refund → the dispute is not resolved either; reopen it
+      await Dispute.updateOne(
+        { _id: dispute._id },
+        { $set: { status: DisputeStatus.open }, $unset: { adminResolution: 1, resolvedBy: 1, resolvedAt: 1 } },
+      );
+      throw error;
+    }
   }
 
   emitToUser(String(dispute.customerId), "dispute:resolved", {
