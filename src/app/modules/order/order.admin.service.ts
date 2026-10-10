@@ -1,0 +1,94 @@
+/**
+ * Admin side: all orders and admin cancellation.
+ */
+import httpStatus from "http-status";
+import AppError from "../../errorHelpers/AppError";
+import { OrderStatus, PaymentStatus, SubOrderStatus } from "./order.interface";
+import { Order } from "./order.model";
+import { SubOrder } from "./sub_order.model";
+import { cancelSubOrder } from "./order.utils";
+
+/**
+ * Admin: List all orders with filters.
+ */
+const getAllOrdersAdmin = async (query: {
+  page?: number;
+  limit?: number;
+  status?: OrderStatus;
+  paymentStatus?: PaymentStatus;
+  search?: string;
+}) => {
+  const page = Math.max(1, Number(query.page) || 1);
+  const limit = Math.max(1, Math.min(50, Number(query.limit) || 10));
+  const skip = (page - 1) * limit;
+
+  const filter: Record<string, unknown> = {};
+  if (query.status) filter.status = query.status;
+  if (query.paymentStatus) filter.paymentStatus = query.paymentStatus;
+  if (query.search) {
+    filter.$or = [
+      { orderNumber: new RegExp(query.search, "i") },
+      { "addressSnapshot.fullName": new RegExp(query.search, "i") },
+      { "addressSnapshot.phone": new RegExp(query.search, "i") },
+    ];
+  }
+
+  const [orders, total] = await Promise.all([
+    Order.find(filter)
+      .populate("customerId", "name phone email avatar")
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit),
+    Order.countDocuments(filter),
+  ]);
+
+  return {
+    meta: { page, limit, total, totalPage: Math.ceil(total / limit) },
+    data: orders,
+  };
+};
+
+/**
+ * Admin cancels sub-order.
+ */
+const adminCancelSubOrder = async (
+  subOrderId: string,
+  reason: string,
+  adminUserId: string,
+) => {
+  const subOrder = await SubOrder.findById(subOrderId);
+  if (!subOrder) {
+    throw new AppError(httpStatus.NOT_FOUND, "Sub-order not found");
+  }
+
+  if (subOrder.status === SubOrderStatus.cancelled) {
+    throw new AppError(httpStatus.BAD_REQUEST, "Sub-order is already cancelled");
+  }
+
+  // Delivered goods are sold: money goes back through a refund, not a cancel
+  if (subOrder.status === SubOrderStatus.delivered) {
+    throw new AppError(
+      httpStatus.BAD_REQUEST,
+      "Sub-order is already delivered — issue a refund instead of cancelling.",
+    );
+  }
+
+  return cancelSubOrder({
+    filter: { _id: subOrder._id },
+    allowedFrom: [
+      SubOrderStatus.new,
+      SubOrderStatus.accepted,
+      SubOrderStatus.preparing,
+      SubOrderStatus.ready_for_pickup,
+      SubOrderStatus.in_delivery,
+    ],
+    by: "admin",
+    reason,
+    actorUserId: adminUserId,
+  });
+};
+
+export {
+  getAllOrdersAdmin,
+  adminCancelSubOrder,
+};

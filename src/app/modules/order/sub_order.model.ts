@@ -196,6 +196,14 @@ const subOrderSchema = new Schema<ISubOrder>(
     codCollectedAt: {
       type: Date,
     },
+    codRemittedAmount: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    codSettledAt: {
+      type: Date,
+    },
     settlement: {
       type: String,
       enum: Object.values(SettlementStatus),
@@ -215,5 +223,7 @@ const subOrderSchema = new Schema<ISubOrder>(
 subOrderSchema.index({ vendorId: 1, status: 1, createdAt: -1 });
 subOrderSchema.index({ customerId: 1, createdAt: -1 });
 subOrderSchema.index({ currentRiderId: 1, status: 1 });
+// FIFO allocation of a rider's COD cash settlements
+subOrderSchema.index({ codCollectedBy: 1, settlement: 1, codCollectedAt: 1 });
 
 export const SubOrder = model<ISubOrder>("sub_orders", subOrderSchema);

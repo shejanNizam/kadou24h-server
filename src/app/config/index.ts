@@ -32,7 +32,12 @@ const envSchema = z.object({
 
   STRIPE_SECRET_KEY: z.string().optional(),
   STRIPE_WEBHOOK_SECRET: z.string().optional(),
-  PAYMENT_WEBHOOK_SECRET: z.string().default("kadou24h_live_payment_webhook_secret_key"),
+  // Shared secret the payment gateway sends in the x-webhook-secret header.
+  // No default: without it the webhook is disabled (and production refuses to start).
+  PAYMENT_WEBHOOK_SECRET: z.string().min(32, "PAYMENT_WEBHOOK_SECRET must be at least 32 characters").optional(),
+
+  // Firebase service-account JSON, base64-encoded. Empty = push notifications off.
+  FIREBASE_SERVICE_ACCOUNT_BASE64: z.string().optional(),
 
   CLOUDINARY_CLOUD_NAME: z.string().optional(),
   CLOUDINARY_API_KEY: z.string().optional(),
@@ -60,6 +65,12 @@ if (!parsed.success) {
 }
 
 const env = parsed.data;
+
+if (env.NODE_ENV === "production" && !env.PAYMENT_WEBHOOK_SECRET) {
+  // eslint-disable-next-line no-console
+  console.error("\n❌ PAYMENT_WEBHOOK_SECRET is required in production\n");
+  process.exit(1);
+}
 
 function splitList(value?: string): string[] {
   return (value ?? "")
@@ -99,6 +110,7 @@ export const configs = {
 
   frontend_url: env.FRONTEND_URL === "*" ? "*" : splitList(env.FRONTEND_URL),
   payment_webhook_secret: env.PAYMENT_WEBHOOK_SECRET,
+  firebase_service_account_base64: env.FIREBASE_SERVICE_ACCOUNT_BASE64,
   stripe_secret_key: env.STRIPE_SECRET_KEY,
   stripe_webhook_secret: env.STRIPE_WEBHOOK_SECRET,
 

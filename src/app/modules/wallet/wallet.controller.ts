@@ -3,8 +3,14 @@ import httpStatus from "http-status";
 import AppError from "../../errorHelpers/AppError";
 import catchAsync from "../../utils/catchAsync";
 import sendResponse from "../../utils/sendResponse";
-import { WalletMode } from "./wallet.interface";
+import {
+  CodSettlementStatus,
+  TransactionType,
+  WalletMode,
+  WithdrawalStatus,
+} from "./wallet.interface";
 import { WalletServices } from "./wallet.service";
+import { enumQuery } from "../../utils/queryParams";
 
 const modeFromQuery = (req: Request) => {
   const mode = req.query.mode as WalletMode;
@@ -80,7 +86,7 @@ const getMyWithdrawals = catchAsync(async (req: Request, res: Response) => {
   const result = await WalletServices.getMyWithdrawals(req.user._id, mode, {
     page: Number(req.query.page),
     limit: Number(req.query.limit),
-    status: req.query.status as any,
+    status: enumQuery(req.query.status, WithdrawalStatus, "status"),
   });
   sendResponse(res, {
     statusCode: httpStatus.OK,
@@ -96,7 +102,7 @@ const getMyTransactions = catchAsync(async (req: Request, res: Response) => {
   const result = await WalletServices.getMyTransactions(req.user._id, mode, {
     page: Number(req.query.page),
     limit: Number(req.query.limit),
-    type: req.query.type as any,
+    type: enumQuery(req.query.type, TransactionType, "type"),
   });
   sendResponse(res, {
     statusCode: httpStatus.OK,
@@ -121,8 +127,8 @@ const getAllWithdrawalsAdmin = catchAsync(async (req: Request, res: Response) =>
   const result = await WalletServices.getAllWithdrawalsAdmin({
     page: Number(req.query.page),
     limit: Number(req.query.limit),
-    status: req.query.status as any,
-    ownerMode: req.query.ownerMode as any,
+    status: enumQuery(req.query.status, WithdrawalStatus, "status"),
+    ownerMode: enumQuery(req.query.ownerMode, WalletMode, "ownerMode"),
   });
   sendResponse(res, {
     statusCode: httpStatus.OK,
@@ -151,7 +157,7 @@ const getAllCodSettlementsAdmin = catchAsync(async (req: Request, res: Response)
   const result = await WalletServices.getAllCodSettlementsAdmin({
     page: Number(req.query.page),
     limit: Number(req.query.limit),
-    status: req.query.status as any,
+    status: enumQuery(req.query.status, CodSettlementStatus, "status"),
   });
   sendResponse(res, {
     statusCode: httpStatus.OK,

@@ -2,10 +2,12 @@ import httpStatus from "http-status";
 import { Types } from "mongoose";
 import AppError from "../../errorHelpers/AppError";
 import { emitToUser } from "../../../socket/socket";
+import { Notify } from "../notification/notification.events";
+import { AppMode } from "../user/user.interface";
 import { CounterServices } from "../counter/counter.service";
 import { DeliveryStatus } from "../delivery/delivery.interface";
 import { Delivery } from "../delivery/delivery.model";
-import { SettlementStatus } from "../order/order.interface";
+import { ISubOrder, SettlementStatus } from "../order/order.interface";
 import { SubOrder } from "../order/sub_order.model";
 import { RiderProfile } from "../rider_profile/rider_profile.model";
 import { SettingsServices } from "../settings/settings.service";
@@ -65,72 +67,61 @@ const recordTransaction = async (params: {
   note?: string;
   createdBy?: Types.ObjectId | string;
 }) => {
-  const wallet = await Wallet.findById(params.walletId);
-  if (!wallet) throw new AppError(httpStatus.NOT_FOUND, "Wallet not found");
-
   const absAmount = Math.abs(params.amount);
 
-  switch (params.type) {
-    case TransactionType.earning_held:
-      wallet.heldBalance += absAmount;
-      wallet.totalEarned += absAmount;
-      break;
+  // field += amount, or field -= amount without going below 0
+  const add = (field: string, amount: number) => ({ $add: [`$${field}`, amount] });
+  const subtract = (field: string, amount: number) => ({
+    $max: [0, { $subtract: [`$${field}`, amount] }],
+  });
 
-    case TransactionType.earning_held_reversed:
-      wallet.heldBalance = Math.max(0, wallet.heldBalance - absAmount);
-      wallet.totalEarned = Math.max(0, wallet.totalEarned - absAmount);
-      break;
+  const changes: Record<TransactionType, Record<string, unknown>> = {
+    [TransactionType.earning_held]: {
+      heldBalance: add("heldBalance", absAmount),
+      totalEarned: add("totalEarned", absAmount),
+    },
+    [TransactionType.earning_held_reversed]: {
+      heldBalance: subtract("heldBalance", absAmount),
+      totalEarned: subtract("totalEarned", absAmount),
+    },
+    [TransactionType.earning_released]: {
+      heldBalance: subtract("heldBalance", absAmount),
+      availableBalance: add("availableBalance", absAmount),
+    },
+    [TransactionType.commission]: { totalCommission: add("totalCommission", absAmount) },
+    [TransactionType.withdrawal]: {
+      availableBalance: subtract("availableBalance", absAmount),
+      totalWithdrawn: add("totalWithdrawn", absAmount),
+    },
+    [TransactionType.withdrawal_fee]: { availableBalance: subtract("availableBalance", absAmount) },
+    [TransactionType.withdrawal_reversal]: {
+      availableBalance: add("availableBalance", absAmount),
+      totalWithdrawn: subtract("totalWithdrawn", absAmount),
+    },
+    [TransactionType.cod_collected]: { cashOwed: add("cashOwed", absAmount) },
+    [TransactionType.cod_settled]: { cashOwed: subtract("cashOwed", absAmount) },
+    [TransactionType.cod_offset]: {
+      cashOwed: subtract("cashOwed", absAmount),
+      availableBalance: subtract("availableBalance", absAmount),
+    },
+    [TransactionType.refund_deduction]: { availableBalance: subtract("availableBalance", absAmount) },
+    [TransactionType.adjustment]: {
+      availableBalance:
+        params.amount >= 0
+          ? add("availableBalance", absAmount)
+          : subtract("availableBalance", absAmount),
+    },
+  };
 
-    case TransactionType.earning_released:
-      wallet.heldBalance = Math.max(0, wallet.heldBalance - absAmount);
-      wallet.availableBalance += absAmount;
-      break;
+  // One atomic update — two transactions on the same wallet at once cannot
+  // overwrite each other (a read-modify-save here would lose one of them)
+  const wallet = await Wallet.findOneAndUpdate(
+    { _id: params.walletId },
+    [{ $set: changes[params.type] }],
+    { returnDocument: "after", updatePipeline: true },
+  );
+  if (!wallet) throw new AppError(httpStatus.NOT_FOUND, "Wallet not found");
 
-    case TransactionType.commission:
-      wallet.totalCommission += absAmount;
-      break;
-
-    case TransactionType.withdrawal:
-      wallet.availableBalance = Math.max(0, wallet.availableBalance - absAmount);
-      wallet.totalWithdrawn += absAmount;
-      break;
-
-    case TransactionType.withdrawal_fee:
-      wallet.availableBalance = Math.max(0, wallet.availableBalance - absAmount);
-      break;
-
-    case TransactionType.withdrawal_reversal:
-      wallet.availableBalance += absAmount;
-      wallet.totalWithdrawn = Math.max(0, wallet.totalWithdrawn - absAmount);
-      break;
-
-    case TransactionType.cod_collected:
-      wallet.cashOwed += absAmount;
-      break;
-
-    case TransactionType.cod_settled:
-      wallet.cashOwed = Math.max(0, wallet.cashOwed - absAmount);
-      break;
-
-    case TransactionType.cod_offset:
-      wallet.cashOwed = Math.max(0, wallet.cashOwed - absAmount);
-      wallet.availableBalance = Math.max(0, wallet.availableBalance - absAmount);
-      break;
-
-    case TransactionType.refund_deduction:
-      wallet.availableBalance = Math.max(0, wallet.availableBalance - absAmount);
-      break;
-
-    case TransactionType.adjustment:
-      if (params.amount >= 0) {
-        wallet.availableBalance += absAmount;
-      } else {
-        wallet.availableBalance = Math.max(0, wallet.availableBalance - absAmount);
-      }
-      break;
-  }
-
-  await wallet.save();
 
   const txn = await WalletTransaction.create({
     walletId: wallet._id,
@@ -149,90 +140,178 @@ const recordTransaction = async (params: {
 };
 
 /**
- * Releases escrow funds for a delivered sub-order.
- * Credits vendor's available balance and partner delivery fee.
+ * Moves a sub-order's vendor earning from held to available and records the
+ * platform commission. Only called once the money is really with the platform:
+ * at delivery for prepaid orders, after the rider's cash is settled for COD.
  */
-const releaseEscrowForSubOrder = async (
-  subOrderId: string,
-  actorId?: string,
-) => {
+const releaseVendorEarning = async (subOrder: ISubOrder, actorId?: string) => {
+  // Claim the sub-order first so a concurrent call cannot release twice
+  const claimed = await SubOrder.findOneAndUpdate(
+    {
+      _id: subOrder._id,
+      settlement: { $in: [SettlementStatus.held, SettlementStatus.awaiting_cod] },
+    },
+    { $set: { settlement: SettlementStatus.released, releasedAt: new Date() } },
+    { returnDocument: "after" },
+  );
+  if (!claimed) return null;
+
+  const vendor = await VendorProfile.findById(claimed.vendorId);
+  if (!vendor) {
+    throw new AppError(httpStatus.NOT_FOUND, `Vendor of ${claimed.subOrderNumber} not found`);
+  }
+  const vendorWallet = await ensureWallet(vendor.userId, WalletMode.vendor);
+
+  await recordTransaction({
+    walletId: vendorWallet._id,
+    type: TransactionType.earning_released,
+    amount: claimed.vendorEarning,
+    subOrderId: claimed._id,
+    note: `Escrow released for sub-order ${claimed.subOrderNumber}`,
+    createdBy: actorId,
+  });
+
+  await recordTransaction({
+    walletId: vendorWallet._id,
+    type: TransactionType.commission,
+    amount: claimed.commissionAmount,
+    subOrderId: claimed._id,
+    note: `Platform commission for sub-order ${claimed.subOrderNumber}`,
+    createdBy: actorId,
+  });
+
+  emitToUser(String(vendor.userId), "wallet:earning_released", {
+    subOrderId: claimed._id,
+    amount: claimed.vendorEarning,
+  });
+  Notify.earningsUpdated(
+    vendor.userId,
+    AppMode.vendor,
+    claimed.vendorEarning,
+    { fr: `commande ${claimed.subOrderNumber} payée`, en: `order ${claimed.subOrderNumber} paid out` },
+    { subOrderId: String(claimed._id) },
+  );
+
+  return claimed;
+};
+
+/**
+ * Called when the final delivery leg is handed over.
+ * - Every rider who completed a leg is paid their leg fee (100%).
+ * - Prepaid order → the vendor earning is released now.
+ * - COD order     → the collecting rider's cashOwed grows by the cash amount and
+ *                   the vendor earning waits (`awaiting_cod`) until the rider's
+ *                   cash settlements cover it (see applyCodRemittance).
+ */
+const releaseEscrowForSubOrder = async (subOrderId: string, actorId?: string) => {
   const subOrder = await SubOrder.findById(subOrderId);
   if (!subOrder) throw new AppError(httpStatus.NOT_FOUND, "Sub-order not found");
 
-  if (subOrder.settlement === "released") {
-    return { subOrder, message: "Escrow already released" };
+  if (subOrder.settlement !== SettlementStatus.held) {
+    return { subOrder, message: `Settlement already ${subOrder.settlement}` };
   }
 
-  // Look up vendor wallet
-  const vendor = await VendorProfile.findById(subOrder.vendorId);
-  if (vendor) {
-    const vendorWallet = await ensureWallet(vendor.userId, WalletMode.vendor);
-
-    // Release vendor earning from held to available
-    await recordTransaction({
-      walletId: vendorWallet._id,
-      type: TransactionType.earning_released,
-      amount: subOrder.vendorEarning,
-      subOrderId: subOrder._id,
-      note: `Escrow released for sub-order ${subOrder.subOrderNumber}`,
-      createdBy: actorId,
-    });
-
-    // Record commission record in vendor wallet ledger
-    await recordTransaction({
-      walletId: vendorWallet._id,
-      type: TransactionType.commission,
-      amount: subOrder.commissionAmount,
-      subOrderId: subOrder._id,
-      note: `Platform commission for sub-order ${subOrder.subOrderNumber}`,
-      createdBy: actorId,
-    });
+  // Claim the sub-order before paying anyone, so a second call pays nothing
+  const isCodPending = Boolean(subOrder.codAmountToCollect && subOrder.codCollectedBy);
+  const claimed = isCodPending
+    ? await SubOrder.findOneAndUpdate(
+        { _id: subOrder._id, settlement: SettlementStatus.held },
+        { $set: { settlement: SettlementStatus.awaiting_cod } },
+        { returnDocument: "after" },
+      )
+    : await releaseVendorEarning(subOrder, actorId);
+  if (!claimed) {
+    return { subOrder, message: "Settlement already handled" };
   }
 
-  // Credit delivery partners for each completed leg of this sub-order
   const legs = await Delivery.find({
     subOrderId: subOrder._id,
     status: DeliveryStatus.delivered,
   });
 
   for (const leg of legs) {
-    if (leg.riderId && leg.fee > 0) {
-      const rider = await RiderProfile.findById(leg.riderId);
-      if (rider) {
-        const riderWallet = await ensureWallet(rider.userId, WalletMode.rider);
+    if (!leg.riderId) continue;
+    const rider = await RiderProfile.findById(leg.riderId);
+    if (!rider) continue;
+    const riderWallet = await ensureWallet(rider.userId, WalletMode.rider);
 
-        // Credit rider delivery fee (100% of delivery fee goes to rider)
-        await recordTransaction({
-          walletId: riderWallet._id,
-          type: TransactionType.earning_released,
-          amount: leg.fee,
-          deliveryId: leg._id,
-          subOrderId: subOrder._id,
-          note: `Delivery fee earned for leg #${leg.legNumber}`,
-          createdBy: actorId,
-        });
+    if (leg.fee > 0) {
+      await recordTransaction({
+        walletId: riderWallet._id,
+        type: TransactionType.earning_released,
+        amount: leg.fee,
+        deliveryId: leg._id,
+        subOrderId: subOrder._id,
+        note: `Delivery fee earned for leg #${leg.legNumber}`,
+        createdBy: actorId,
+      });
+      Notify.earningsUpdated(
+        rider.userId,
+        AppMode.rider,
+        leg.fee,
+        { fr: `livraison ${subOrder.subOrderNumber}`, en: `delivery ${subOrder.subOrderNumber}` },
+        { deliveryId: String(leg._id) },
+      );
+    }
 
-        // If leg was COD and collected cash
-        if (leg.collectsCash && subOrder.codAmountToCollect) {
-          await recordTransaction({
-            walletId: riderWallet._id,
-            type: TransactionType.cod_collected,
-            amount: subOrder.codAmountToCollect,
-            deliveryId: leg._id,
-            subOrderId: subOrder._id,
-            note: `COD cash collected for ${subOrder.subOrderNumber}`,
-            createdBy: actorId,
-          });
-        }
-      }
+    if (leg.collectsCash && subOrder.codAmountToCollect) {
+      await recordTransaction({
+        walletId: riderWallet._id,
+        type: TransactionType.cod_collected,
+        amount: subOrder.codAmountToCollect,
+        deliveryId: leg._id,
+        subOrderId: subOrder._id,
+        note: `COD cash collected for ${subOrder.subOrderNumber}`,
+        createdBy: actorId,
+      });
     }
   }
 
-  subOrder.settlement = SettlementStatus.released;
-  subOrder.releasedAt = new Date();
-  await subOrder.save();
+  if (isCodPending) {
+    return { subOrder: claimed, message: "Vendor earning waits for the rider's COD cash settlement" };
+  }
+  return { subOrder: claimed };
+};
 
-  return { subOrder };
+/**
+ * Allocates cash a rider has handed over (settlement or earnings offset) to their
+ * delivered COD sub-orders, oldest first. Every sub-order whose cash is now fully
+ * covered releases its vendor earning. Returns the sub-orders that were released.
+ */
+const applyCodRemittance = async (
+  riderProfileId: Types.ObjectId | string,
+  amount: number,
+  actorId?: string,
+) => {
+  let remaining = amount;
+  const released: string[] = [];
+
+  const pending = await SubOrder.find({
+    codCollectedBy: riderProfileId,
+    settlement: SettlementStatus.awaiting_cod,
+  }).sort({ codCollectedAt: 1 });
+
+  for (const subOrder of pending) {
+    if (remaining <= 0) break;
+
+    const due = (subOrder.codAmountToCollect ?? 0) - (subOrder.codRemittedAmount ?? 0);
+    if (due <= 0) continue;
+
+    const take = Math.min(due, remaining);
+    remaining -= take;
+
+    subOrder.codRemittedAmount = (subOrder.codRemittedAmount ?? 0) + take;
+    const isCovered = subOrder.codRemittedAmount >= (subOrder.codAmountToCollect ?? 0);
+    if (isCovered) subOrder.codSettledAt = new Date();
+    await subOrder.save();
+
+    if (isCovered) {
+      await releaseVendorEarning(subOrder, actorId);
+      released.push(subOrder.subOrderNumber);
+    }
+  }
+
+  return { released, unallocated: remaining };
 };
 
 /**
@@ -297,7 +376,7 @@ const addPayoutMethod = async (
   const makeDefault = payload.isDefault === true || methods.length === 0;
   if (makeDefault) methods.forEach((m) => (m.isDefault = false));
 
-  methods.push({ ...payload, isDefault: makeDefault } as any);
+  methods.push(methods.create({ ...payload, isDefault: makeDefault }));
   await wallet.save();
   return wallet.payoutMethods;
 };
@@ -428,7 +507,7 @@ const requestWithdrawal = async (
     {
       $inc: {
         availableBalance: -payload.amount,
-        totalWithdrawn: netAmount,
+        totalWithdrawn: payload.amount, // reversal subtracts the same full amount
       },
     },
     { new: true },
@@ -499,27 +578,41 @@ const processWithdrawal = async (
     );
   }
 
-  if (payload.status === "completed") {
-    withdrawal.status = WithdrawalStatus.completed;
-    withdrawal.transactionId = payload.transactionId;
-    withdrawal.receiptImage = payload.receiptImage;
-    withdrawal.processedBy = new Types.ObjectId(adminUserId);
-    withdrawal.processedAt = new Date();
-    await withdrawal.save();
+  // Claim it atomically — two admins processing at once cannot both reverse the funds
+  const processed = await Withdrawal.findOneAndUpdate(
+    { _id: withdrawal._id, status: WithdrawalStatus.pending },
+    {
+      $set: {
+        processedBy: new Types.ObjectId(adminUserId),
+        processedAt: new Date(),
+        ...(payload.status === "completed"
+          ? {
+              status: WithdrawalStatus.completed,
+              transactionId: payload.transactionId,
+              receiptImage: payload.receiptImage,
+            }
+          : {
+              status: WithdrawalStatus.rejected,
+              rejectionReason: payload.rejectionReason || "Rejected by administrator",
+            }),
+      },
+    },
+    { returnDocument: "after" },
+  );
+  if (!processed) {
+    throw new AppError(httpStatus.CONFLICT, "Withdrawal was just processed by someone else");
+  }
 
-    emitToUser(String(withdrawal.ownerId), "withdrawal:completed", {
-      withdrawalId: withdrawal._id,
-      requestNumber: withdrawal.requestNumber,
+  if (payload.status === "completed") {
+    emitToUser(String(processed.ownerId), "withdrawal:completed", {
+      withdrawalId: processed._id,
+      requestNumber: processed.requestNumber,
       transactionId: payload.transactionId,
     });
+    Notify.withdrawalProcessed(processed, "completed");
   } else {
+    const withdrawal = processed;
     // Rejected: reverse funds back to wallet
-    withdrawal.status = WithdrawalStatus.rejected;
-    withdrawal.rejectionReason = payload.rejectionReason || "Rejected by administrator";
-    withdrawal.processedBy = new Types.ObjectId(adminUserId);
-    withdrawal.processedAt = new Date();
-    await withdrawal.save();
-
     await recordTransaction({
       walletId: withdrawal.walletId,
       type: TransactionType.withdrawal_reversal,
@@ -534,13 +627,17 @@ const processWithdrawal = async (
       requestNumber: withdrawal.requestNumber,
       reason: withdrawal.rejectionReason,
     });
+    Notify.withdrawalProcessed(withdrawal, "rejected", withdrawal.rejectionReason);
   }
 
-  return withdrawal;
+  return processed;
 };
 
 /**
- * Rider submits a COD settlement or offsets against earnings.
+ * Rider hands over collected COD cash: by Orange Money / Mobile Money / office
+ * deposit (pending admin confirmation) or by offsetting it against earnings
+ * (instant). Confirmed cash is allocated to the rider's COD sub-orders and
+ * releases the matching vendor earnings.
  */
 const submitCodSettlement = async (
   riderUserId: string,
@@ -556,19 +653,34 @@ const submitCodSettlement = async (
 
   const wallet = await getMyWallet(riderUserId, WalletMode.rider);
 
-  if (payload.method === CodSettlementMethod.earnings_offset) {
-    // Direct offset against available balance
-    if (wallet.availableBalance < payload.amount) {
-      throw new AppError(
-        httpStatus.BAD_REQUEST,
-        `Insufficient available balance for offset. Available: ${wallet.availableBalance} GNF, offset: ${payload.amount} GNF`,
-      );
-    }
+  // Cash already declared but not yet confirmed cannot be declared again
+  const [pendingAgg] = await CodSettlement.aggregate<{ total: number }>([
+    { $match: { riderId: rider._id, status: CodSettlementStatus.pending } },
+    { $group: { _id: null, total: { $sum: "$amount" } } },
+  ]);
+  const outstanding = (wallet.cashOwed || 0) - (pendingAgg?.total ?? 0);
+  if (payload.amount > outstanding) {
+    throw new AppError(
+      httpStatus.BAD_REQUEST,
+      `Settlement amount cannot exceed the cash you still owe (${Math.max(0, outstanding)} GNF)`,
+    );
+  }
 
-    if (wallet.cashOwed < payload.amount) {
+  if (payload.method === CodSettlementMethod.earnings_offset) {
+    // Atomic: both balances must still cover the offset at write time
+    const updated = await Wallet.findOneAndUpdate(
+      {
+        _id: wallet._id,
+        availableBalance: { $gte: payload.amount },
+        cashOwed: { $gte: payload.amount },
+      },
+      { $inc: { availableBalance: -payload.amount, cashOwed: -payload.amount } },
+      { returnDocument: "after" },
+    );
+    if (!updated) {
       throw new AppError(
         httpStatus.BAD_REQUEST,
-        `Offset amount cannot exceed cash owed (${wallet.cashOwed} GNF)`,
+        `Insufficient available balance for offset. Available: ${wallet.availableBalance} GNF`,
       );
     }
 
@@ -581,19 +693,21 @@ const submitCodSettlement = async (
       confirmedAt: new Date(),
     });
 
-    await recordTransaction({
+    await WalletTransaction.create({
       walletId: wallet._id,
       type: TransactionType.cod_offset,
       amount: payload.amount,
+      balanceAfter: updated.availableBalance,
       settlementId: settlement._id,
       note: "Offset COD cash owed against available earnings",
       createdBy: riderUserId,
     });
 
-    return settlement;
+    const allocation = await applyCodRemittance(rider._id, payload.amount, riderUserId);
+    return { ...settlement.toObject(), releasedSubOrders: allocation.released };
   }
 
-  // Other settlement methods: pending admin verification
+  // Other methods wait for an admin to confirm the money arrived
   const settlement = await CodSettlement.create({
     riderId: rider._id,
     amount: payload.amount,
@@ -603,57 +717,61 @@ const submitCodSettlement = async (
     status: CodSettlementStatus.pending,
   });
 
-  return settlement;
+  return { ...settlement.toObject(), releasedSubOrders: [] };
 };
 
 /**
  * Admin confirms or rejects a COD cash settlement from a rider.
+ * Confirming reduces the rider's cashOwed and releases covered vendor earnings.
  */
 const confirmCodSettlement = async (
   adminUserId: string,
   settlementId: string,
   status: "confirmed" | "rejected",
 ) => {
-  const settlement = await CodSettlement.findById(settlementId);
-  if (!settlement) throw new AppError(httpStatus.NOT_FOUND, "Settlement not found");
+  // Claim the pending settlement atomically so it can never be confirmed twice
+  const settlement = await CodSettlement.findOneAndUpdate(
+    { _id: settlementId, status: CodSettlementStatus.pending },
+    {
+      $set: {
+        status:
+          status === "confirmed" ? CodSettlementStatus.confirmed : CodSettlementStatus.rejected,
+        confirmedBy: new Types.ObjectId(adminUserId),
+        confirmedAt: new Date(),
+      },
+    },
+    { returnDocument: "after" },
+  );
 
-  if (settlement.status !== CodSettlementStatus.pending) {
-    throw new AppError(
-      httpStatus.BAD_REQUEST,
-      `Settlement is already ${settlement.status}`,
-    );
+  if (!settlement) {
+    const existing = await CodSettlement.findById(settlementId);
+    if (!existing) throw new AppError(httpStatus.NOT_FOUND, "Settlement not found");
+    throw new AppError(httpStatus.BAD_REQUEST, `Settlement is already ${existing.status}`);
   }
 
-  if (status === "confirmed") {
-    settlement.status = CodSettlementStatus.confirmed;
-    settlement.confirmedBy = new Types.ObjectId(adminUserId);
-    settlement.confirmedAt = new Date();
-    await settlement.save();
+  if (status !== "confirmed") return { ...settlement.toObject(), releasedSubOrders: [] };
 
-    const rider = await RiderProfile.findById(settlement.riderId);
-    if (rider) {
-      const wallet = await getMyWallet(String(rider.userId), WalletMode.rider);
+  const rider = await RiderProfile.findById(settlement.riderId);
+  if (!rider) throw new AppError(httpStatus.NOT_FOUND, "Rider profile not found");
 
-      await recordTransaction({
-        walletId: wallet._id,
-        type: TransactionType.cod_settled,
-        amount: settlement.amount,
-        settlementId: settlement._id,
-        note: `COD cash settlement confirmed (${settlement.method})`,
-        createdBy: adminUserId,
-      });
+  const wallet = await getMyWallet(String(rider.userId), WalletMode.rider);
+  await recordTransaction({
+    walletId: wallet._id,
+    type: TransactionType.cod_settled,
+    amount: settlement.amount,
+    settlementId: settlement._id,
+    note: `COD cash settlement confirmed (${settlement.method})`,
+    createdBy: adminUserId,
+  });
 
-      emitToUser(String(rider.userId), "cod_settlement:confirmed", {
-        settlementId: settlement._id,
-        amount: settlement.amount,
-      });
-    }
-  } else {
-    settlement.status = CodSettlementStatus.rejected;
-    await settlement.save();
-  }
+  const allocation = await applyCodRemittance(rider._id, settlement.amount, adminUserId);
 
-  return settlement;
+  emitToUser(String(rider.userId), "cod_settlement:confirmed", {
+    settlementId: settlement._id,
+    amount: settlement.amount,
+  });
+
+  return { ...settlement.toObject(), releasedSubOrders: allocation.released };
 };
 
 /**
@@ -682,7 +800,7 @@ const getMyTransactions = async (
   ]);
 
   return {
-    meta: { page, limit, total, totalPages: Math.ceil(total / limit) },
+    meta: { page, limit, total, totalPage: Math.ceil(total / limit) },
     data: transactions,
   };
 };
@@ -708,7 +826,7 @@ const getMyWithdrawals = async (
   ]);
 
   return {
-    meta: { page, limit, total, totalPages: Math.ceil(total / limit) },
+    meta: { page, limit, total, totalPage: Math.ceil(total / limit) },
     data: withdrawals,
   };
 };
@@ -737,7 +855,7 @@ const getAllWithdrawalsAdmin = async (query: {
   ]);
 
   return {
-    meta: { page, limit, total, totalPages: Math.ceil(total / limit) },
+    meta: { page, limit, total, totalPage: Math.ceil(total / limit) },
     data: withdrawals,
   };
 };
@@ -764,7 +882,7 @@ const getAllCodSettlementsAdmin = async (query: {
   ]);
 
   return {
-    meta: { page, limit, total, totalPages: Math.ceil(total / limit) },
+    meta: { page, limit, total, totalPage: Math.ceil(total / limit) },
     data: settlements,
   };
 };
@@ -774,6 +892,8 @@ export const WalletServices = {
   getMyWallet,
   recordTransaction,
   releaseEscrowForSubOrder,
+  releaseVendorEarning,
+  applyCodRemittance,
   reverseEscrowForSubOrder,
   addPayoutMethod,
   updatePayoutMethod,

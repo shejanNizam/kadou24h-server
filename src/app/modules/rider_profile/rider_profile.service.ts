@@ -28,6 +28,7 @@ import {
   VEHICLES_BY_PARTNER,
 } from "./rider_profile.interface";
 import { RiderProfile } from "./rider_profile.model";
+import { Notify } from "../notification/notification.events";
 
 interface RiderInput {
   partnerType?: PartnerType;
@@ -284,6 +285,7 @@ const reviewApplication = async (
 
   await syncRole(rider.userId, UserRole.rider, status);
   notifyApplicant(rider.userId, "rider", status, payload.note);
+  Notify.profileReviewed(rider.userId, "rider", status, payload.note);
 
   await AuditLogServices.record({
     actorId,

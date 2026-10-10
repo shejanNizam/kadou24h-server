@@ -40,6 +40,9 @@ export enum SubOrderStatus {
 
 export enum SettlementStatus {
   held = "held",
+  // COD delivered: the rider holds the cash; the vendor is paid once the
+  // rider's cash settlements cover this sub-order (FIFO)
+  awaiting_cod = "awaiting_cod",
   released = "released",
   refunded = "refunded",
   cancelled = "cancelled",
@@ -121,6 +124,8 @@ export interface ISubOrderInitial {
   codAmountToCollect?: number;
   codCollectedBy?: Types.ObjectId;
   codCollectedAt?: Date;
+  codRemittedAmount?: number; // part of codAmountToCollect the rider has handed over
+  codSettledAt?: Date;
   settlement: SettlementStatus;
   releasedAt?: Date;
 }
@@ -154,10 +159,15 @@ export interface ICheckoutItemInput {
   qty: number;
 }
 
+// Address typed in at checkout (location as { lat, lng }, like every API input)
+export interface IAddressSnapshotInput extends Omit<IAddressSnapshot, "location"> {
+  location: { lat: number; lng: number };
+}
+
 export interface ICheckoutSummaryInput {
   items?: ICheckoutItemInput[];
   addressId?: string;
-  addressSnapshot?: IAddressSnapshot;
+  addressSnapshot?: IAddressSnapshotInput;
   deliveryType: DeliveryType;
   destinationStationId?: string;
   specialInstructions?: string;

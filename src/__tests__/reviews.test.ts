@@ -118,9 +118,9 @@ describe("Order & Product Reviews Module", () => {
             }),
           }),
         }),
-      } as any);
+      } as never);
 
-      jest.spyOn(Review, "countDocuments").mockResolvedValue(1 as any);
+      jest.spyOn(Review, "countDocuments").mockResolvedValue(1 as never);
 
       const res = await request(app).get("/api/v1/reviews/vendor/64f1a2b3c4d5e6f7a8b9c0d1");
       expect(res.status).toBe(200);
@@ -139,9 +139,9 @@ describe("Order & Product Reviews Module", () => {
             }),
           }),
         }),
-      } as any);
+      } as never);
 
-      jest.spyOn(Review, "countDocuments").mockResolvedValue(0 as any);
+      jest.spyOn(Review, "countDocuments").mockResolvedValue(0 as never);
 
       const res = await request(app).get("/api/v1/reviews/product/64f1a2b3c4d5e6f7a8b9c0d1");
       expect(res.status).toBe(200);

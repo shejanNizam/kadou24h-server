@@ -1,7 +1,7 @@
 import httpStatus from "http-status";
 import { Types } from "mongoose";
 import AppError from "../../errorHelpers/AppError";
-import { PaymentMethod, PaymentPurpose } from "../payment/payment.interface";
+import { PaymentMethod, PaymentPurpose, PaymentStatus } from "../payment/payment.interface";
 import { PaymentServices } from "../payment/payment.service";
 import { ProfessionalProfile } from "../professional_profile/professional_profile.model";
 import {
@@ -60,7 +60,7 @@ const subscribe = async (
   const startsAt = new Date();
   const endsAt = new Date(Date.now() + plan.durationDays * 24 * 60 * 60 * 1000);
 
-  const isPaid = (payment as any).status === "success";
+  const isPaid = payment.status === PaymentStatus.success;
 
   // 2. Create user subscription (starts pending until gateway confirms payment)
   const subscription = await UserSubscription.create({

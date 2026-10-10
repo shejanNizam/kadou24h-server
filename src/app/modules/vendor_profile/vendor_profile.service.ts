@@ -24,6 +24,7 @@ import { WalletMode } from "../wallet/wallet.interface";
 import { WalletServices } from "../wallet/wallet.service";
 import { IStoreAvailability, IVendorProfile } from "./vendor_profile.interface";
 import { VendorProfile } from "./vendor_profile.model";
+import { Notify } from "../notification/notification.events";
 
 interface StoreInput {
   storeName?: string;
@@ -282,6 +283,7 @@ const reviewApplication = async (
 
   await syncRole(vendor.userId, UserRole.vendor, status);
   notifyApplicant(vendor.userId, "vendor", status, payload.note);
+  Notify.profileReviewed(vendor.userId, "vendor", status, payload.note);
 
   await AuditLogServices.record({
     actorId,

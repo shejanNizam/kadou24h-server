@@ -1,5 +1,6 @@
 import bcrypt from "bcrypt";
 import httpStatus from "http-status";
+import { disconnectUser } from "../../../socket/socket";
 import { configs } from "../../config/index";
 import AppError from "../../errorHelpers/AppError";
 import { QueryBuilder } from "../../utils/QueryBuilder";
@@ -52,6 +53,7 @@ const softDelete = async (user: IUser) => {
     AuthIdentity.deleteMany({ userId: user._id }),
     DeviceToken.deleteMany({ userId: user._id }),
   ]);
+  disconnectUser(String(user._id), "account_deleted");
 };
 
 // ──────────────────────────────
@@ -229,6 +231,7 @@ const updateUserStatus = async (
   user.statusReason = payload.reason;
   if (isLockout) user.tokenVersion += 1; // kicks the user out of every device
   await user.save();
+  if (isLockout) disconnectUser(id, `account_${payload.status}`);
 
   await AuditLogServices.record({
     actorId: actor._id,
@@ -325,6 +328,7 @@ const updateTeamMember = async (
   if (payload.status) member.status = payload.status;
   member.tokenVersion += 1; // new permissions apply from the next login
   await member.save();
+  disconnectUser(id, "permissions_changed");
 
   await AuditLogServices.record({
     actorId: actor._id,

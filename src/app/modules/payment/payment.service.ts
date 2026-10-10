@@ -2,6 +2,8 @@ import httpStatus from "http-status";
 import { Types } from "mongoose";
 import AppError from "../../errorHelpers/AppError";
 import { emitToUser } from "../../../socket/socket";
+import { Notify } from "../notification/notification.events";
+import { AppMode } from "../user/user.interface";
 import { Order } from "../order/order.model";
 import { SubOrder } from "../order/sub_order.model";
 import { PaymentStatus as OrderPaymentStatus } from "../order/order.interface";
@@ -14,7 +16,7 @@ import { UserSubscription } from "../subscription/user_subscription.model";
 import { SubscriptionStatus } from "../subscription/subscription.interface";
 import { ProfessionalProfile } from "../professional_profile/professional_profile.model";
 import { Job } from "../job/job.model";
-import { JobStatus } from "../job/job.interface";
+import { ApplicationStatus, JobStatus } from "../job/job.interface";
 import { JobApplication } from "../job/job_application.model";
 import {
   DisputeStatus,
@@ -120,6 +122,7 @@ const handleWebhook = async (payload: {
   providerRef?: string;
   paymentId?: string;
   status: "success" | "failed";
+  amount?: number;
   raw?: Record<string, unknown>;
 }) => {
   const filter: Record<string, unknown> = {};
@@ -138,6 +141,25 @@ const handleWebhook = async (payload: {
 
   if (payment.status === PaymentStatus.success) {
     return payment; // Already handled idempotently
+  }
+
+  // The gateway must have collected exactly what we asked for
+  if (
+    payload.status === "success" &&
+    payload.amount !== undefined &&
+    payload.amount !== payment.amount
+  ) {
+    payment.status = PaymentStatus.failed;
+    payment.raw = {
+      ...(payload.raw ?? {}),
+      rejectedReason: "amount_mismatch",
+      reportedAmount: payload.amount,
+    };
+    await payment.save();
+    throw new AppError(
+      httpStatus.BAD_REQUEST,
+      `Amount mismatch: expected ${payment.amount} GNF, gateway reported ${payload.amount} GNF`,
+    );
   }
 
   if (payload.status === "success") {
@@ -179,12 +201,35 @@ const handleWebhook = async (payload: {
       }
     }
 
-    // 4. CV Unlock fulfillment
-    if (payment.purpose === PaymentPurpose.cv_unlock) {
-      await JobApplication.updateMany(
-        { applicantId: payment.refId },
-        { $set: { paymentId: payment._id } },
+    // 4. CV unlock: nothing to update — access is checked against this recruiter's
+    //    successful cv_unlock payments (see JobServices.getUnlockedApplicantIds)
+
+    // 5. Paid spontaneous application: only now does it reach the vendor
+    if (payment.purpose === PaymentPurpose.spontaneous_application) {
+      const application = await JobApplication.findOneAndUpdate(
+        { _id: payment.refId, status: ApplicationStatus.pending_payment },
+        { $set: { status: ApplicationStatus.applied } },
+        { returnDocument: "after" },
       );
+      if (application?.targetVendorId) {
+        const vendor = await VendorProfile.findById(application.targetVendorId).select("userId");
+        if (vendor) {
+          emitToUser(String(vendor.userId), "job_application:new", {
+            vendorId: vendor._id,
+            applicationId: application._id,
+            kind: application.kind,
+          });
+          Notify.applicationUpdate(
+            vendor.userId,
+            AppMode.vendor,
+            {
+              fr: "Nouvelle candidature spontanée reçue.",
+              en: "New spontaneous application received.",
+            },
+            { applicationId: String(application._id) },
+          );
+        }
+      }
     }
 
     emitToUser(String(payment.payerId), "payment:successful", {
@@ -395,7 +440,7 @@ const getMyPayments = async (
   ]);
 
   return {
-    meta: { page, limit, total, totalPages: Math.ceil(total / limit) },
+    meta: { page, limit, total, totalPage: Math.ceil(total / limit) },
     data: payments,
   };
 };
@@ -423,7 +468,7 @@ const getMyDisputes = async (
   ]);
 
   return {
-    meta: { page, limit, total, totalPages: Math.ceil(total / limit) },
+    meta: { page, limit, total, totalPage: Math.ceil(total / limit) },
     data: disputes,
   };
 };
@@ -454,7 +499,7 @@ const getAllPaymentsAdmin = async (query: {
   ]);
 
   return {
-    meta: { page, limit, total, totalPages: Math.ceil(total / limit) },
+    meta: { page, limit, total, totalPage: Math.ceil(total / limit) },
     data: payments,
   };
 };
@@ -482,7 +527,7 @@ const getAllRefundsAdmin = async (query: {
   ]);
 
   return {
-    meta: { page, limit, total, totalPages: Math.ceil(total / limit) },
+    meta: { page, limit, total, totalPage: Math.ceil(total / limit) },
     data: refunds,
   };
 };
@@ -510,7 +555,7 @@ const getAllDisputesAdmin = async (query: {
   ]);
 
   return {
-    meta: { page, limit, total, totalPages: Math.ceil(total / limit) },
+    meta: { page, limit, total, totalPage: Math.ceil(total / limit) },
     data: disputes,
   };
 };

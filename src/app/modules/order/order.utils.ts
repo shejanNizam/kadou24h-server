@@ -1,0 +1,143 @@
+/**
+ * Helpers shared by the order services.
+ */
+import httpStatus from "http-status";
+import { QueryFilter, Types } from "mongoose";
+import AppError from "../../errorHelpers/AppError";
+import { DeliveryStatus } from "../delivery/delivery.interface";
+import { Delivery } from "../delivery/delivery.model";
+import { CancelledBy, Notify } from "../notification/notification.events";
+import { Product } from "../product/product.model";
+import { RiderProfile } from "../rider_profile/rider_profile.model";
+import { WalletServices } from "../wallet/wallet.service";
+import { ISubOrder, OrderStatus, SubOrderStatus } from "./order.interface";
+import { Order } from "./order.model";
+import { SubOrder } from "./sub_order.model";
+
+/**
+ * Helper to derive parent Order status from an array of SubOrders.
+ */
+const deriveOrderStatus = (statuses: SubOrderStatus[]): OrderStatus => {
+  if (statuses.length === 0) return OrderStatus.active;
+  const finished = statuses.every(
+    (s) => s === SubOrderStatus.delivered || s === SubOrderStatus.cancelled,
+  );
+  if (!finished) return OrderStatus.active;
+
+  if (statuses.every((s) => s === SubOrderStatus.cancelled)) return OrderStatus.cancelled;
+  if (statuses.every((s) => s === SubOrderStatus.delivered)) return OrderStatus.completed;
+  return OrderStatus.partially_cancelled;
+};
+
+/** Re-computes and stores the parent order status from its sub-orders. */
+const syncOrderStatus = async (orderId: Types.ObjectId | string) => {
+  const subOrders = await SubOrder.find({ orderId }).select("status").lean();
+  const status = deriveOrderStatus(subOrders.map((s) => s.status));
+  await Order.updateOne({ _id: orderId }, { status });
+  return status;
+};
+
+// Legs that have not reached the parcel yet
+const NOT_PICKED_UP_LEGS = [
+  DeliveryStatus.pending_assignment,
+  DeliveryStatus.assigned,
+  DeliveryStatus.accepted,
+  DeliveryStatus.going_to_pickup,
+];
+// Legs a rider has accepted — counted in the rider's activeDeliveryCount
+const ACTIVE_RIDER_LEGS = [
+  DeliveryStatus.accepted,
+  DeliveryStatus.going_to_pickup,
+  DeliveryStatus.picked_up,
+  DeliveryStatus.in_transit,
+];
+
+/**
+ * Cancels one sub-order — the single path used by customer, vendor and admin.
+ * The status change is an atomic claim, so two simultaneous cancels cannot
+ * restore stock or reverse escrow twice. Then: stock back (unless the parcel
+ * is already out with a rider), escrow reversed, open delivery legs cancelled,
+ * riders freed, parent order re-synced, other parties notified.
+ */
+const cancelSubOrder = async (opts: {
+  filter: QueryFilter<ISubOrder>;
+  allowedFrom: SubOrderStatus[];
+  by: CancelledBy;
+  reason: string;
+  actorUserId: string;
+  syncParent?: boolean;
+}) => {
+  const now = new Date();
+  const previous = await SubOrder.findOneAndUpdate(
+    { ...opts.filter, status: { $in: opts.allowedFrom } },
+    {
+      $set: {
+        status: SubOrderStatus.cancelled,
+        cancellation: { by: opts.by, reason: opts.reason, at: now },
+      },
+      $push: {
+        timeline: {
+          status: SubOrderStatus.cancelled,
+          note: `Cancelled by ${opts.by}: ${opts.reason}`,
+          byUserId: new Types.ObjectId(opts.actorUserId),
+          at: now,
+        },
+      },
+    },
+    { returnDocument: "before" },
+  );
+  if (!previous) {
+    throw new AppError(
+      httpStatus.CONFLICT,
+      "This order can no longer be cancelled — it was just updated. Please refresh.",
+    );
+  }
+
+  const parcelWithRider = previous.status === SubOrderStatus.in_delivery;
+  if (!parcelWithRider) {
+    for (const item of previous.items) {
+      if (!item.removed) {
+        await Product.updateOne(
+          { _id: item.productId },
+          { $inc: { stockQty: item.qty, soldCount: -item.qty } },
+        );
+      }
+    }
+  }
+
+  await WalletServices.reverseEscrowForSubOrder(String(previous._id), opts.actorUserId);
+
+  const openLegStatuses = parcelWithRider
+    ? [...NOT_PICKED_UP_LEGS, DeliveryStatus.picked_up, DeliveryStatus.in_transit]
+    : NOT_PICKED_UP_LEGS;
+  const openLegs = await Delivery.find({
+    subOrderId: previous._id,
+    status: { $in: openLegStatuses },
+  }).select("status riderId");
+
+  for (const leg of openLegs) {
+    const claimed = await Delivery.updateOne(
+      { _id: leg._id, status: leg.status },
+      { status: DeliveryStatus.cancelled },
+    );
+    if (claimed.modifiedCount && leg.riderId && ACTIVE_RIDER_LEGS.includes(leg.status)) {
+      await RiderProfile.updateOne(
+        { _id: leg.riderId, activeDeliveryCount: { $gt: 0 } },
+        { $inc: { activeDeliveryCount: -1 } },
+      );
+    }
+  }
+
+  if (opts.syncParent !== false) await syncOrderStatus(previous.orderId);
+
+  const riderIds = openLegs.flatMap((leg) => (leg.riderId ? [leg.riderId] : []));
+  Notify.orderCancelled(previous, opts.by, opts.reason, riderIds);
+
+  return SubOrder.findById(previous._id);
+};
+
+export {
+  deriveOrderStatus,
+  syncOrderStatus,
+  cancelSubOrder,
+};

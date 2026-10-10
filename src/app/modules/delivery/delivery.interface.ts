@@ -68,7 +68,6 @@ export interface IAvailableRider {
   _id: string;
   userId: string;
   name: string;
-  phone?: string;
   avatar?: string;
   partnerType: string;
   vehicleType: string;

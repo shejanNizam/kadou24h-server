@@ -82,6 +82,7 @@ export enum ApplicationKind {
 }
 
 export enum ApplicationStatus {
+  pending_payment = "pending_payment", // paid spontaneous application, not yet paid — hidden from the vendor
   applied = "applied",
   under_review = "under_review",
   shortlisted = "shortlisted",

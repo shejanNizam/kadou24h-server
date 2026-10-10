@@ -217,7 +217,7 @@ export const syncRole = async (
   }
 };
 
-/** Real-time heads-up to the applicant (push notifications arrive in Step 7). */
+/** Real-time heads-up to the applicant (the stored/pushed notification is sent by the caller). */
 export const notifyApplicant = (
   userId: Types.ObjectId | string,
   kind: "vendor" | "rider",

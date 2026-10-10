@@ -1,10 +1,13 @@
 import httpStatus from "http-status";
-import { Types } from "mongoose";
+import { QueryFilter, Types } from "mongoose";
 import AppError from "../../errorHelpers/AppError";
 import { Category } from "../category/category.model";
 import { Favorite } from "../favorite/favorite.model";
 import { ApprovalStatus } from "../profile_common/profile.common";
 import { ADMIN_ROLES } from "../user/user.interface";
+
+const isAdminRole = (roles: string[]) =>
+  roles.some((r) => (ADMIN_ROLES as string[]).includes(r));
 import { VendorProfile } from "../vendor_profile/vendor_profile.model";
 import { IProduct, IProductFilterQuery, ProductApprovalStatus } from "./product.interface";
 import { Product } from "./product.model";
@@ -25,7 +28,7 @@ const createProduct = async (
   userId: string,
   userRoles: string[],
 ): Promise<IProduct> => {
-  const isAdmin = userRoles.some((r) => ADMIN_ROLES.includes(r as any));
+  const isAdmin = isAdminRole(userRoles);
   let vendorProfile;
 
   if (isAdmin) {
@@ -106,7 +109,7 @@ const updateProduct = async (
   userId: string,
   userRoles: string[],
 ): Promise<IProduct> => {
-  const isAdmin = userRoles.some((r) => ADMIN_ROLES.includes(r as any));
+  const isAdmin = isAdminRole(userRoles);
   const product = await Product.findOne({ _id: productId, isDeleted: false });
 
   if (!product) {
@@ -169,7 +172,7 @@ const deleteProduct = async (
   userId: string,
   userRoles: string[],
 ): Promise<void> => {
-  const isAdmin = userRoles.some((r) => ADMIN_ROLES.includes(r as any));
+  const isAdmin = isAdminRole(userRoles);
   const product = await Product.findOne({ _id: productId, isDeleted: false });
 
   if (!product) {
@@ -245,7 +248,7 @@ const getPublicProducts = async (filters: IProductFilterQuery) => {
   const limit = Math.min(50, Math.max(1, Number(filters.limit) || 10));
   const skip = (page - 1) * limit;
 
-  const conditions: Record<string, any> = {
+  const conditions: QueryFilter<IProduct> = {
     isDeleted: false,
     approvalStatus: ProductApprovalStatus.approved,
   };
@@ -356,7 +359,7 @@ const getVendorProducts = async (
   const limit = Math.min(50, Math.max(1, Number(query.limit) || 10));
   const skip = (page - 1) * limit;
 
-  const conditions: Record<string, any> = {
+  const conditions: QueryFilter<IProduct> = {
     vendorId: vendorProfile._id,
     isDeleted: false,
   };
@@ -396,13 +399,16 @@ const getAdminProducts = async (query: Record<string, string>) => {
   const limit = Math.min(50, Math.max(1, Number(query.limit) || 10));
   const skip = (page - 1) * limit;
 
-  const conditions: Record<string, any> = { isDeleted: false };
+  const conditions: QueryFilter<IProduct> = { isDeleted: false };
 
   if (query.vendorId && Types.ObjectId.isValid(query.vendorId)) {
     conditions.vendorId = new Types.ObjectId(query.vendorId);
   }
-  if (query.approvalStatus && Object.values(ProductApprovalStatus).includes(query.approvalStatus as any)) {
-    conditions.approvalStatus = query.approvalStatus;
+  const approvalStatus = Object.values(ProductApprovalStatus).find(
+    (s) => s === query.approvalStatus,
+  );
+  if (approvalStatus) {
+    conditions.approvalStatus = approvalStatus;
   }
   if (query.categoryId && Types.ObjectId.isValid(query.categoryId)) {
     conditions.categoryId = new Types.ObjectId(query.categoryId);

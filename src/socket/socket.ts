@@ -6,6 +6,12 @@ import { createClient } from "redis";
 import { Server, Socket } from "socket.io";
 import { configs } from "../app/config";
 import { verifyToken } from "../app/utils/jwt";
+import {
+  canJoinConversation,
+  canWatchDelivery,
+  isAssignedRider,
+  loadSocketUser,
+} from "./socketAuth";
 
 interface AuthSocket extends Socket {
   user: JwtPayload;
@@ -39,29 +45,44 @@ export const initSocket = async (httpServer: HTTPServer): Promise<Server> => {
   io.adapter(createAdapter(pubClient, subClient));
   console.log("Socket.io Redis adapter connected.");
 
-  // JWT authentication middleware — runs before every connection
-  io.use((socket: Socket, next) => {
+  // Authentication — same rules as the REST checkAuth: valid JWT, account exists,
+  // not suspended / banned, and the token was not revoked (tokenVersion)
+  io.use(async (socket: Socket, next) => {
     const token = (socket as AuthSocket).handshake.auth?.token as string | undefined;
     if (!token) return next(new Error("Authentication required"));
 
+    let decoded: JwtPayload;
     try {
-      const decoded = verifyToken(token, configs.jwt_access_secret) as JwtPayload;
-      (socket as AuthSocket).user = decoded;
+      decoded = verifyToken(token, configs.jwt_access_secret) as JwtPayload;
+    } catch {
+      return next(new Error("Invalid or expired token"));
+    }
+
+    try {
+      const user = await loadSocketUser(String(decoded._id), decoded.tokenVersion ?? 0);
+      if (!user) return next(new Error("Session expired or account unavailable"));
+      (socket as AuthSocket).user = { ...decoded, roles: user.roles };
       next();
     } catch {
-      next(new Error("Invalid or expired token"));
+      next(new Error("Authentication failed"));
     }
   });
 
   io.on("connection", (socket: Socket) => {
-    const { _id: userId } = (socket as AuthSocket).user;
+    const { _id: userId, roles = [] } = (socket as AuthSocket).user;
+    // Deliveries this socket may broadcast location for (checked once, then cached)
+    const riderDeliveries = new Set<string>();
 
     // Every user joins their personal room on connect — used to push targeted events
     socket.join(`user:${userId}`);
 
-    // Join a conversation room to receive messages and typing indicators for that chat
-    socket.on("join_conversation", (conversationId: string) => {
-      socket.join(`conv:${conversationId}`);
+    // Conversation room: participants only
+    socket.on("join_conversation", async (conversationId: string) => {
+      if (await canJoinConversation(String(userId), String(conversationId)).catch(() => false)) {
+        socket.join(`conv:${conversationId}`);
+      } else {
+        socket.emit("error_message", { event: "join_conversation", message: "Not allowed" });
+      }
     });
 
     socket.on("leave_conversation", (conversationId: string) => {
@@ -83,9 +104,16 @@ export const initSocket = async (httpServer: HTTPServer): Promise<Server> => {
         .emit("message_read", { conversationId, userId, readAt: new Date() });
     });
 
-    // Delivery tracking room
-    socket.on("join_delivery", (deliveryId: string) => {
-      socket.join(`delivery:${deliveryId}`);
+    // Delivery tracking room: customer, store owner, riders of the leg chain, admins
+    socket.on("join_delivery", async (deliveryId: string) => {
+      const allowed = await canWatchDelivery(String(userId), roles, String(deliveryId)).catch(
+        () => false,
+      );
+      if (allowed) {
+        socket.join(`delivery:${deliveryId}`);
+      } else {
+        socket.emit("error_message", { event: "join_delivery", message: "Not allowed" });
+      }
     });
 
     socket.on("leave_delivery", (deliveryId: string) => {
@@ -94,7 +122,7 @@ export const initSocket = async (httpServer: HTTPServer): Promise<Server> => {
 
     socket.on(
       "rider_location",
-      ({
+      async ({
         deliveryId,
         lat,
         lng,
@@ -105,9 +133,14 @@ export const initSocket = async (httpServer: HTTPServer): Promise<Server> => {
         lng: number;
         heading?: number;
       }) => {
-        socket
-          .to(`delivery:${deliveryId}`)
-          .emit("rider:location_updated", { deliveryId, lat, lng, heading });
+        const id = String(deliveryId);
+        if (!riderDeliveries.has(id)) {
+          // Only the assigned rider may broadcast — prevents fake locations
+          if (!(await isAssignedRider(String(userId), id).catch(() => false))) return;
+          riderDeliveries.add(id);
+        }
+        if (typeof lat !== "number" || typeof lng !== "number") return;
+        socket.to(`delivery:${id}`).emit("rider:location_updated", { deliveryId: id, lat, lng, heading });
       },
     );
 
@@ -125,10 +158,26 @@ export const getIO = (): Server => {
 };
 
 /**
+ * Closes every live socket of a user. Call it wherever sessions are revoked
+ * (ban / suspension, logout everywhere, password change or reset, deletion),
+ * so the user stops receiving real-time events immediately. The app reconnects
+ * with a fresh token if it still has one.
+ */
+export const disconnectUser = (userId: string, reason = "session_revoked"): void => {
+  try {
+    const room = getIO().in(`user:${userId}`);
+    room.emit("session:revoked", { reason });
+    room.disconnectSockets(true);
+  } catch {
+    // socket not yet initialized, skip silently
+  }
+};
+
+/**
  * Emit an event to a specific user regardless of which socket they're connected from.
  * Safe to call before socket init — silently skips if not ready.
  */
-export const emitToUser = (userId: string, event: string, data: unknown): void => {
+export const emitToUser =(userId: string, event: string, data: unknown): void => {
   try {
     getIO().to(`user:${userId}`).emit(event, data);
   } catch {

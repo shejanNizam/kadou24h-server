@@ -3,6 +3,7 @@ import httpStatus from "http-status";
 import catchAsync from "../../utils/catchAsync";
 import sendResponse from "../../utils/sendResponse";
 import { ProductServices } from "./product.service";
+import { enumQuery, flatQuery } from "../../utils/queryParams";
 
 const createProduct = catchAsync(async (req: Request, res: Response) => {
   const result = await ProductServices.createProduct(req.body, req.user._id, req.user.roles);
@@ -65,12 +66,13 @@ const reviewProductApproval = catchAsync(async (req: Request, res: Response) => 
 });
 
 const getPublicProducts = catchAsync(async (req: Request, res: Response) => {
-  const result = await ProductServices.getPublicProducts(req.query as any);
+  const result = await ProductServices.getPublicProducts(flatQuery(req.query));
   sendResponse(res, {
     statusCode: httpStatus.OK,
     success: true,
     message: "Products retrieved successfully!",
-    data: result,
+    data: result.data,
+    meta: result.meta,
   });
 });
 
@@ -89,22 +91,27 @@ const getProductByIdOrSlug = catchAsync(async (req: Request, res: Response) => {
 });
 
 const getVendorProducts = catchAsync(async (req: Request, res: Response) => {
-  const result = await ProductServices.getVendorProducts(req.user._id, req.query as any);
+  const result = await ProductServices.getVendorProducts(req.user._id, {
+    ...flatQuery(req.query),
+    statusTab: enumQuery(req.query.statusTab, ["all", "active", "out_of_stock"] as const, "statusTab"),
+  });
   sendResponse(res, {
     statusCode: httpStatus.OK,
     success: true,
     message: "Vendor products retrieved successfully!",
-    data: result,
+    data: result.data,
+    meta: result.meta,
   });
 });
 
 const getAdminProducts = catchAsync(async (req: Request, res: Response) => {
-  const result = await ProductServices.getAdminProducts(req.query as any);
+  const result = await ProductServices.getAdminProducts(flatQuery(req.query));
   sendResponse(res, {
     statusCode: httpStatus.OK,
     success: true,
     message: "Admin products retrieved successfully!",
-    data: result,
+    data: result.data,
+    meta: { ...result.meta, summary: result.summary },
   });
 });
 

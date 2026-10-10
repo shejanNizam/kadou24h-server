@@ -30,7 +30,8 @@ const getMyOrders = catchAsync(async (req: Request, res: Response) => {
     statusCode: httpStatus.OK,
     success: true,
     message: "My orders retrieved successfully",
-    data: result,
+    data: result.data,
+    meta: result.meta,
   });
 });
 
@@ -71,7 +72,8 @@ const getVendorSubOrders = catchAsync(async (req: Request, res: Response) => {
     statusCode: httpStatus.OK,
     success: true,
     message: "Vendor sub-orders retrieved successfully",
-    data: result,
+    data: result.data,
+    meta: result.meta,
   });
 });
 
@@ -144,7 +146,8 @@ const getAllOrdersAdmin = catchAsync(async (req: Request, res: Response) => {
     statusCode: httpStatus.OK,
     success: true,
     message: "All orders retrieved successfully",
-    data: result,
+    data: result.data,
+    meta: result.meta,
   });
 });
 

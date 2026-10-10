@@ -28,7 +28,7 @@ describe("Admin Panel, Platform Settings, Support Tickets & Ads (Step 9)", () =>
       jest.spyOn(Counter, "findOneAndUpdate").mockImplementation((async () => {
         seqCounter += 1;
         return { seq: seqCounter };
-      }) as any);
+      }) as never);
 
       const code1 = await CounterServices.nextCode("ticket");
       const code2 = await CounterServices.nextCode("ticket");
@@ -178,7 +178,7 @@ describe("Admin Panel, Platform Settings, Support Tickets & Ads (Step 9)", () =>
             },
           ],
         }),
-      } as any);
+      } as never);
 
       const res = await request(app).get("/api/v1/advertisements");
       expect(res.status).toBe(200);

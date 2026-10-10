@@ -137,6 +137,7 @@ describe("Jobs, Worker Profiles & CV Module (Step 7)", () => {
         "expired",
       ]);
       expect(Object.values(ApplicationStatus)).toEqual([
+        "pending_payment",
         "applied",
         "under_review",
         "shortlisted",
@@ -285,7 +286,7 @@ describe("Jobs, Worker Profiles & CV Module (Step 7)", () => {
         .mockResolvedValue({
           meta: { page: 1, limit: 20, total: 0, totalPages: 0 },
           data: [],
-        } as any);
+        } as never);
 
       const res = await request(app).get(
         "/api/v1/professional-profiles/workers",
@@ -298,7 +299,7 @@ describe("Jobs, Worker Profiles & CV Module (Step 7)", () => {
       jest.spyOn(JobServices, "searchJobs").mockResolvedValue({
         meta: { page: 1, limit: 20, total: 0, totalPages: 0 },
         data: [],
-      } as any);
+      } as never);
 
       const res = await request(app).get("/api/v1/jobs");
       expect(res.status).toBe(200);
@@ -308,7 +309,7 @@ describe("Jobs, Worker Profiles & CV Module (Step 7)", () => {
     it("GET /api/v1/subscriptions/plans is accessible without auth", async () => {
       jest
         .spyOn(SubscriptionServices, "getActivePlans")
-        .mockResolvedValue([] as any);
+        .mockResolvedValue([] as never);
 
       const res = await request(app).get("/api/v1/subscriptions/plans");
       expect(res.status).toBe(200);

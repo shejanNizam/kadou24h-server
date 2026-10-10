@@ -3,14 +3,20 @@ import { Types } from "mongoose";
 import AppError from "../../errorHelpers/AppError";
 import { toGeoPoint } from "../../utils/commonSchemas";
 import { emitToUser } from "../../../socket/socket";
-import { PaymentMethod, PaymentPurpose } from "../payment/payment.interface";
+import { Notify } from "../notification/notification.events";
+import { AppMode } from "../user/user.interface";
+import { PaymentMethod, PaymentPurpose, PaymentStatus } from "../payment/payment.interface";
+import { Payment } from "../payment/payment.model";
 import { PaymentServices } from "../payment/payment.service";
 import { ProfessionalProfile } from "../professional_profile/professional_profile.model";
+import { ApprovalStatus } from "../profile_common/profile.common";
+import { User } from "../user/user.model";
 import { VendorProfile } from "../vendor_profile/vendor_profile.model";
 import {
   ApplicationKind,
   ApplicationStatus,
   IJob,
+  IJobApplication,
   JobStatus,
 } from "./job.interface";
 import { Job } from "./job.model";
@@ -125,7 +131,7 @@ const publishJob = async (
     method: paymentMethod,
   });
 
-  const isPaid = (payment as any).status === "success";
+  const isPaid = payment.status === PaymentStatus.success;
 
   // 2. Set job to published for 30 days only if payment is confirmed; otherwise pending_payment
   job.status = isPaid ? JobStatus.published : JobStatus.pending_payment;
@@ -211,7 +217,7 @@ const searchJobs = async (query: {
   ]);
 
   return {
-    meta: { page, limit, total, totalPages: Math.ceil(total / limit) },
+    meta: { page, limit, total, totalPage: Math.ceil(total / limit) },
     data: jobs,
   };
 };
@@ -297,6 +303,15 @@ const applyToJob = async (
     applicationId: application._id,
     matchScore,
   });
+  Notify.applicationUpdate(
+    job.postedBy,
+    job.postedByMode as AppMode,
+    {
+      fr: `Nouvelle candidature pour « ${job.title} » (correspondance ${matchScore} %).`,
+      en: `New application for "${job.title}" (${matchScore}% match).`,
+    },
+    { jobId: String(job._id), applicationId: String(application._id) },
+  );
 
   return application;
 };
@@ -313,16 +328,16 @@ const applySpontaneous = async (
     paymentMethod: PaymentMethod;
   },
 ) => {
-  const vendor = await VendorProfile.findById(payload.targetVendorId);
+  const vendor = await VendorProfile.findOne({
+    _id: payload.targetVendorId,
+    approvalStatus: ApprovalStatus.approved,
+  });
   if (!vendor) throw new AppError(httpStatus.NOT_FOUND, "Vendor not found");
+  if (String(vendor.userId) === applicantId) {
+    throw new AppError(httpStatus.BAD_REQUEST, "You cannot apply to your own store");
+  }
 
   const profile = await ProfessionalProfile.findOne({ userId: applicantId });
-
-  const payment = await PaymentServices.initiatePayment(applicantId, {
-    purpose: PaymentPurpose.spontaneous_application,
-    refId: String(vendor._id),
-    method: payload.paymentMethod,
-  });
 
   const cvSnapshot = {
     file: payload.resume || profile?.uploadedResume || profile?.generatedCv,
@@ -331,23 +346,131 @@ const applySpontaneous = async (
     summary: payload.coverNote || profile?.summary,
   };
 
+  // Hidden from the vendor until the fee is paid (the payment webhook flips it to "applied")
   const application = await JobApplication.create({
     kind: ApplicationKind.spontaneous,
     targetVendorId: vendor._id,
     applicantId: new Types.ObjectId(applicantId),
     cvSnapshot,
     matchScore: 100,
-    status: ApplicationStatus.applied,
-    paymentId: payment._id,
+    status: ApplicationStatus.pending_payment,
   });
 
-  emitToUser(String(vendor.userId), "job_application:new", {
-    vendorId: vendor._id,
-    applicationId: application._id,
-    kind: ApplicationKind.spontaneous,
-  });
+  try {
+    const payment = await PaymentServices.initiatePayment(applicantId, {
+      purpose: PaymentPurpose.spontaneous_application,
+      refId: String(application._id),
+      contextId: String(vendor._id),
+      method: payload.paymentMethod,
+    });
+    application.paymentId = payment._id as Types.ObjectId;
+    await application.save();
+    return { application, payment };
+  } catch (error) {
+    await application.deleteOne();
+    throw error;
+  }
+};
 
-  return { application, payment };
+// ──────────────────────────────
+// Recruiter side — CV unlock paywall
+// ──────────────────────────────
+
+/** Applicants this recruiter has paid to unlock (successful cv_unlock payments). */
+const getUnlockedApplicantIds = async (recruiterId: string, applicantIds: string[]) => {
+  if (applicantIds.length === 0) return new Set<string>();
+  const payments = await Payment.find({
+    payerId: recruiterId,
+    purpose: PaymentPurpose.cv_unlock,
+    status: PaymentStatus.success,
+    refId: { $in: applicantIds },
+  }).select("refId");
+  return new Set(payments.map((p) => String(p.refId)));
+};
+
+/**
+ * What a recruiter may see of applicants: profile, skills and match score always;
+ * phone, email and the CV file only after paying the CV-unlock fee.
+ */
+const withPaywall = async (recruiterId: string, applications: IJobApplication[]) => {
+  const applicantIds = [...new Set(applications.map((a) => String(a.applicantId)))];
+  const unlocked = await getUnlockedApplicantIds(recruiterId, applicantIds);
+
+  const users = await User.find({ _id: { $in: applicantIds } }).select("name avatar phone email");
+  const userById = new Map(users.map((u) => [String(u._id), u]));
+
+  return applications.map((application) => {
+    const obj = application.toObject();
+    const id = String(application.applicantId);
+    const user = userById.get(id);
+    const isUnlocked = unlocked.has(id);
+
+    return {
+      ...obj,
+      applicantId: id,
+      applicant: {
+        _id: id,
+        name: user?.name,
+        avatar: user?.avatar,
+        ...(isUnlocked && { phone: user?.phone, email: user?.email }),
+      },
+      cvSnapshot: isUnlocked ? obj.cvSnapshot : { ...obj.cvSnapshot, file: undefined },
+      isCvUnlocked: isUnlocked,
+    };
+  });
+};
+
+/**
+ * Throws unless the recruiter owns the application: the job poster for a job
+ * application, or the store owner for a spontaneous one. Returns the job, if any.
+ */
+const assertCanManageApplication = async (recruiterId: string, application: IJobApplication) => {
+  if (application.jobId) {
+    const job = await Job.findOne({ _id: application.jobId, postedBy: recruiterId });
+    if (!job) throw new AppError(httpStatus.FORBIDDEN, "Not authorized to manage this application");
+    return job;
+  }
+
+  const vendor = await VendorProfile.findOne({ userId: recruiterId }).select("_id");
+  if (!vendor || !application.targetVendorId?.equals(vendor._id as Types.ObjectId)) {
+    throw new AppError(httpStatus.FORBIDDEN, "Not authorized to manage this application");
+  }
+  if (application.status === ApplicationStatus.pending_payment) {
+    throw new AppError(httpStatus.NOT_FOUND, "Application not found");
+  }
+  return null;
+};
+
+/** Vendor's inbox of paid spontaneous applications. */
+const getReceivedApplications = async (
+  vendorUserId: string,
+  query: { page?: number; limit?: number; status?: ApplicationStatus },
+) => {
+  const vendor = await VendorProfile.findOne({ userId: vendorUserId }).select("_id");
+  if (!vendor) throw new AppError(httpStatus.FORBIDDEN, "Vendor profile not found");
+
+  const page = Math.max(1, Number(query.page) || 1);
+  const limit = Math.max(1, Math.min(50, Number(query.limit) || 20));
+
+  const filter: Record<string, unknown> = {
+    targetVendorId: vendor._id,
+    status: query.status && query.status !== ApplicationStatus.pending_payment
+      ? query.status
+      : { $ne: ApplicationStatus.pending_payment },
+  };
+
+  const [applications, total] = await Promise.all([
+    JobApplication.find(filter)
+      .sort({ createdAt: -1 })
+      .skip((page - 1) * limit)
+      .limit(limit),
+    JobApplication.countDocuments(filter),
+  ]);
+
+  return {
+    meta: { page, limit, total, totalPage: Math.ceil(total / limit) },
+    data: await withPaywall(vendorUserId, applications),
+  };
 };
 
 /**
@@ -372,17 +495,14 @@ const getJobApplicants = async (
     query.sortBy === "match" ? { matchScore: -1, createdAt: -1 } : { createdAt: -1 };
 
   const [applications, total] = await Promise.all([
-    JobApplication.find(filter)
-      .populate("applicantId", "name avatar phone email")
-      .sort(sort)
-      .skip(skip)
-      .limit(limit),
+    JobApplication.find(filter).sort(sort).skip(skip).limit(limit),
     JobApplication.countDocuments(filter),
   ]);
 
   return {
-    meta: { page, limit, total, totalPages: Math.ceil(total / limit) },
-    data: applications,
+    meta: { page, limit, total, totalPage: Math.ceil(total / limit) },
+    // Contact details and CV file only for unlocked candidates
+    data: await withPaywall(recruiterId, applications),
   };
 };
 
@@ -397,14 +517,14 @@ const updateApplicationStatus = async (
   const application = await JobApplication.findById(applicationId);
   if (!application) throw new AppError(httpStatus.NOT_FOUND, "Application not found");
 
-  if (application.jobId) {
-    const job = await Job.findOne({ _id: application.jobId, postedBy: recruiterId });
-    if (!job) throw new AppError(httpStatus.FORBIDDEN, "Not authorized to manage this application");
-
-    if (status === ApplicationStatus.shortlisted && application.status !== ApplicationStatus.shortlisted) {
-      job.stats.shortlisted = (job.stats.shortlisted || 0) + 1;
-      await job.save();
-    }
+  const job = await assertCanManageApplication(recruiterId, application);
+  if (
+    job &&
+    status === ApplicationStatus.shortlisted &&
+    application.status !== ApplicationStatus.shortlisted
+  ) {
+    job.stats.shortlisted = (job.stats.shortlisted || 0) + 1;
+    await job.save();
   }
 
   application.status = status;
@@ -414,6 +534,21 @@ const updateApplicationStatus = async (
     applicationId: application._id,
     status,
   });
+  const statusText: Partial<Record<ApplicationStatus, { fr: string; en: string }>> = {
+    [ApplicationStatus.under_review]: { fr: "est en cours d'examen", en: "is under review" },
+    [ApplicationStatus.shortlisted]: { fr: "a été présélectionnée", en: "has been shortlisted" },
+    [ApplicationStatus.hired]: { fr: "a été retenue — félicitations !", en: "was successful — congratulations!" },
+    [ApplicationStatus.rejected]: { fr: "n'a pas été retenue", en: "was not selected" },
+  };
+  const text = statusText[status];
+  if (text) {
+    Notify.applicationUpdate(
+      application.applicantId,
+      AppMode.customer,
+      { fr: `Votre candidature ${text.fr}.`, en: `Your application ${text.en}.` },
+      { applicationId: String(application._id), status },
+    );
+  }
 
   return application;
 };
@@ -429,10 +564,8 @@ const scheduleInterview = async (
   const application = await JobApplication.findById(applicationId);
   if (!application) throw new AppError(httpStatus.NOT_FOUND, "Application not found");
 
-  if (application.jobId) {
-    const job = await Job.findOne({ _id: application.jobId, postedBy: recruiterId });
-    if (!job) throw new AppError(httpStatus.FORBIDDEN, "Not authorized to manage this application");
-
+  const job = await assertCanManageApplication(recruiterId, application);
+  if (job) {
     job.stats.interviews = (job.stats.interviews || 0) + 1;
     await job.save();
   }
@@ -450,6 +583,16 @@ const scheduleInterview = async (
     applicationId: application._id,
     interview: application.interview,
   });
+  const when = new Date(payload.at).toISOString();
+  Notify.applicationUpdate(
+    application.applicantId,
+    AppMode.customer,
+    {
+      fr: `Entretien prévu le ${when.slice(0, 10)} à ${when.slice(11, 16)} UTC${payload.location ? ` — ${payload.location}` : ""}.`,
+      en: `Interview scheduled on ${when.slice(0, 10)} at ${when.slice(11, 16)} UTC${payload.location ? ` — ${payload.location}` : ""}.`,
+    },
+    { applicationId: String(application._id), interviewAt: when },
+  );
 
   return application;
 };
@@ -481,28 +624,54 @@ const getMyApplications = async (
   ]);
 
   return {
-    meta: { page, limit, total, totalPages: Math.ceil(total / limit) },
+    meta: { page, limit, total, totalPage: Math.ceil(total / limit) },
     data: applications,
   };
 };
 
 /**
- * Recruiter candidate CV unlock (10,000 GNF).
+ * Recruiter pays to unlock a candidate's contact details and CV file
+ * (price: settings.pricing.cvUnlockFee). Only for candidates who applied to one
+ * of the recruiter's jobs or sent a paid application to the recruiter's store.
+ * Access is granted when the payment webhook confirms the payment.
  */
 const unlockCandidateCv = async (
   recruiterId: string,
   applicantId: string,
   paymentMethod: PaymentMethod,
 ) => {
+  const [myJobIds, myVendor] = await Promise.all([
+    Job.find({ postedBy: recruiterId }).distinct("_id"),
+    VendorProfile.findOne({ userId: recruiterId }).select("_id"),
+  ]);
+
+  const hasApplied = await JobApplication.exists({
+    applicantId,
+    status: { $ne: ApplicationStatus.pending_payment },
+    $or: [
+      { jobId: { $in: myJobIds } },
+      ...(myVendor ? [{ targetVendorId: myVendor._id }] : []),
+    ],
+  });
+  if (!hasApplied) {
+    throw new AppError(
+      httpStatus.FORBIDDEN,
+      "You can only unlock candidates who applied to your jobs or your store",
+    );
+  }
+
+  const alreadyUnlocked = await getUnlockedApplicantIds(recruiterId, [applicantId]);
+  if (alreadyUnlocked.has(applicantId)) {
+    return { unlocked: true, payment: null };
+  }
+
   const payment = await PaymentServices.initiatePayment(recruiterId, {
     purpose: PaymentPurpose.cv_unlock,
     refId: applicantId,
     method: paymentMethod,
   });
 
-  const isPaid = (payment as any).status === "success";
-
-  return { unlocked: isPaid, payment };
+  return { unlocked: payment.status === PaymentStatus.success, payment };
 };
 
 export const JobServices = {
@@ -520,4 +689,5 @@ export const JobServices = {
   scheduleInterview,
   getMyApplications,
   unlockCandidateCv,
+  getReceivedApplications,
 };

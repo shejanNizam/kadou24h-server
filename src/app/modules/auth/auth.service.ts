@@ -1,5 +1,6 @@
 import bcrypt from "bcrypt";
 import httpStatus from "http-status";
+import { disconnectUser } from "../../../socket/socket";
 import { JwtPayload } from "jsonwebtoken";
 import { configs } from "../../config/index";
 import AppError from "../../errorHelpers/AppError";
@@ -253,6 +254,7 @@ const logout = async (deviceToken?: string) => {
 // Invalidates every access & refresh token issued so far
 const logoutAll = async (userId: string) => {
   await User.updateOne({ _id: userId }, { $inc: { tokenVersion: 1 } });
+  disconnectUser(userId, "logout_all");
 };
 
 // ──────────────────────────────
@@ -272,6 +274,8 @@ const changePassword = async (userId: string, oldPassword: string, newPassword: 
   user.password = await hashPassword(newPassword);
   user.tokenVersion += 1; // signs out other devices
   await user.save();
+  // Old sockets close; this device reconnects with the tokens returned below
+  disconnectUser(userId, "password_changed");
 
   // Keep this device signed in
   return createUserTokens(user);
@@ -348,6 +352,7 @@ const resetPassword = async (decodedToken: JwtPayload, newPassword: string) => {
   user.password = await hashPassword(newPassword);
   user.tokenVersion += 1; // signs out every device
   await user.save();
+  disconnectUser(String(user._id), "password_reset");
   await ensureLocalIdentity(user);
 };
 

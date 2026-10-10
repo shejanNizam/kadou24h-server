@@ -105,7 +105,7 @@ const searchWorkers = async (query: {
   }
 
   if (query.city) {
-    filter.city = { $regex: query.city, $options: "i" };
+    filter.city = { $regex: escapeRegex(query.city), $options: "i" };
   }
 
   if (query.minRating) {
@@ -130,21 +130,34 @@ const searchWorkers = async (query: {
     };
   }
 
+  await expireCvVisibility();
+
   const [workers, total] = await Promise.all([
     ProfessionalProfile.find(filter)
-      .populate("userId", "name avatar phone email")
+      // Public endpoint: never phone / email (contact goes through in-app chat)
+      .populate("userId", "name avatar")
       .populate("serviceCategoryId", "name slug")
-      .sort({ ratingAvg: -1, createdAt: -1 })
+      // Subscribers ("priority search visibility") first, then by rating
+      .sort({ cvVisible: -1, ratingAvg: -1, createdAt: -1 })
       .skip(skip)
       .limit(limit),
     ProfessionalProfile.countDocuments(filter),
   ]);
 
   return {
-    meta: { page, limit, total, totalPages: Math.ceil(total / limit) },
-    data: workers,
+    meta: { page, limit, total, totalPage: Math.ceil(total / limit) },
+    data: workers.map((w) => ({ ...w.toObject(), isPremium: w.cvVisible })),
   };
 };
+
+/** Turns off subscription visibility that has run out (cheap, indexed). */
+const expireCvVisibility = () =>
+  ProfessionalProfile.updateMany(
+    { cvVisible: true, visibleUntil: { $lte: new Date() } },
+    { $set: { cvVisible: false } },
+  );
+
+const escapeRegex = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 /**
  * Public view of a single listed worker profile.

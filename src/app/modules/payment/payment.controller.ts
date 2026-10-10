@@ -1,8 +1,19 @@
+import crypto from "crypto";
 import { Request, Response } from "express";
 import httpStatus from "http-status";
+import { configs } from "../../config/index";
+import AppError from "../../errorHelpers/AppError";
 import catchAsync from "../../utils/catchAsync";
 import sendResponse from "../../utils/sendResponse";
 import { PaymentServices } from "./payment.service";
+import { enumQuery } from "../../utils/queryParams";
+import {
+  DisputeStatus,
+  PaymentMethod,
+  PaymentPurpose,
+  PaymentStatus,
+  RefundStatus,
+} from "./payment.interface";
 
 const initiatePayment = catchAsync(async (req: Request, res: Response) => {
   const result = await PaymentServices.initiatePayment(req.user._id, req.body);
@@ -14,24 +25,21 @@ const initiatePayment = catchAsync(async (req: Request, res: Response) => {
   });
 });
 
-import AppError from "../../errorHelpers/AppError";
-import { configs } from "../../config/index";
-
 const handleWebhook = catchAsync(async (req: Request, res: Response) => {
-  const secretHeader =
-    (req.headers["x-webhook-secret"] as string) ||
-    (req.headers["x-webhook-signature"] as string) ||
-    (req.headers["stripe-signature"] as string);
+  const expected = configs.payment_webhook_secret;
+  if (!expected) {
+    throw new AppError(httpStatus.SERVICE_UNAVAILABLE, "Payment webhook is not configured");
+  }
 
-  if (
-    !secretHeader ||
-    (secretHeader !== configs.payment_webhook_secret &&
-      secretHeader !== configs.stripe_webhook_secret)
-  ) {
-    throw new AppError(
-      httpStatus.UNAUTHORIZED,
-      "Unauthorized: missing or invalid webhook signature/secret",
-    );
+  const received = req.headers["x-webhook-secret"];
+  // Constant-time comparison so the secret cannot be guessed byte by byte
+  const isValid =
+    typeof received === "string" &&
+    received.length === expected.length &&
+    crypto.timingSafeEqual(Buffer.from(received), Buffer.from(expected));
+
+  if (!isValid) {
+    throw new AppError(httpStatus.UNAUTHORIZED, "Invalid webhook secret");
   }
 
   const result = await PaymentServices.handleWebhook(req.body);
@@ -47,7 +55,7 @@ const getMyPayments = catchAsync(async (req: Request, res: Response) => {
   const result = await PaymentServices.getMyPayments(req.user._id, {
     page: Number(req.query.page),
     limit: Number(req.query.limit),
-    purpose: req.query.purpose as any,
+    purpose: enumQuery(req.query.purpose, PaymentPurpose, "purpose"),
   });
   sendResponse(res, {
     statusCode: httpStatus.OK,
@@ -72,7 +80,7 @@ const getMyDisputes = catchAsync(async (req: Request, res: Response) => {
   const result = await PaymentServices.getMyDisputes(req.user._id, {
     page: Number(req.query.page),
     limit: Number(req.query.limit),
-    status: req.query.status as any,
+    status: enumQuery(req.query.status, DisputeStatus, "status"),
   });
   sendResponse(res, {
     statusCode: httpStatus.OK,
@@ -87,9 +95,9 @@ const getAllPaymentsAdmin = catchAsync(async (req: Request, res: Response) => {
   const result = await PaymentServices.getAllPaymentsAdmin({
     page: Number(req.query.page),
     limit: Number(req.query.limit),
-    status: req.query.status as any,
-    purpose: req.query.purpose as any,
-    method: req.query.method as any,
+    status: enumQuery(req.query.status, PaymentStatus, "status"),
+    purpose: enumQuery(req.query.purpose, PaymentPurpose, "purpose"),
+    method: enumQuery(req.query.method, PaymentMethod, "method"),
   });
   sendResponse(res, {
     statusCode: httpStatus.OK,
@@ -114,7 +122,7 @@ const getAllRefundsAdmin = catchAsync(async (req: Request, res: Response) => {
   const result = await PaymentServices.getAllRefundsAdmin({
     page: Number(req.query.page),
     limit: Number(req.query.limit),
-    status: req.query.status as any,
+    status: enumQuery(req.query.status, RefundStatus, "status"),
   });
   sendResponse(res, {
     statusCode: httpStatus.OK,
@@ -129,7 +137,7 @@ const getAllDisputesAdmin = catchAsync(async (req: Request, res: Response) => {
   const result = await PaymentServices.getAllDisputesAdmin({
     page: Number(req.query.page),
     limit: Number(req.query.limit),
-    status: req.query.status as any,
+    status: enumQuery(req.query.status, DisputeStatus, "status"),
   });
   sendResponse(res, {
     statusCode: httpStatus.OK,

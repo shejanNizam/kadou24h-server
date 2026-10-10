@@ -413,7 +413,8 @@ Vendor: PATCH /vendor-rider-links/:id/respond { accept: true }
   - Request payout: `POST /wallets/me/withdrawals` with `{ amount, payoutMethodId }`
   - Transaction history: `GET /wallets/me/transactions`
 - **Rider COD Cash Settlement (Deposit collected cash):**
-  - `POST /wallets/me/cod-settlements` with `{ amount, paymentMethod, transactionReference }`
+  - `POST /wallets/me/cod-settlements` with `{ amount, method, reference?, proofImage? }`
+  - **How COD money flows:** when the rider enters the customer's PIN, the rider's delivery fee is credited and `cashOwed` grows by the cash collected. The **vendor's earning stays held** (sub-order `settlement: "awaiting_cod"`) until the rider's cash is settled — confirmed settlements (or an `earnings_offset`) are matched to the rider's oldest COD orders first, and each fully covered order releases the vendor's money.
 
 ### 6.21 Admin: Platform Overview & Management Screens
 - **Next.js Web Dashboard Screens:** Overview Analytics, Applications Review, User Management, Settings
@@ -933,7 +934,10 @@ Paginated append-only ledger transaction history (`earning_held`, `earning_relea
 
 #### `POST /wallets/me/cod-settlements` — Riders only
 `{ amount: number, method: "orange_money" | "mobile_money" | "cash_at_office" | "earnings_offset", reference?, proofImage? }`.
-If `method = "earnings_offset"`, instantly offsets `cashOwed` against `availableBalance` without manual admin approval (`status = confirmed`). Other methods submit for admin verification (`status = pending`).
+- `amount` cannot exceed the cash still owed **minus settlements already waiting for confirmation** (400 otherwise).
+- `earnings_offset`: instantly deducts from `availableBalance` and `cashOwed` (`status = confirmed`) and releases covered vendor earnings.
+- Other methods wait for admin verification (`status = pending`).
+- Response: the settlement plus `releasedSubOrders: ["AP12-1", …]` (sub-orders whose vendor money was released).
 
 #### `GET /wallets/admin/withdrawals?page=&limit=&status=&ownerMode=` — Staff/Admin
 List all withdrawal requests.
@@ -947,7 +951,7 @@ List all rider COD cash settlement submissions.
 
 #### `PATCH /wallets/admin/cod-settlements/:id` — Staff/Admin
 `{ status: "confirmed" | "rejected" }`.
-If `confirmed`, reduces rider's `cashOwed` balance and logs `cod_settled` ledger transaction.
+If `confirmed`: reduces the rider's `cashOwed`, logs `cod_settled`, and allocates the cash to the rider's oldest `awaiting_cod` sub-orders — each fully covered one releases the vendor's earning (`earning_released` + `commission`). Response includes `releasedSubOrders`. A settlement can only be decided once (400 afterwards).
 
 ---
 
@@ -1061,9 +1065,9 @@ Errors: 409 already connected / already invited · 403 the inviter tried to answ
 #### Vendor & Customer Operations
 | Endpoint | Who | Notes |
 |---|---|---|
-| `GET /deliveries/:id/available-riders` | Vendor / Admin | lists online delivery partners: active linked riders appear first, followed by nearest online riders sorted by distance |
+| `GET /deliveries/:id/available-riders` | Vendor / Admin | lists online delivery partners: active linked riders appear first, followed by nearest online riders sorted by distance (no phone numbers) |
 | `POST /deliveries/:id/assign` | Vendor / Admin | assign delivery leg to partner: `{ riderId }`; sends real-time push/socket alert |
-| `GET /deliveries/:id/track` | Signed-in | live delivery tracking; **secure PIN visibility**: shows `pickupPin` only to giver (vendor/station), shows `handoverPin` only to receiver (customer/station) |
+| `GET /deliveries/:id/track` | Customer, store owner, riders of the leg chain, admin | live delivery tracking; **PIN visibility**: `pickupPin` only to the giver (vendor, or the rider arriving at a station), `handoverPin` only to the receiver (customer, or the next rider at a station). The assigned rider never sees its own leg's PINs. On the rider's own leg at bus stations: `incomingHandoverPin` (show it to the rider arriving with the parcel) and `outgoingPickupPin` (show it to the rider taking the parcel next). |
 
 ### 7.22 Payments, Refunds & Disputes
 
@@ -1071,7 +1075,7 @@ Errors: 409 already connected / already invited · 403 the inviter tried to answ
 | Endpoint | Who | Notes |
 |---|---|---|
 | `POST /payments/initiate` | Signed-in | initiate payment for an order, subscription, job publishing, or CV unlock: `{ purpose, refId, method: "orange_money" \| "mobile_money" \| "card" \| "cod", provider?, idempotencyKey? }`. Validates ownership, checks idempotency key, simulates payment gateway, and marks order `paid`. |
-| `POST /payments/webhook` | Public | gateway webhook/callback for Orange Money / MTN Momo: `{ idempotencyKey?, providerRef?, paymentId?, status: "success" \| "failed", raw? }`. |
+| `POST /payments/webhook` | Gateway only — header `x-webhook-secret: <PAYMENT_WEBHOOK_SECRET>` | gateway callback for Orange Money / MTN Momo: `{ idempotencyKey?, providerRef?, paymentId?, status: "success" \| "failed", amount?, raw? }`. Wrong/missing secret → 401; not configured → 503; `amount` different from the payment → 400 and the payment is marked failed. Fulfils the purpose: order paid, job published, subscription activated, spontaneous application delivered to the vendor, CV unlocked. |
 | `GET /payments/me` | Signed-in | user's payment history with status and gateway references (`?purpose=&page=&limit=`) |
 
 #### Customer Disputes
@@ -1116,12 +1120,13 @@ Errors: 409 already connected / already invited · 403 the inviter tried to answ
 | Endpoint | Who | Notes |
 |---|---|---|
 | `POST /jobs/apply` | Candidate | apply to published job (`{ jobId, resume?, coverNote? }`). Auto-computes match score (0–100%) against job `prefSkills` and snapshots CV at apply time. |
-| `POST /jobs/apply-spontaneous` | Candidate | send spontaneous paid application to seller/vendor (`{ targetVendorId, resume?, coverNote?, paymentMethod }`). |
+| `POST /jobs/apply-spontaneous` | Candidate | send a paid spontaneous application to a store (`{ targetVendorId, resume?, coverNote?, paymentMethod }`). Returns `{ application, payment }` with `application.status = "pending_payment"`; the vendor only receives it once the payment succeeds. |
+| `GET /jobs/applications/received` | Vendor | inbox of paid spontaneous applications (`?status=&page=&limit=`). Same CV paywall as job applicants. |
 | `GET /jobs/applications/my` | Candidate | list my submitted job applications with status and interview updates. |
 | `GET /jobs/:id/applicants` | Recruiter | view applicants for my job, sorted by match score or submission date (`?status=&sortBy=match\|date`). |
 | `PATCH /jobs/applications/:applicationId/status` | Recruiter | update application status (`applied`, `under_review`, `shortlisted`, `rejected`, `hired`). |
 | `POST /jobs/applications/:applicationId/interview` | Recruiter | schedule interview (`{ at, location?, mapUrl?, note? }`). Updates application and notifies candidate via socket/push. |
-| `POST /jobs/candidates/:applicantId/unlock-cv` | Recruiter | unlock candidate's full CV and contact info with 10,000 GNF payment (`{ paymentMethod }`). |
+| `POST /jobs/candidates/:applicantId/unlock-cv` | Recruiter | unlock a candidate's phone, email and CV file (`{ paymentMethod }`), price `settings.pricing.cvUnlockFee` (5,000 GNF). Only for candidates who applied to your jobs or your store (403 otherwise). Returns `{ unlocked, payment }` — access starts when the payment succeeds; already unlocked → `{ unlocked: true, payment: null }`. **Paywall:** applicant lists return `applicant: { _id, name, avatar }` and `isCvUnlocked`; `applicant.phone`, `applicant.email` and `cvSnapshot.file` appear only after unlocking. |
 
 ### 7.25 Subscriptions
 
@@ -1233,9 +1238,12 @@ const socket = io("http://localhost:5000", { auth: { token: accessToken } });
 ```
 
 - On connect the user joins a private room (`user:<userId>`) — server events for this user arrive here.
-- Chat rooms: emit `join_conversation` / `leave_conversation` with `{ conversationId }`; `typing` / `stop_typing` with `{ conversationId }`; `message_read` with `{ conversationId }`.
-- Delivery tracking rooms: emit `join_delivery` / `leave_delivery` with `{ deliveryId }`.
-- Rider location stream: rider emits `rider_location` with `{ deliveryId, lat, lng, heading }`.
+- The connection is refused for suspended / banned / deleted accounts and revoked tokens (same rules as the REST API).
+- Chat rooms: emit `join_conversation` / `leave_conversation` with the conversation id — **participants only**; `typing` / `stop_typing` with `{ conversationId }`; `message_read` with `{ conversationId }`.
+- Delivery tracking rooms: emit `join_delivery` / `leave_delivery` with the delivery id — **customer, store owner, riders of the leg chain and admins only**.
+- Rider location stream: the **assigned rider** emits `rider_location` with `{ deliveryId, lat, lng, heading }` (ignored from anyone else).
+- A refused join emits `error_message` `{ event, message }`.
+- `session:revoked` `{ reason }` is sent just before the server closes all of a user's sockets (ban/suspension, logout everywhere, password change or reset, account deletion). Reconnect with a fresh token, or go to Login.
 - Events available now:
 
 | Event | Payload | When |
@@ -1265,6 +1273,41 @@ const socket = io("http://localhost:5000", { auth: { token: accessToken } });
 ---
 
 ## Changelog
+
+### Security & money fixes (2026-10-10)
+- **COD:** vendor earnings are released only after the rider's cash is settled (`settlement: "awaiting_cod"`, FIFO allocation, `releasedSubOrders` in settlement responses). Riders can't declare more cash than they owe.
+- **Payments webhook:** requires `x-webhook-secret`; optional `amount` must match. No default secret — set `PAYMENT_WEBHOOK_SECRET` (min 32 chars; required in production).
+- **Jobs:** CV paywall enforced (contact & CV file only after unlock); spontaneous applications reach the vendor only after payment; new `GET /jobs/applications/received`; only the job poster / store owner can change an application.
+- **Checkout:** fully rolled back if any step fails (stock, escrow, delivery legs). The response's `subOrders` now include `currentLegId`.
+- **Orders:** `GET /orders/:id` and the vendor sub-order detail include `deliveries` (all legs, no PINs); the store phone is no longer sent to customers.
+- **Intercity:** bus drivers / relay riders get `incomingHandoverPin` / `outgoingPickupPin` on their own leg.
+- **Lists:** pagination is always at the top level — `data` is the array, `meta` = `{ page, limit, total, totalPage, totalPages }` (same value; `totalPage` is the documented name) plus extras such as `unreadCount` / `summary`. Changed: `/orders/my-orders`, `/orders/vendor/sub-orders`, `/orders/admin/all`, `/favorites`, `/products`, `/products/my-products`, `/products/admin` (summary now in `meta.summary`).
+- **Validation:** request bodies are plain JSON on every route (some routes previously expected a `{ "body": {…} }` wrapper).
+- **Workers directory:** no phone / email; subscribers (`isPremium`) listed first.
+- **Push notifications:** every in-app notification is also pushed to the user's devices (FCM), respecting notification preferences. Requires `FIREBASE_SERVICE_ACCOUNT_BASE64`.
+- **Sockets:** account checks at connect, room permissions, `session:revoked` on revocation.
+
+### Notifications & concurrency (2026-10-10, later)
+- **Notifications are now stored + pushed for business events** (shown in `GET /notifications`, `new_notification` socket event, FCM push). `data` always carries the ids to deep-link (`orderId`, `subOrderId`, `deliveryId`, `withdrawalId`, `applicationId`…).
+
+  | Event | Who | `type` (`mode`) |
+  |---|---|---|
+  | Order placed | vendor | `order_placed` (vendor) |
+  | Vendor accepted / parcel ready | customer | `order_accepted` / `ready_for_pickup` (customer) |
+  | Rider assigned | rider | `new_delivery_assigned`, or `collect_payment` when the leg collects COD cash (`data.amountToCollect`) |
+  | Rider declined | vendor | `ready_for_pickup` (vendor) — choose another rider |
+  | Last leg picked up | customer | `rider_on_the_way` |
+  | Delivered | customer + vendor | `order_delivered`, plus `feedback_request` to the customer |
+  | Cancelled | every other party (customer, vendor, riders on open legs) | `order_cancelled` (`data.cancelledBy`) |
+  | Money released | vendor / rider | `earnings_updated` |
+  | Withdrawal paid / rejected | owner | `withdrawal_update` |
+  | Vendor / rider KYC reviewed | applicant | `profile_approved`, or `system_alert` when not approved |
+  | Job application: new / status change / interview | employer / applicant | `application_update` |
+- **`GET /deliveries/:id/available-riders`** no longer returns the rider's `phone` (client rule: contact goes through in-app chat).
+- **New `409 Conflict` responses** when two actions hit the same record at once — the app should refresh and show the message: cancelling an order the store just moved on, accepting/declining a leg that was just cancelled, a double tap on pickup/handover PIN, two admins processing the same withdrawal.
+- **Cancellation rules:** customer — while `new` / `accepted`; store — until `preparing`; admin — anything not yet delivered (a delivered sub-order → **400**, issue a refund instead). If an admin cancels a parcel already out with a rider, stock is not restored.
+- **Order status:** a multi-store order becomes `completed` / `partially_cancelled` only when every sub-order is finished (delivered or cancelled).
+- **Testing:** `npm run test:e2e` runs the full money / delivery / security journey against a throwaway database (needs local MongoDB + Redis).
 
 ### Step 9 — Admin Panel, Platform Settings, Support Tickets & Ads (current)
 - **Order & Product Reviews (`reviews`):** Verified customer feedback on delivered sub-orders (`(author_id, sub_order_id) [unique]`), 1–5 star ratings, feedback comments, automatic recalculation of average ratings and total counts on `vendor_profiles` and `products`, public review feeds, and admin visibility moderation.

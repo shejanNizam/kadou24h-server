@@ -2,6 +2,8 @@ import { Request, Response } from "express";
 import httpStatus from "http-status";
 import catchAsync from "../../utils/catchAsync";
 import sendResponse from "../../utils/sendResponse";
+import { enumQuery } from "../../utils/queryParams";
+import { PlanAudience } from "./subscription.interface";
 import { SubscriptionServices } from "./subscription.service";
 
 const createPlan = catchAsync(async (req: Request, res: Response) => {
@@ -32,7 +34,7 @@ const updatePlan = catchAsync(async (req: Request, res: Response) => {
 
 const getActivePlans = catchAsync(async (req: Request, res: Response) => {
   const result = await SubscriptionServices.getActivePlans(
-    req.query.audience as any,
+    enumQuery(req.query.audience, PlanAudience, "audience"),
   );
   sendResponse(res, {
     statusCode: httpStatus.OK,

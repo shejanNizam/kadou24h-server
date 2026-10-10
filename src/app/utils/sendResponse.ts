@@ -3,9 +3,12 @@ import { Response } from "express";
 interface TMeta {
   page: number;
   limit: number;
-  totalPage?: number;
-  totalPages?: number;
   total: number;
+  totalPage?: number;
+  /** @deprecated use totalPage — still accepted from older services */
+  totalPages?: number;
+  // Extra list info, e.g. notifications' unreadCount
+  [key: string]: unknown;
 }
 
 interface TResponse<T> {
@@ -17,17 +20,16 @@ interface TResponse<T> {
 }
 
 export default function sendResponse<T>(res: Response, data: TResponse<T>) {
-  const meta = data.meta
-    ? {
-        page: data.meta.page,
-        limit: data.meta.limit,
-        total: data.meta.total,
-        totalPage: data.meta.totalPage ?? data.meta.totalPages ?? 0,
-        ...(data.meta.totalPages !== undefined
-          ? { totalPages: data.meta.totalPages }
-          : {}),
-      }
-    : undefined;
+  let meta: Record<string, unknown> | undefined;
+
+  if (data.meta) {
+    const { totalPage, totalPages, ...rest } = data.meta;
+    const pages =
+      totalPage ?? totalPages ?? Math.ceil((data.meta.total || 0) / (data.meta.limit || 1));
+    // `totalPage` is the documented field; `totalPages` is kept as an alias so
+    // existing clients keep working
+    meta = { ...rest, totalPage: pages, totalPages: pages };
+  }
 
   res.status(data?.statusCode).json({
     statusCode: data.statusCode,

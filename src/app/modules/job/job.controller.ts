@@ -2,7 +2,9 @@ import { Request, Response } from "express";
 import httpStatus from "http-status";
 import catchAsync from "../../utils/catchAsync";
 import sendResponse from "../../utils/sendResponse";
+import { ApplicationStatus } from "./job.interface";
 import { JobServices } from "./job.service";
+import { enumQuery } from "../../utils/queryParams";
 
 const createJob = catchAsync(async (req: Request, res: Response) => {
   const result = await JobServices.createJob(
@@ -118,12 +120,27 @@ const getMyApplications = catchAsync(async (req: Request, res: Response) => {
   const result = await JobServices.getMyApplications(req.user._id, {
     page: Number(req.query.page),
     limit: Number(req.query.limit),
-    status: req.query.status as any,
+    status: enumQuery(req.query.status, ApplicationStatus, "status"),
   });
   sendResponse(res, {
     statusCode: httpStatus.OK,
     success: true,
     message: "My applications retrieved successfully!",
+    meta: result.meta,
+    data: result.data,
+  });
+});
+
+const getReceivedApplications = catchAsync(async (req: Request, res: Response) => {
+  const result = await JobServices.getReceivedApplications(req.user._id, {
+    page: Number(req.query.page),
+    limit: Number(req.query.limit),
+    status: enumQuery(req.query.status, ApplicationStatus, "status"),
+  });
+  sendResponse(res, {
+    statusCode: httpStatus.OK,
+    success: true,
+    message: "Received applications retrieved successfully!",
     meta: result.meta,
     data: result.data,
   });
@@ -136,8 +153,8 @@ const getJobApplicants = catchAsync(async (req: Request, res: Response) => {
     {
       page: Number(req.query.page),
       limit: Number(req.query.limit),
-      status: req.query.status as any,
-      sortBy: req.query.sortBy as any,
+      status: enumQuery(req.query.status, ApplicationStatus, "status"),
+      sortBy: enumQuery(req.query.sortBy, ["match", "date"] as const, "sortBy"),
     },
   );
   sendResponse(res, {
@@ -201,6 +218,7 @@ export const JobControllers = {
   applyToJob,
   applySpontaneous,
   getMyApplications,
+  getReceivedApplications,
   getJobApplicants,
   updateApplicationStatus,
   scheduleInterview,

@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { checkAuth } from "../../middlewares/checkAuth";
 import validateRequest from "../../middlewares/validateRequest";
-import { APP_ROLES } from "../user/user.interface";
+import { APP_ROLES, UserRole } from "../user/user.interface";
 import { JobControllers } from "./job.controller";
 import {
   applyJobSchema,
@@ -92,6 +92,28 @@ router.get(
   "/applications/my",
   checkAuth(...APP_ROLES),
   JobControllers.getMyApplications,
+);
+
+/**
+ * @swagger
+ * /jobs/applications/received:
+ *   get:
+ *     tags: [Jobs]
+ *     summary: Vendor inbox of paid spontaneous applications (contact & CV file hidden until CV unlock)
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - { in: query, name: status, schema: { type: string, enum: [applied, under_review, shortlisted, interview, hired, rejected, withdrawn] } }
+ *       - $ref: '#/components/parameters/page'
+ *       - $ref: '#/components/parameters/limit'
+ *     responses:
+ *       200:
+ *         description: Applications with applicant { name, avatar, phone?, email? } and isCvUnlocked
+ */
+router.get(
+  "/applications/received",
+  checkAuth(UserRole.vendor),
+  JobControllers.getReceivedApplications,
 );
 
 export const JobRoutes = router;

@@ -19,6 +19,8 @@ export const webhookSchema = z.object({
   providerRef: z.string().optional(),
   paymentId: z.string().optional(),
   status: z.enum(["success", "failed"]),
+  // Amount the gateway actually collected (GNF) — must match the payment
+  amount: z.number().int().min(0).optional(),
   raw: z.record(z.string(), z.unknown()).optional(),
 });
 

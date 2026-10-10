@@ -3,6 +3,7 @@ import httpStatus from "http-status";
 import catchAsync from "../../utils/catchAsync";
 import sendResponse from "../../utils/sendResponse";
 import { FavoriteServices } from "./favorite.service";
+import { flatQuery } from "../../utils/queryParams";
 
 const toggleFavorite = catchAsync(async (req: Request, res: Response) => {
   const { productId } = req.body;
@@ -16,12 +17,13 @@ const toggleFavorite = catchAsync(async (req: Request, res: Response) => {
 });
 
 const getMyFavorites = catchAsync(async (req: Request, res: Response) => {
-  const result = await FavoriteServices.getMyFavorites(req.user._id, req.query as any);
+  const result = await FavoriteServices.getMyFavorites(req.user._id, flatQuery(req.query));
   sendResponse(res, {
     statusCode: httpStatus.OK,
     success: true,
     message: "Favorites retrieved successfully!",
-    data: result,
+    data: result.data,
+    meta: result.meta,
   });
 });
 

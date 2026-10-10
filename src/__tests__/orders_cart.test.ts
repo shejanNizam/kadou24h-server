@@ -20,7 +20,7 @@ describe("Cart, Delivery Rates & Orders Module", () => {
 
   describe("Delivery Rates Endpoints", () => {
     it("GET /api/v1/delivery-rates/calculate returns calculated fee with query params", async () => {
-      jest.spyOn(DeliveryRate, "findOne").mockResolvedValue(null as any);
+      jest.spyOn(DeliveryRate, "findOne").mockResolvedValue(null as never);
 
       const res = await request(app)
         .get("/api/v1/delivery-rates/calculate")
