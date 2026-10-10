@@ -7,13 +7,16 @@ import { ReportStatus } from "../report/report.interface";
 import { RiderProfile } from "../rider_profile/rider_profile.model";
 import { SupportTicket } from "../support_ticket/support_ticket.model";
 import { TicketStatus, TicketUrgency } from "../support_ticket/support_ticket.interface";
-import { UserStatus } from "../user/user.interface";
+import { ADMIN_ROLES, UserStatus } from "../user/user.interface";
 import { User } from "../user/user.model";
 import { VendorProfile } from "../vendor_profile/vendor_profile.model";
 import { Withdrawal } from "../wallet/withdrawal.model";
 import { WithdrawalStatus } from "../wallet/wallet.interface";
 
 // $sum helper: the field value for orders that are not cancelled, else 0
+// App users only — admin/staff accounts are managed in Settings, like the Users page
+const appUsers = { isDeleted: false, roles: { $nin: ADMIN_ROLES } };
+
 const notCancelled = (field: string) => ({
   $cond: [{ $eq: ["$status", OrderStatus.cancelled] }, 0, field],
 });
@@ -85,10 +88,10 @@ const getPlatformOverview = async () => {
     weeklySubOrderAgg,
     monthlySubOrderAgg,
   ] = await Promise.all([
-    User.countDocuments({ isDeleted: false }),
+    User.countDocuments(appUsers),
     VendorProfile.countDocuments({ approvalStatus: ApprovalStatus.approved }),
     RiderProfile.countDocuments({ approvalStatus: ApprovalStatus.approved }),
-    User.countDocuments({ status: UserStatus.suspended }),
+    User.countDocuments({ ...appUsers, status: UserStatus.suspended }),
     Order.countDocuments(),
 
     Order.aggregate([
@@ -162,7 +165,7 @@ const getPlatformOverview = async () => {
 
     // Monthly user registrations
     User.aggregate([
-      { $match: { createdAt: { $gte: twelveMonthsAgo }, isDeleted: false } },
+      { $match: { ...appUsers, createdAt: { $gte: twelveMonthsAgo } } },
       {
         $group: {
           _id: { $dateToString: { format: "%Y-%m", date: "$createdAt" } },
