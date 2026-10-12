@@ -57,14 +57,16 @@ const mergeSeries = (
 const getPlatformOverview = async () => {
   const now = new Date();
 
-  // 1. Date boundaries for 7-day weekly revenue (last 7 days including today)
-  const sevenDaysAgo = new Date(now);
-  sevenDaysAgo.setDate(now.getDate() - 6);
-  sevenDaysAgo.setHours(0, 0, 0, 0);
+  // 1. Date boundaries for current week starting from Saturday to Friday
+  const daysSinceSaturday = (now.getDay() + 1) % 7;
+  const startOfWeek = new Date(now);
+  startOfWeek.setDate(now.getDate() - daysSinceSaturday);
+  startOfWeek.setHours(0, 0, 0, 0);
 
-  // 2. Date boundaries for 12 months growth & monthly revenue
-  const twelveMonthsAgo = new Date(now.getFullYear(), now.getMonth() - 11, 1);
-  twelveMonthsAgo.setHours(0, 0, 0, 0);
+  // 2. Date boundaries for calendar year (Jan to Dec)
+  const currentYear = now.getFullYear();
+  const startOfYear = new Date(currentYear, 0, 1);
+  startOfYear.setHours(0, 0, 0, 0);
 
   const [
     totalUsers,
@@ -141,9 +143,9 @@ const getPlatformOverview = async () => {
     VendorProfile.countDocuments({ approvalStatus: ApprovalStatus.pending }),
     RiderProfile.countDocuments({ approvalStatus: ApprovalStatus.pending }),
 
-    // 7-day revenue aggregation
+    // Current week revenue aggregation (Saturday to Friday)
     Order.aggregate([
-      { $match: { createdAt: { $gte: sevenDaysAgo }, status: { $ne: OrderStatus.cancelled } } },
+      { $match: { createdAt: { $gte: startOfWeek }, status: { $ne: OrderStatus.cancelled } } },
       {
         $group: {
           _id: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } },
@@ -152,9 +154,9 @@ const getPlatformOverview = async () => {
       },
     ]),
 
-    // 12-month revenue aggregation
+    // Calendar year revenue aggregation (Jan to Dec)
     Order.aggregate([
-      { $match: { createdAt: { $gte: twelveMonthsAgo }, status: { $ne: OrderStatus.cancelled } } },
+      { $match: { createdAt: { $gte: startOfYear }, status: { $ne: OrderStatus.cancelled } } },
       {
         $group: {
           _id: { $dateToString: { format: "%Y-%m", date: "$createdAt" } },
@@ -163,9 +165,9 @@ const getPlatformOverview = async () => {
       },
     ]),
 
-    // Monthly user registrations
+    // Monthly user registrations for current year
     User.aggregate([
-      { $match: { ...appUsers, createdAt: { $gte: twelveMonthsAgo } } },
+      { $match: { ...appUsers, createdAt: { $gte: startOfYear } } },
       {
         $group: {
           _id: { $dateToString: { format: "%Y-%m", date: "$createdAt" } },
@@ -174,9 +176,9 @@ const getPlatformOverview = async () => {
       },
     ]),
 
-    // Monthly vendor registrations
+    // Monthly vendor registrations for current year
     VendorProfile.aggregate([
-      { $match: { createdAt: { $gte: twelveMonthsAgo } } },
+      { $match: { createdAt: { $gte: startOfYear } } },
       {
         $group: {
           _id: { $dateToString: { format: "%Y-%m", date: "$createdAt" } },
@@ -190,8 +192,8 @@ const getPlatformOverview = async () => {
       { $match: { status: { $ne: SubOrderStatus.cancelled } } },
       { $group: { _id: null, gmv: { $sum: "$total" }, commission: { $sum: earnedCommission } } },
     ]),
-    subOrderSeries("%Y-%m-%d", sevenDaysAgo),
-    subOrderSeries("%Y-%m", twelveMonthsAgo),
+    subOrderSeries("%Y-%m-%d", startOfWeek),
+    subOrderSeries("%Y-%m", startOfYear),
   ]);
 
   const subOrderMoney = subOrderMoneyAgg[0] || { gmv: 0, commission: 0 };
@@ -223,15 +225,16 @@ const getPlatformOverview = async () => {
   const cancelled = orderStats.cancelledOrders || subOrderMap.get(SubOrderStatus.cancelled) || 0;
   const reported = pendingReports || 0;
 
-  // Build weekly revenue series (Mon - Sun / last 7 calendar days)
+  // Build weekly revenue series (Saturday to Friday of current week)
   const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
   const weeklyRevenueMap = new Map<string, { platformFee: number; gmv: number }>();
   mergeSeries(weeklyRevenueMap, weeklyRevenueAgg, weeklySubOrderAgg);
 
   const weeklyRevenueData: Array<{ day: string; date: string; value: number; gmv: number }> = [];
-  for (let i = 6; i >= 0; i--) {
-    const d = new Date(now);
-    d.setDate(now.getDate() - i);
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(startOfWeek);
+    d.setDate(startOfWeek.getDate() + i);
+    d.setHours(12, 0, 0, 0);
     const dateStr = d.toISOString().split("T")[0];
     const dayName = dayNames[d.getDay()];
     const stats = weeklyRevenueMap.get(dateStr) || { platformFee: 0, gmv: 0 };
@@ -243,7 +246,7 @@ const getPlatformOverview = async () => {
     });
   }
 
-  // Build monthly growth and revenue series (last 10-12 months)
+  // Build monthly growth and revenue series for the full calendar year (Jan to Dec)
   const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   const userGrowthMap = new Map<string, number>();
   usersGrowthAgg.forEach((item: { _id: string; count: number }) => {
@@ -261,14 +264,13 @@ const getPlatformOverview = async () => {
   const platformGrowth: Array<{ month: string; year: number; users: number; vendors: number }> = [];
   const monthlyRevenueData: Array<{ month: string; year: number; value: number; gmv: number }> = [];
 
-  for (let i = 11; i >= 0; i--) {
-    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-    const monthLabel = monthNames[d.getMonth()];
+  for (let m = 0; m < 12; m++) {
+    const key = `${currentYear}-${String(m + 1).padStart(2, "0")}`;
+    const monthLabel = monthNames[m];
 
     platformGrowth.push({
       month: monthLabel,
-      year: d.getFullYear(),
+      year: currentYear,
       users: userGrowthMap.get(key) || 0,
       vendors: vendorGrowthMap.get(key) || 0,
     });
@@ -276,7 +278,7 @@ const getPlatformOverview = async () => {
     const rev = monthlyRevenueMap.get(key) || { platformFee: 0, gmv: 0 };
     monthlyRevenueData.push({
       month: monthLabel,
-      year: d.getFullYear(),
+      year: currentYear,
       value: rev.platformFee,
       gmv: rev.gmv,
     });
