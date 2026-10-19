@@ -5,6 +5,7 @@ import httpStatus from "http-status";
 import { Types } from "mongoose";
 import AppError from "../../errorHelpers/AppError";
 import { Product } from "../product/product.model";
+import { DeliveryStatus, EndpointKind } from "../delivery/delivery.interface";
 import { Delivery } from "../delivery/delivery.model";
 import { VendorProfile } from "../vendor_profile/vendor_profile.model";
 import { ISubOrderModification, SettlementStatus, SubOrderStatus } from "./order.interface";
@@ -86,7 +87,12 @@ const getVendorSubOrderDetail = async (
     vendorId: vendor._id,
   })
     .populate("customerId", "name phone avatar")
-    .populate("currentRiderId", "vehicleType plateNumber vestNumber");
+    // Rider phone stays hidden (client rule); vehicle + rating identify them at pickup
+    .populate({
+      path: "currentRiderId",
+      select: "userId partnerType vehicle vestNumber stats",
+      populate: { path: "userId", select: "name avatar" },
+    });
 
   if (!subOrder) {
     throw new AppError(httpStatus.NOT_FOUND, "Sub-order not found");
@@ -104,10 +110,28 @@ const getVendorSubOrderDetail = async (
     .sort({ legNumber: 1 })
     .lean();
 
+  // The store's own pickup PIN (first leg, which starts at the store), shown on
+  // the order so the vendor can give it to the rider. Hidden once picked up.
+  const storeLeg = await Delivery.findOne({
+    subOrderId: subOrder._id,
+    fromKind: EndpointKind.vendor,
+    status: {
+      $in: [
+        DeliveryStatus.pending_assignment,
+        DeliveryStatus.assigned,
+        DeliveryStatus.accepted,
+        DeliveryStatus.going_to_pickup,
+      ],
+    },
+  })
+    .select("+pickupPin")
+    .lean();
+
   return {
     subOrder,
     parentOrder,
     deliveries,
+    ...(storeLeg && { pickupPin: storeLeg.pickupPin }),
   };
 };
 

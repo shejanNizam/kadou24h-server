@@ -914,6 +914,25 @@ A wallet is created automatically when a vendor / rider application starts. Bala
 ```
 404 = no application started for that mode.
 
+#### `GET /wallets/me/summary?mode=vendor|rider&range=7d|30d|6m|12m` — Signed-in
+For the app's Earnings screen and profile header. `range` defaults to `7d`. `7d`/`30d` give one bucket per day, `6m`/`12m` one per month (Africa/Conakry time = UTC+0). Unknown range → 400.
+- Vendor earnings = `vendorEarning` of sub-orders **delivered** in the period (by `subOrder.deliveredAt`).
+- Rider earnings = `fee` of delivery legs delivered in the period.
+```json
+{ "mode": "vendor", "range": "7d", "timezone": "Africa/Conakry",
+  "balances": { "availableBalance": 90000, "heldBalance": 180000, "totalEarned": 270000,
+                "totalCommission": 30000, "totalWithdrawn": 0, "withdrawable": 90000,
+                "inEscrow": 90000, "awaitingCod": 90000 },
+  "counts": { "newOrders": 2, "activeOrders": 1 },
+  "today": { "earnings": 90000, "count": 1 },
+  "period": { "from": "2026-10-13T00:00:00.000Z", "to": "2026-10-19T23:59:59.999Z", "earnings": 180000, "count": 2 },
+  "series": [ { "key": "2026-10-13", "earnings": 0, "count": 0 }, "…", { "key": "2026-10-19", "earnings": 90000, "count": 1 } ] }
+```
+- **Vendor balances:** `inEscrow` (orders still running) + `awaitingCod` (delivered COD orders whose cash the rider still holds) = `heldBalance`.
+- **Rider balances:** `cashOwed`, `cashLimit` (the rider's own or `settings.riderCashLimitDefault`), and `withdrawable = availableBalance − cashOwed`.
+- **Rider counts:** `{ newRequests, activeDeliveries }`.
+- A user without that store or rider profile gets zeros.
+
 #### `POST /wallets/me/payout-methods` — Signed-in
 `{ mode, type: orange_money | mobile_money | bank, accountName, accountNumber, bankName? (required for bank), isDefault? }`. Max 5; the first one is the default. **201** `data: PayoutMethod[]`.
 
@@ -1029,14 +1048,14 @@ Errors: 409 already connected / already invited · 403 the inviter tried to answ
 | `POST /orders/checkout-summary` | Signed-in | preview calculations without placing order: groups vendor splits, calculates vendor delivery fees via distance/station, platform fee (min 1,000 GNF), tax, commission snapshot, and totals |
 | `POST /orders` | Signed-in | place order: atomically deducts stock, creates parent `Order` (e.g. `AP421`), splits into `SubOrder`s per vendor (`AP421-1`), snapshots address, clears cart |
 | `GET /orders/my-orders` | Signed-in | customer order history with sub-order summaries, status filters, and pagination |
-| `GET /orders/:id` | Customer / Admin | full order details with sub-orders, items, vendor info, and status timeline |
+| `GET /orders/:id` | Customer / Admin | full order details with sub-orders, items, vendor info, status timeline and `deliveries[]` (legs, no PINs). For the customer each open sub-order also has **`deliveryPin`**: the handover PIN of its final leg, to give to the rider (or the bus driver for station pickup). It disappears once that leg is delivered or cancelled. Delivered sub-orders have `deliveredAt`. |
 | `POST /orders/:id/cancel` | Customer | cancel order before preparation: `{ reason }`, restores product stock, sets status to `cancelled` |
 
 #### Vendor Sub-Orders
 | Endpoint | Who | Notes |
 |---|---|---|
 | `GET /orders/vendor/sub-orders` | Vendor / Admin | list vendor's sub-orders filtered by status (`new`, `accepted`, `preparing`, `ready_for_pickup`, `in_delivery`, `delivered`, `cancelled`) |
-| `GET /orders/vendor/sub-orders/:id` | Vendor / Admin | detailed sub-order view with order address, customer info, items, and timeline |
+| `GET /orders/vendor/sub-orders/:id` | Vendor / Admin | detailed sub-order view with order address, customer info, items, timeline, all `deliveries[]` and the current rider (`currentRiderId`: partner type, vehicle, vest number, rating, name; no phone). Includes **`pickupPin`** (the store's PIN for the leg that starts at the store) until the rider has picked up. |
 | `PATCH /orders/vendor/sub-orders/:id/status` | Vendor / Admin | advance sub-order status: `{ status, note, estimatedDeliveryMinutes }` |
 | `PATCH /orders/vendor/sub-orders/:id/modify` | Vendor / Admin | vendor edits order after chat agreement: `{ modifications: [{ productId, action: "remove" \| "update_qty", newQty }], reason }`, adjusts stock, recomputes totals & commission snapshot, records audit entry |
 | `POST /orders/vendor/sub-orders/:id/cancel` | Vendor / Admin | vendor cancels sub-order: `{ reason }`, restores product stock |
@@ -1067,7 +1086,7 @@ Errors: 409 already connected / already invited · 403 the inviter tried to answ
 |---|---|---|
 | `GET /deliveries/:id/available-riders` | Vendor / Admin | lists online delivery partners: active linked riders appear first, followed by nearest online riders sorted by distance (no phone numbers) |
 | `POST /deliveries/:id/assign` | Vendor / Admin | assign delivery leg to partner: `{ riderId }`; sends real-time push/socket alert |
-| `GET /deliveries/:id/track` | Customer, store owner, riders of the leg chain, admin | live delivery tracking; **PIN visibility**: `pickupPin` only to the giver (vendor, or the rider arriving at a station), `handoverPin` only to the receiver (customer, or the next rider at a station). The assigned rider never sees its own leg's PINs. On the rider's own leg at bus stations: `incomingHandoverPin` (show it to the rider arriving with the parcel) and `outgoingPickupPin` (show it to the rider taking the parcel next). |
+| `GET /deliveries/:id/track` | Customer, store owner, riders of the leg chain, admin | live delivery tracking. The customer and the store may follow every leg of their order. **PIN visibility**: `pickupPin` only to the giver (the vendor on the leg that starts at the store, or the rider arriving at a station), `handoverPin` only to the receiver (the customer on the final leg, or the next rider at a station). Middle station→station legs show no PIN to the customer or the store. The assigned rider never sees its own leg's PINs. On the rider's own leg at bus stations: `incomingHandoverPin` (show it to the rider arriving with the parcel) and `outgoingPickupPin` (show it to the rider taking the parcel next). |
 
 ### 7.22 Payments, Refunds & Disputes
 

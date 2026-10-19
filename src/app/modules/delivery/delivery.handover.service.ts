@@ -263,6 +263,7 @@ const verifyHandover = async (
   } else {
     // Final leg completed -> SubOrder is delivered!
     subOrder.status = SubOrderStatus.delivered;
+    subOrder.deliveredAt = new Date();
     subOrder.timeline.push({
       status: "delivered",
       note: `Order successfully delivered to customer by partner`,

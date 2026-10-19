@@ -10,6 +10,7 @@ import {
   WithdrawalStatus,
 } from "./wallet.interface";
 import { WalletServices } from "./wallet.service";
+import { SUMMARY_RANGES, WalletSummaryServices } from "./wallet.summary.service";
 import { enumQuery, queryString } from "../../utils/queryParams";
 import { PayoutMethodType } from "../settings/settings.interface";
 
@@ -27,6 +28,20 @@ const getMyWallet = catchAsync(async (req: Request, res: Response) => {
     statusCode: httpStatus.OK,
     success: true,
     message: "Wallet retrieved successfully!",
+    data: result,
+  });
+});
+
+const getMySummary = catchAsync(async (req: Request, res: Response) => {
+  const result = await WalletSummaryServices.getMySummary(
+    req.user._id,
+    modeFromQuery(req),
+    enumQuery(req.query.range, SUMMARY_RANGES, "range"),
+  );
+  sendResponse(res, {
+    statusCode: httpStatus.OK,
+    success: true,
+    message: "Earnings summary retrieved successfully!",
     data: result,
   });
 });
@@ -187,6 +202,7 @@ const confirmCodSettlement = catchAsync(async (req: Request, res: Response) => {
 
 export const WalletControllers = {
   getMyWallet,
+  getMySummary,
   addPayoutMethod,
   updatePayoutMethod,
   deletePayoutMethod,

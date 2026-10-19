@@ -213,6 +213,9 @@ const subOrderSchema = new Schema<ISubOrder>(
     releasedAt: {
       type: Date,
     },
+    deliveredAt: {
+      type: Date,
+    },
   },
   {
     timestamps: true,

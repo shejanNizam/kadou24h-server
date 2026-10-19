@@ -120,10 +120,21 @@ const waitForServer = async () => {
 };
 
 // ── Helpers ──────────────────────────────────────────────────────────
+// Each user calls from their own IP, like real phones — otherwise the whole run
+// shares one IP and hits the global 200 requests / 15 min limit (trust proxy is on)
+const ipFor = (token) => {
+  const h = crypto.createHash("sha256").update(token ?? "anonymous").digest();
+  return `10.${h[0]}.${h[1]}.${h[2]}`;
+};
 const call = async (method, url, body, token, headers = {}) => {
   const res = await fetch(BASE + url, {
     method,
-    headers: { "Content-Type": "application/json", ...(token && { Authorization: `Bearer ${token}` }), ...headers },
+    headers: {
+      "Content-Type": "application/json",
+      "X-Forwarded-For": ipFor(token),
+      ...(token && { Authorization: `Bearer ${token}` }),
+      ...headers,
+    },
     body: body ? JSON.stringify(body) : undefined,
   });
   return { status: res.status, body: await res.json().catch(() => ({})) };
@@ -212,9 +223,17 @@ const run = async () => {
     await call("POST", `/deliveries/${legId}/accept`, null, R.token);
     await call("POST", `/deliveries/${legId}/going-to-pickup`, null, R.token);
     const vt = await call("GET", `/deliveries/${legId}/track`, null, V.token);
+    const ct = await call("GET", `/deliveries/${legId}/track`, null, C.token);
+    const vendorDetail = (await call("GET", `/orders/vendor/sub-orders/${subOrder._id}`, null, V.token)).body.data;
+    check(`${label}: vendor order detail carries the store's pickup PIN`, Boolean(vt.body.data?.pickupPin) && vendorDetail?.pickupPin === vt.body.data.pickupPin, JSON.stringify([vendorDetail?.pickupPin, vt.body.data?.pickupPin]));
+    const custDetail = (await call("GET", `/orders/${subOrder.orderId}`, null, C.token)).body.data;
+    const custSub = custDetail?.subOrders?.find((s) => String(s._id) === String(subOrder._id));
+    check(`${label}: customer order detail carries the delivery PIN`, Boolean(ct.body.data?.handoverPin) && custSub?.deliveryPin === ct.body.data.handoverPin, JSON.stringify([custSub?.deliveryPin, ct.body.data?.handoverPin]));
+    check(`${label}: PINs not crossed (vendor ≠ handover, customer ≠ pickup)`, vt.body.data.handoverPin === undefined && ct.body.data.pickupPin === undefined && vendorDetail.deliveryPin === undefined && custSub.pickupPin === undefined);
     a = await call("POST", `/deliveries/${legId}/verify-pickup`, { pin: vt.body.data?.pickupPin }, R.token);
     check(`${label}: pickup PIN accepted`, a.status === 200, brief(a));
-    const ct = await call("GET", `/deliveries/${legId}/track`, null, C.token);
+    const afterPickup = (await call("GET", `/orders/vendor/sub-orders/${subOrder._id}`, null, V.token)).body.data;
+    check(`${label}: pickup PIN gone from the vendor detail once used`, afterPickup?.pickupPin === undefined);
     const rt = await call("GET", `/deliveries/${legId}/track`, null, R.token);
     check(
       `${label}: rider never sees the PINs`,
@@ -227,6 +246,9 @@ const run = async () => {
       call("POST", `/deliveries/${legId}/verify-handover`, { pin }, R.token),
     ]);
     check(`${label}: handover PIN accepted exactly once (double tap)`, [h1, h2].filter((x) => x.status === 200).length === 1, `${brief(h1)} | ${brief(h2)}`);
+    const doneDetail = (await call("GET", `/orders/${subOrder.orderId}`, null, C.token)).body.data;
+    const doneSub = doneDetail?.subOrders?.find((s) => String(s._id) === String(subOrder._id));
+    check(`${label}: delivery PIN gone once delivered, deliveredAt set`, doneSub && doneSub.deliveryPin === undefined && Boolean(doneSub.deliveredAt), JSON.stringify([doneSub?.deliveryPin, doneSub?.deliveredAt]));
     return legId;
   };
 
@@ -262,6 +284,41 @@ const run = async () => {
   let rw = await wallet(R.token, "rider");
   const cod = codSub.codAmountToCollect;
   check("rider owes the COD cash, fee credited once", rw.cashOwed === cod && rw.availableBalance === codSub.deliveryFee, JSON.stringify([rw.cashOwed, rw.availableBalance, cod]));
+  // Earnings summary (app Earnings / Profile headers)
+  r = await call("GET", "/wallets/me/summary?mode=vendor", null, V.token);
+  let vs = r.body.data;
+  const todayKey = new Date().toISOString().slice(0, 10);
+  check(
+    "summary (vendor): today = 1 delivered order, its earning",
+    r.status === 200 && vs.today.count === 1 && vs.today.earnings === earning,
+    JSON.stringify(vs?.today ?? brief(r)),
+  );
+  check(
+    "summary (vendor): 7 daily buckets ending today",
+    vs.series?.length === 7 && vs.series.at(-1).key === todayKey && vs.series.at(-1).earnings === earning && vs.period.earnings === earning,
+    JSON.stringify(vs.series?.map((b) => b.key)),
+  );
+  check(
+    "summary (vendor): COD money shown as 'awaiting rider cash', not escrow",
+    vs.balances.awaitingCod === earning && vs.balances.inEscrow === 0 && vs.balances.withdrawable === 0,
+    JSON.stringify(vs.balances),
+  );
+  r = await call("GET", "/wallets/me/summary?mode=rider&range=6m", null, R.token);
+  const rs = r.body.data;
+  check(
+    "summary (rider): fee earned today, cash owed blocks withdrawal",
+    r.status === 200 && rs.today.count === 1 && rs.today.earnings === codSub.deliveryFee &&
+      rs.balances.cashOwed === codSub.codAmountToCollect &&
+      rs.balances.withdrawable === Math.max(0, rs.balances.availableBalance - rs.balances.cashOwed) &&
+      rs.balances.cashLimit > 0,
+    JSON.stringify(rs?.balances ?? brief(r)),
+  );
+  check("summary (rider): 6 monthly buckets ending this month", rs.series?.length === 6 && rs.series.at(-1).key === todayKey.slice(0, 7), JSON.stringify(rs.series?.map((b) => b.key)));
+  r = await call("GET", "/wallets/me/summary?mode=vendor&range=1y", null, V.token);
+  check("summary: unknown range → 400", r.status === 400, brief(r));
+  r = await call("GET", "/wallets/me/summary?mode=vendor", null, X.token);
+  check("summary: a customer with no store gets zeros, not an error", r.status === 200 && r.body.data.today.count === 0 && r.body.data.counts.newOrders === 0, brief(r));
+
   r = await call("GET", "/riders/me", null, R.token);
   check("rider stats counted once, no active job left", r.body.data?.stats?.completed === 1 && r.body.data?.activeDeliveryCount === 0, JSON.stringify([r.body.data?.stats, r.body.data?.activeDeliveryCount]));
 
@@ -281,6 +338,8 @@ const run = async () => {
   check("vendor gets an 'earnings updated' notification", (await notificationTypes(V.token, "vendor")).includes("earnings_updated"));
   rw = await wallet(R.token, "rider");
   check("rider cashOwed back to 0", rw.cashOwed === 0, String(rw.cashOwed));
+  vs = (await call("GET", "/wallets/me/summary?mode=vendor", null, V.token)).body.data;
+  check("summary (vendor): nothing awaiting rider cash after settlement", vs.balances.awaitingCod === 0 && vs.balances.withdrawable === earning, JSON.stringify(vs.balances));
 
   // ═════ 2. Withdrawal: two admins reject at once → refunded once ═════
   const payoutMethodId = vw.payoutMethods?.[0]?._id;
@@ -452,6 +511,12 @@ const run = async () => {
   check("relay: vendor detail lists all 3 legs", legList?.length === 3 && Boolean(leg2 && leg3), JSON.stringify(legList?.map((l) => l.legType)));
   const cust = (await call("GET", `/orders/${icSub.orderId}`, null, C.token)).body.data;
   check("customer order detail shows legs, no store phone", cust?.subOrders?.[0]?.deliveries?.length === 3 && cust.subOrders[0].vendorId?.businessPhone === undefined, JSON.stringify(cust?.subOrders?.[0]?.vendorId));
+  const custLeg1 = await call("GET", `/deliveries/${leg1}/track`, null, C.token);
+  check("relay: customer can follow leg 1 but gets no station PIN", custLeg1.status === 200 && custLeg1.body.data.handoverPin === undefined && custLeg1.body.data.pickupPin === undefined, brief(custLeg1));
+  const custLeg3 = (await call("GET", `/deliveries/${leg3}/track`, null, C.token)).body.data;
+  check("relay: customer's delivery PIN is the last leg's handover PIN", Boolean(custLeg3?.handoverPin) && cust.subOrders[0].deliveryPin === custLeg3.handoverPin, JSON.stringify([cust.subOrders[0].deliveryPin, custLeg3?.handoverPin]));
+  const vendLeg2 = await call("GET", `/deliveries/${leg2}/track`, null, V.token);
+  check("relay: vendor can follow leg 2 but gets no station PIN", vendLeg2.status === 200 && vendLeg2.body.data.pickupPin === undefined && vendLeg2.body.data.handoverPin === undefined, brief(vendLeg2));
 
   r = await call("POST", `/deliveries/${leg2}/assign`, { riderId: busId }, V.token);
   check("relay: vendor assigns the bus driver to leg 2", r.status === 200, brief(r));

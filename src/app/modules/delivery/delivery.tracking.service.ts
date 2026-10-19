@@ -51,13 +51,18 @@ const trackDelivery = async (
   const ridesPrevLeg = Boolean(myRiderId && prevLeg?.riderId && String(prevLeg.riderId) === myRiderId);
   const ridesNextLeg = Boolean(myRiderId && nextLeg?.riderId && String(nextLeg.riderId) === myRiderId);
 
-  // Security: only the giver sees pickupPin, only the receiver sees handoverPin
+  const isVendor = String(vendor?.userId) === userId;
+  const isCustomer = String(order?.customerId) === userId;
+
+  // Security: only the giver sees pickupPin, only the receiver sees handoverPin.
+  // The vendor gives only on the leg that starts at the store, and the customer
+  // receives only on the final leg — middle legs are station → station relays.
   const isGiver =
-    String(vendor?.userId) === userId ||
+    (isVendor && delivery.fromKind === EndpointKind.vendor) ||
     (delivery.fromKind === EndpointKind.station && (ridesPrevLeg || Boolean(isStaffOrAdmin)));
 
   const isReceiver =
-    String(order?.customerId) === userId ||
+    (isCustomer && !nextLeg) ||
     (delivery.toKind === EndpointKind.station && (ridesNextLeg || Boolean(isStaffOrAdmin)));
 
   // riderId is populated above, so compare against its _id, not the object
@@ -65,7 +70,8 @@ const trackDelivery = async (
     ?? delivery.riderId;
   const isRider = Boolean(riderProfile && assignedRiderId && String(riderProfile._id) === String(assignedRiderId));
 
-  if (!isGiver && !isReceiver && !isRider && !isStaffOrAdmin) {
+  // The store and the buyer may follow every leg of their order (map, status)
+  if (!isVendor && !isCustomer && !isGiver && !isReceiver && !isRider && !isStaffOrAdmin) {
     throw new AppError(
       httpStatus.FORBIDDEN,
       "You are not authorized to view tracking for this delivery",

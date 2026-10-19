@@ -3,6 +3,7 @@
  */
 import httpStatus from "http-status";
 import AppError from "../../errorHelpers/AppError";
+import { DeliveryStatus } from "../delivery/delivery.interface";
 import { Delivery } from "../delivery/delivery.model";
 import { OrderStatus, SubOrderStatus } from "./order.interface";
 import { Order } from "./order.model";
@@ -99,11 +100,38 @@ const getOrderDetails = async (
   }
   const legs = await legsQuery.lean();
 
+  // The buyer's own delivery PIN (handover PIN of each final leg) so the app can
+  // show "give this code to the rider" without one tracking call per store.
+  // Only while that leg is still open; never for admins.
+  const deliveryPins = new Map<string, string>();
+  if (customerId && !options.admin) {
+    const finalLegIds = subOrders
+      .map((so) =>
+        legs
+          .filter((l) => String(l.subOrderId) === String(so._id))
+          .reduce<(typeof legs)[number] | undefined>(
+            (last, l) => (!last || l.legNumber > last.legNumber ? l : last),
+            undefined,
+          ),
+      )
+      .filter(
+        (l): l is (typeof legs)[number] =>
+          Boolean(l) &&
+          ![DeliveryStatus.delivered, DeliveryStatus.cancelled].includes(l!.status),
+      )
+      .map((l) => l._id);
+    const finalLegs = await Delivery.find({ _id: { $in: finalLegIds } })
+      .select("subOrderId +handoverPin")
+      .lean();
+    for (const l of finalLegs) deliveryPins.set(String(l.subOrderId), l.handoverPin);
+  }
+
   return {
     order,
     subOrders: subOrders.map((so) => ({
       ...so.toObject(),
       deliveries: legs.filter((l) => String(l.subOrderId) === String(so._id)),
+      ...(deliveryPins.has(String(so._id)) && { deliveryPin: deliveryPins.get(String(so._id)) }),
     })),
   };
 };

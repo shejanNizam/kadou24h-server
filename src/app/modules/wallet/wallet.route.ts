@@ -30,6 +30,38 @@ const router = Router();
  */
 router.get("/me", checkAuth(...APP_ROLES), WalletControllers.getMyWallet);
 
+/**
+ * @swagger
+ * /wallets/me/summary:
+ *   get:
+ *     tags: [Wallet]
+ *     summary: Earnings summary for the app (balances explained, today, chart series)
+ *     description: |
+ *       Vendor earnings = vendorEarning of sub-orders delivered in the period.
+ *       Rider earnings = fee of delivery legs delivered in the period.
+ *       Days and months are counted in Africa/Conakry time (UTC+0).
+ *       Vendor balances add `inEscrow` and `awaitingCod` (delivered COD orders
+ *       whose cash the rider still holds); rider balances add `cashOwed`,
+ *       `cashLimit` and `withdrawable` (available minus cash owed).
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: mode
+ *         required: true
+ *         schema: { type: string, enum: [vendor, rider] }
+ *       - in: query
+ *         name: range
+ *         schema: { type: string, enum: ["7d", "30d", "6m", "12m"], default: "7d" }
+ *         description: 7d/30d → one bucket per day, 6m/12m → one bucket per month
+ *     responses:
+ *       200:
+ *         description: |
+ *           `{ mode, range, timezone, balances, counts, today: { earnings, count },
+ *           period: { from, to, earnings, count }, series: [{ key, earnings, count }] }`
+ */
+router.get("/me/summary", checkAuth(...APP_ROLES), WalletControllers.getMySummary);
+
 // Payout Methods
 
 /**

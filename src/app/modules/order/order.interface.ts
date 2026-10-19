@@ -128,6 +128,7 @@ export interface ISubOrderInitial {
   codSettledAt?: Date;
   settlement: SettlementStatus;
   releasedAt?: Date;
+  deliveredAt?: Date; // final leg handed over (earnings summary buckets by this)
 }
 
 export type ISubOrder = ISubOrderInitial & Document;
