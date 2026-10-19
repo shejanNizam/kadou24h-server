@@ -226,7 +226,8 @@ const getProductByIdOrSlug = async (
   const product = await Product.findOne(query)
     .populate({
       path: "vendorId",
-      select: "storeName logo address isOpen stats isPlatformStore marketName businessPhone",
+      // No businessPhone: buyers reach the store through in-app chat (anti off-platform rule)
+      select: "storeName logo address isOpen stats isPlatformStore marketName",
     })
     .populate("categoryId", "name slug icon isFeatured")
     .populate("subcategoryId", "name slug");

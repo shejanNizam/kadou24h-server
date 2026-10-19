@@ -177,7 +177,7 @@ export const disconnectUser = (userId: string, reason = "session_revoked"): void
  * Emit an event to a specific user regardless of which socket they're connected from.
  * Safe to call before socket init — silently skips if not ready.
  */
-export const emitToUser =(userId: string, event: string, data: unknown): void => {
+export const emitToUser = (userId: string, event: string, data: unknown): void => {
   try {
     getIO().to(`user:${userId}`).emit(event, data);
   } catch {

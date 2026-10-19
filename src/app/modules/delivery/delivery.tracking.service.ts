@@ -99,8 +99,14 @@ const trackDelivery = async (
       }
     : {};
 
+  // Client rule: the buyer never gets the store's phone (chat instead). The store
+  // and the riders keep the contact numbers they need for the handover.
+  const contacts =
+    isCustomer && !isVendor && !isRider && !isStaffOrAdmin ? { fromPhone: undefined } : {};
+
   return {
     ...withoutPins(deliveryObj),
+    ...contacts,
     ...visiblePins,
     ...relayPins,
     isGiver,

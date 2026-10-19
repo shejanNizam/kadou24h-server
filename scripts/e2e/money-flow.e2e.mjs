@@ -192,6 +192,8 @@ const run = async () => {
   r = await call("POST", "/products", { name: "Rice 25kg", categoryId: prodCat, price: 100000, stockQty: 50 }, V.token);
   check("create product with a plain JSON body", ok(r), brief(r));
   const productId = r.body.data?._id;
+  r = await call("GET", `/products/${productId}`);
+  check("product details show no store phone (client rule)", r.body.data?.product?.vendorId?.businessPhone === undefined, JSON.stringify(r.body.data?.product?.vendorId));
   r = await call("PATCH", `/products/${productId}/approval`, { approvalStatus: "approved" }, admin);
   check("admin approves product", r.status === 200, brief(r));
 
@@ -240,6 +242,7 @@ const run = async () => {
       rt.status === 200 && rt.body.data.pickupPin === undefined && rt.body.data.handoverPin === undefined,
       brief(rt),
     );
+    check(`${label}: customer tracking has no store phone`, ct.body.data?.fromPhone === undefined, String(ct.body.data?.fromPhone));
     const pin = ct.body.data?.handoverPin;
     const [h1, h2] = await Promise.all([
       call("POST", `/deliveries/${legId}/verify-handover`, { pin }, R.token),
