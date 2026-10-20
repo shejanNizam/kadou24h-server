@@ -17,7 +17,9 @@ import {
 } from "./chat.interface";
 import { Conversation } from "./conversation.model";
 import { Message } from "./message.model";
+import { assertReachable, resolveConversation, type StartConversationInput } from "./chat.start.service";
 import { inspectContent } from "./moderation.util";
+import { VendorProfile } from "../vendor_profile/vendor_profile.model";
 import { ModerationViolation } from "./moderation_violation.model";
 
 // Set when chat moderation suspends someone — lets an admin lift exactly that suspension
@@ -27,112 +29,83 @@ const CHAT_SUSPENSION_REASON =
 const SYSTEM_SAFETY_WARNING =
   "Notice: Pour votre sécurité, effectuez tous vos paiements via Kadou24h. Ne partagez jamais vos coordonnées bancaires ou numéros de téléphone en dehors de l'application.";
 
-interface IStartConversationPayload {
-  recipientId: string;
-  recipientMode: AppMode;
-  myMode: AppMode;
-  type: ConversationType;
-  orderId?: string;
-  subOrderId?: string;
-  applicationId?: string;
-  workerProfileId?: string;
-}
+// Participants as the app may see them: never a phone or email (client rule —
+// all contact goes through this chat). A store shows as the store.
+const PARTICIPANT_FIELDS = "name avatar";
 
-const startOrGetConversation = async (
-  userId: string,
-  payload: IStartConversationPayload,
-): Promise<IConversation> => {
-  if (userId.toString() === payload.recipientId.toString()) {
-    throw new AppError(400, "You cannot start a conversation with yourself");
-  }
+type LeanParticipant = { userId: { _id: Types.ObjectId; name?: string; avatar?: unknown } | Types.ObjectId; mode: string; unreadCount: number; lastReadAt?: Date };
 
-  const recipient = await User.findById(payload.recipientId);
-  if (!recipient || recipient.isDeleted) {
-    throw new AppError(404, "Recipient user not found");
-  }
+/**
+ * Adds `peer` (the other person: display name, avatar, mode) and `myUnread`
+ * for the viewer. Store participants are shown with the store name and logo.
+ */
+const presentConversations = async <T extends { participants: LeanParticipant[] }>(
+  conversations: T[],
+  viewerId: string,
+) => {
+  const idOf = (p: LeanParticipant) => String((p.userId as { _id?: Types.ObjectId })._id ?? p.userId);
+  const vendorUserIds = conversations.flatMap((c) =>
+    c.participants.filter((p) => p.mode === AppMode.vendor && idOf(p) !== viewerId).map(idOf),
+  );
+  const stores = vendorUserIds.length
+    ? await VendorProfile.find({ userId: { $in: vendorUserIds } }).select("userId storeName logo").lean()
+    : [];
+  const storeByUser = new Map(stores.map((v) => [String(v.userId), v]));
 
-  // Check if conversation already exists with identical context & participants
+  return conversations.map((c) => {
+    const mine = c.participants.find((p) => idOf(p) === viewerId);
+    const other = c.participants.find((p) => p !== mine) ?? mine;
+    const user = (other?.userId ?? {}) as { _id?: Types.ObjectId; name?: string; avatar?: unknown };
+    const store = other?.mode === AppMode.vendor ? storeByUser.get(idOf(other)) : undefined;
+    return {
+      ...c,
+      myMode: mine?.mode,
+      myUnread: mine?.unreadCount ?? 0,
+      peer: {
+        userId: other ? idOf(other) : undefined,
+        mode: other?.mode,
+        name: store?.storeName ?? user.name ?? "",
+        avatar: store?.logo ?? user.avatar,
+        ...(store && { vendorId: store._id }),
+      },
+    };
+  });
+};
+
+const startOrGetConversation = async (userId: string, input: StartConversationInput) => {
+  const resolved = await resolveConversation(userId, input);
+  await assertReachable(resolved.other.userId);
+
+  // Same subject + same two people in the same modes → the existing chat
   const existingQuery: Record<string, unknown> = {
-    type: payload.type,
-    "participants.userId": {
-      $all: [new Types.ObjectId(userId), new Types.ObjectId(payload.recipientId)],
-    },
+    type: resolved.type,
+    participants: { $all: [resolved.me, resolved.other].map((p) => ({ $elemMatch: { userId: p.userId, mode: p.mode } })) },
   };
+  for (const [key, value] of Object.entries(resolved.context)) existingQuery[key] = value;
 
-  if (payload.subOrderId) {
-    existingQuery.subOrderId = new Types.ObjectId(payload.subOrderId);
-  }
-  if (payload.applicationId) {
-    existingQuery.applicationId = new Types.ObjectId(payload.applicationId);
-  }
-  if (payload.orderId) {
-    existingQuery.orderId = new Types.ObjectId(payload.orderId);
-  }
-
-  const existing = await Conversation.findOne(existingQuery).populate(
-    "participants.userId",
-    "name avatar phone roles lastActiveMode",
-  );
-
-  if (existing) {
-    return existing;
-  }
-
-  // Voice note policy: allow_voice = true STRICTLY ONLY for customer <-> rider
-  const isCustomerAndRider =
-    (payload.myMode === AppMode.customer && payload.recipientMode === AppMode.rider) ||
-    (payload.myMode === AppMode.rider && payload.recipientMode === AppMode.customer);
-
-  const allowVoice = isCustomerAndRider;
-
-  // Create new conversation
-  const conversation = await Conversation.create({
-    type: payload.type,
-    orderId: payload.orderId ? new Types.ObjectId(payload.orderId) : undefined,
-    subOrderId: payload.subOrderId ? new Types.ObjectId(payload.subOrderId) : undefined,
-    applicationId: payload.applicationId
-      ? new Types.ObjectId(payload.applicationId)
-      : undefined,
-    workerProfileId: payload.workerProfileId
-      ? new Types.ObjectId(payload.workerProfileId)
-      : undefined,
-    allowVoice,
-    participants: [
-      {
-        userId: new Types.ObjectId(userId),
-        mode: payload.myMode,
-        unreadCount: 0,
-        lastReadAt: new Date(),
-      },
-      {
-        userId: new Types.ObjectId(payload.recipientId),
-        mode: payload.recipientMode,
-        unreadCount: 0,
-      },
-    ],
-    lastMessage: {
-      text: SYSTEM_SAFETY_WARNING,
+  let conversation = await Conversation.findOne(existingQuery).select("_id");
+  if (!conversation) {
+    conversation = await Conversation.create({
+      type: resolved.type,
+      ...resolved.context,
+      allowVoice: resolved.allowVoice,
+      participants: [
+        { userId: resolved.me.userId, mode: resolved.me.mode, unreadCount: 0, lastReadAt: new Date() },
+        { userId: resolved.other.userId, mode: resolved.other.mode, unreadCount: 0 },
+      ],
+      lastMessage: { text: SYSTEM_SAFETY_WARNING, type: MessageType.system, at: new Date() },
+    });
+    // Every chat opens with the safety notice
+    await Message.create({
+      conversationId: conversation._id,
+      senderId: null,
       type: MessageType.system,
-      at: new Date(),
-    },
-  });
-
-  // Automatically insert initial system safety warning message
-  await Message.create({
-    conversationId: conversation._id,
-    senderId: null,
-    type: MessageType.system,
-    text: SYSTEM_SAFETY_WARNING,
-    moderationStatus: ModerationStatus.clean,
-    moderationRules: [],
-  });
-
-  const populated = await Conversation.findById(conversation._id).populate(
-    "participants.userId",
-    "name avatar phone roles lastActiveMode",
-  );
-
-  return populated || conversation;
+      text: SYSTEM_SAFETY_WARNING,
+      moderationStatus: ModerationStatus.clean,
+      moderationRules: [],
+    });
+  }
+  return getConversationById(userId, String(conversation._id));
 };
 
 const getMyConversations = async (
@@ -155,7 +128,8 @@ const getMyConversations = async (
 
   const [data, total] = await Promise.all([
     Conversation.find(filter)
-      .populate("participants.userId", "name avatar phone roles lastActiveMode")
+      .populate("participants.userId", PARTICIPANT_FIELDS)
+      .populate("subOrderId", "subOrderNumber")
       .sort({ updatedAt: -1 })
       .skip(skip)
       .limit(limit)
@@ -170,32 +144,42 @@ const getMyConversations = async (
       total,
       totalPage: Math.ceil(total / limit),
     },
-    data,
+    data: await presentConversations(data as unknown as (typeof data[number] & { participants: LeanParticipant[] })[], userId),
   };
 };
 
-const getConversationById = async (
-  userId: string,
-  conversationId: string,
-): Promise<IConversation> => {
-  const conversation = await Conversation.findById(conversationId).populate(
-    "participants.userId",
-    "name avatar phone roles lastActiveMode",
-  );
+/** Total unread messages in one mode — the Chat tab badge */
+const getUnreadCount = async (userId: string, mode: string) => {
+  const [row] = await Conversation.aggregate<{ unreadCount: number }>([
+    { $match: { participants: { $elemMatch: { userId: new Types.ObjectId(userId), mode } } } },
+    { $unwind: "$participants" },
+    { $match: { "participants.userId": new Types.ObjectId(userId), "participants.mode": mode } },
+    { $group: { _id: null, unreadCount: { $sum: "$participants.unreadCount" } } },
+  ]);
+  return { unreadCount: row?.unreadCount ?? 0 };
+};
+
+const getConversationById = async (userId: string, conversationId: string) => {
+  if (!Types.ObjectId.isValid(conversationId)) throw new AppError(404, "Conversation not found");
+  const conversation = await Conversation.findById(conversationId)
+    .populate("participants.userId", PARTICIPANT_FIELDS)
+    .populate("subOrderId", "subOrderNumber orderId status")
+    .lean();
 
   if (!conversation) {
     throw new AppError(404, "Conversation not found");
   }
 
-  const isParticipant = conversation.participants.some(
-    (p) => p.userId._id?.toString() === userId.toString() || p.userId.toString() === userId.toString(),
+  const isParticipant = (conversation.participants as unknown as LeanParticipant[]).some(
+    (p) => String((p.userId as { _id?: Types.ObjectId })._id ?? p.userId) === userId.toString(),
   );
 
   if (!isParticipant) {
     throw new AppError(403, "You are not a participant in this conversation");
   }
 
-  return conversation;
+  const [presented] = await presentConversations([conversation as unknown as typeof conversation & { participants: LeanParticipant[] }], userId);
+  return presented;
 };
 
 const getMessages = async (
@@ -222,15 +206,18 @@ const getMessages = async (
 
   const filter = { conversationId: new Types.ObjectId(conversationId) };
 
-  const [data, total] = await Promise.all([
+  // Page 1 = the latest messages (a chat opens at the bottom); older pages on scroll-up.
+  // Inside a page, oldest → newest.
+  const [newestFirst, total] = await Promise.all([
     Message.find(filter)
       .populate("senderId", "name avatar")
-      .sort({ createdAt: 1 })
+      .sort({ createdAt: -1, _id: -1 })
       .skip(skip)
       .limit(limit)
       .lean(),
     Message.countDocuments(filter),
   ]);
+  const data = newestFirst.reverse();
 
   return {
     meta: {
@@ -557,6 +544,7 @@ const liftUserChatRestrictionAdmin = async (targetUserId: string) => {
 export const ChatServices = {
   startOrGetConversation,
   getMyConversations,
+  getUnreadCount,
   getConversationById,
   getMessages,
   sendMessage,

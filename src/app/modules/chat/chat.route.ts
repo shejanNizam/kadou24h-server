@@ -42,11 +42,16 @@ router.post(
  *       content:
  *         application/json:
  *           schema:
+ *             description: "Say what the chat is about; the server finds the other person and the modes. One of: { type: buyer_seller, vendorId } · { type: worker, workerProfileId } · { type: order, subOrderId, with: vendor|rider|customer } · { type: job_application, applicationId }. Voice notes are allowed only between the buyer and the rider of that order."
  *             type: object
- *             required: [participantId]
+ *             required: [type]
  *             properties:
- *               participantId: { type: string, example: "65b4c1a2d3e4f5a6b7c8d9e0" }
- *               orderId: { type: string }
+ *               type: { type: string, enum: [buyer_seller, worker, order, job_application] }
+ *               vendorId: { type: string }
+ *               workerProfileId: { type: string }
+ *               subOrderId: { type: string }
+ *               with: { type: string, enum: [vendor, rider, customer] }
+ *               applicationId: { type: string }
  *     responses:
  *       200:
  *         description: Conversation retrieved or created
@@ -59,6 +64,22 @@ router.post(
 );
 
 router.get("/", checkAuth(...ALL_ROLES), ChatControllers.getMyConversations);
+/**
+ * @swagger
+ * /conversations/unread-count:
+ *   get:
+ *     tags: [Chat]
+ *     summary: Total unread messages for one mode (chat tab badge)
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: mode
+ *         schema: { type: string, enum: [customer, vendor, rider] }
+ *     responses:
+ *       200: { description: "{ unreadCount }" }
+ */
+router.get("/unread-count", checkAuth(...ALL_ROLES), ChatControllers.getUnreadCount);
 router.get("/:id", checkAuth(...ALL_ROLES), ChatControllers.getConversationById);
 router.patch("/:id/read", checkAuth(...ALL_ROLES), ChatControllers.markConversationAsRead);
 

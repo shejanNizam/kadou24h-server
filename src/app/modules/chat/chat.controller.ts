@@ -30,6 +30,17 @@ const getMyConversations = catchAsync(async (req: Request, res: Response) => {
   });
 });
 
+const getUnreadCount = catchAsync(async (req: Request, res: Response) => {
+  const mode = (req.query.mode as string) || req.user.lastActiveMode || AppMode.customer;
+  const result = await ChatServices.getUnreadCount(req.user._id, mode);
+  sendResponse(res, {
+    statusCode: 200,
+    success: true,
+    message: "Unread count retrieved successfully",
+    data: result,
+  });
+});
+
 const getConversationById = catchAsync(async (req: Request, res: Response) => {
   const userId = req.user._id;
   const id = req.params.id as string;
@@ -109,6 +120,7 @@ const liftUserChatRestrictionAdmin = catchAsync(async (req: Request, res: Respon
 });
 
 export const ChatControllers = {
+  getUnreadCount,
   startOrGetConversation,
   getMyConversations,
   getConversationById,

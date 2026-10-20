@@ -1088,6 +1088,22 @@ Errors: 409 already connected / already invited · 403 the inviter tried to answ
 | `POST /deliveries/:id/assign` | Vendor / Admin | assign delivery leg to partner: `{ riderId }`; sends real-time push/socket alert |
 | `GET /deliveries/:id/track` | Customer, store owner, riders of the leg chain, admin | live delivery tracking. The customer and the store may follow every leg of their order. **PIN visibility**: `pickupPin` only to the giver (the vendor on the leg that starts at the store, or the rider arriving at a station), `handoverPin` only to the receiver (the customer on the final leg, or the next rider at a station). Middle station→station legs show no PIN to the customer or the store. The assigned rider never sees its own leg's PINs. On the rider's own leg at bus stations: `incomingHandoverPin` (show it to the rider arriving with the parcel) and `outgoingPickupPin` (show it to the rider taking the parcel next). |
 
+### 7.21a Delete my account
+
+`DELETE /user/me` soft-deletes the account (contacts freed, tokens and devices removed). Refused with **409** and a clear message while: the user has an order in progress as a buyer; their store has sub-orders in progress; they have deliveries in progress; they still owe COD cash; or any of their wallets holds money (held or available).
+
+### 7.21b Chat (app)
+
+| Endpoint | Who | Notes |
+|---|---|---|
+| `POST /conversations` | Signed-in | start or reopen a chat **by subject**: `{ type: "buyer_seller", vendorId }`, `{ type: "worker", workerProfileId }`, `{ type: "order", subOrderId, with: "vendor" \| "rider" \| "customer" }`, `{ type: "job_application", applicationId }`. The server resolves the other person and both modes from the data (403 if you are not part of that order/application, 400 for your own store, no rider yet, or a free `recipientId`). `allowVoice` is true only for the buyer ↔ rider of that order. |
+| `GET /conversations?mode=` | Signed-in | my chats in one mode, newest activity first. Each has `peer { userId, mode, name, avatar, vendorId? }` (stores appear as the store), `myMode`, `myUnread`. **No phone or email** anywhere. |
+| `GET /conversations/unread-count?mode=` | Signed-in | `{ unreadCount }` across my chats in that mode |
+| `GET /conversations/:id` | Participant | one chat (same shape) |
+| `GET /conversations/:id/messages?page=&limit=` | Participant | page 1 = the newest messages; inside a page oldest → newest |
+| `POST /conversations/:id/messages` | Participant | `{ type: text \| image \| voice, text?, mediaUrl?, mediaDurationSec? }`. Contacts are masked; 3 violations → 24 h restriction (403), 5 → suspension. |
+| `PATCH /conversations/:id/read?mode=` | Participant | marks my side read, emits `message_read` |
+
 ### 7.22 Payments, Refunds & Disputes
 
 #### Money IN & Customer Payments

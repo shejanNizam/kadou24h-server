@@ -1,18 +1,20 @@
 import { z } from "zod";
-import { AppMode } from "../user/user.interface";
 import { ConversationType, MessageType } from "./chat.interface";
 
+const objectId = z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid id");
+
+// The app says what the chat is about; the server finds the other person
 const startConversationZodSchema = z.object({
-  body: z.object({
-    recipientId: z.string().min(1, "Recipient ID is required"),
-    recipientMode: z.nativeEnum(AppMode),
-    myMode: z.nativeEnum(AppMode),
-    type: z.nativeEnum(ConversationType),
-    orderId: z.string().optional(),
-    subOrderId: z.string().optional(),
-    applicationId: z.string().optional(),
-    workerProfileId: z.string().optional(),
-  }),
+  body: z.discriminatedUnion("type", [
+    z.object({ type: z.literal(ConversationType.buyer_seller), vendorId: objectId }),
+    z.object({ type: z.literal(ConversationType.worker), workerProfileId: objectId }),
+    z.object({
+      type: z.literal(ConversationType.order),
+      subOrderId: objectId,
+      with: z.enum(["vendor", "rider", "customer"]),
+    }),
+    z.object({ type: z.literal(ConversationType.job_application), applicationId: objectId }),
+  ]),
 });
 
 const sendMessageZodSchema = z.object({

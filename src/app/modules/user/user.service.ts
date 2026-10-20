@@ -11,6 +11,12 @@ import { OtpPurpose } from "../otp/otp.interface";
 import { OTPService } from "../otp/otp.service";
 import { RiderProfile } from "../rider_profile/rider_profile.model";
 import { VendorProfile } from "../vendor_profile/vendor_profile.model";
+import { DeliveryStatus } from "../delivery/delivery.interface";
+import { Delivery } from "../delivery/delivery.model";
+import { OrderStatus, SubOrderStatus } from "../order/order.interface";
+import { Order } from "../order/order.model";
+import { SubOrder } from "../order/sub_order.model";
+import { Wallet } from "../wallet/wallet.model";
 import {
   ADMIN_ROLES,
   AppMode,
@@ -171,11 +177,43 @@ const verifyPhoneChange = async (userId: string, phone: string, otp: string) => 
   return toPublicUser(user);
 };
 
+/**
+ * Self-deletion is refused while the account is still part of money or parcels
+ * in motion — otherwise a rider could vanish with COD cash, or a buyer with an
+ * order on the way. The message says what to finish first.
+ */
+const assertNothingPending = async (userId: string) => {
+  const OPEN_SUB_ORDER = [SubOrderStatus.new, SubOrderStatus.accepted, SubOrderStatus.preparing, SubOrderStatus.ready_for_pickup, SubOrderStatus.in_delivery];
+  const OPEN_LEG = [DeliveryStatus.assigned, DeliveryStatus.accepted, DeliveryStatus.going_to_pickup, DeliveryStatus.picked_up, DeliveryStatus.in_transit];
+
+  if (await Order.exists({ customerId: userId, status: OrderStatus.active })) {
+    throw new AppError(httpStatus.CONFLICT, "You have orders in progress. Wait until they are delivered or cancel them before deleting your account.");
+  }
+  const [vendor, rider, wallets] = await Promise.all([
+    VendorProfile.findOne({ userId }).select("_id").lean(),
+    RiderProfile.findOne({ userId }).select("_id").lean(),
+    Wallet.find({ ownerId: userId }).select("ownerMode heldBalance availableBalance cashOwed").lean(),
+  ]);
+  if (vendor && (await SubOrder.exists({ vendorId: vendor._id, status: { $in: OPEN_SUB_ORDER } }))) {
+    throw new AppError(httpStatus.CONFLICT, "Your store has orders in progress. Finish or cancel them before deleting your account.");
+  }
+  if (rider && (await Delivery.exists({ riderId: rider._id, status: { $in: OPEN_LEG } }))) {
+    throw new AppError(httpStatus.CONFLICT, "You have deliveries in progress. Finish them before deleting your account.");
+  }
+  if (wallets.some((w) => (w.cashOwed ?? 0) > 0)) {
+    throw new AppError(httpStatus.CONFLICT, "You still hold cash on delivery money. Hand it over before deleting your account.");
+  }
+  if (wallets.some((w) => (w.heldBalance ?? 0) > 0 || (w.availableBalance ?? 0) > 0)) {
+    throw new AppError(httpStatus.CONFLICT, "Your wallet still has money. Withdraw your balance before deleting your account.");
+  }
+};
+
 const deleteMe = async (userId: string) => {
   const user = await findActiveUser(userId);
   if (user.roles.includes(UserRole.super_admin)) {
     throw new AppError(httpStatus.FORBIDDEN, "The super admin account cannot be deleted");
   }
+  await assertNothingPending(userId);
   await softDelete(user);
 };
 

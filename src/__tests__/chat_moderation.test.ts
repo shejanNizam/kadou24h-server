@@ -130,28 +130,30 @@ describe("Chat, Trust & Moderation Module (Step 8)", () => {
   });
 
   describe("Chat & Message Validation Schemas", () => {
-    it("validates valid startConversation payload", () => {
-      const valid = ChatValidations.startConversationZodSchema.safeParse({
-        body: {
-          recipientId: "64f1a2b3c4d5e6f7a8b9c0d1",
-          recipientMode: AppMode.vendor,
-          myMode: AppMode.customer,
-          type: ConversationType.buyer_seller,
-        },
+    it("validates startConversation by subject (store, order + with)", () => {
+      const store = ChatValidations.startConversationZodSchema.safeParse({
+        body: { type: ConversationType.buyer_seller, vendorId: "64f1a2b3c4d5e6f7a8b9c0d1" },
       });
-      expect(valid.success).toBe(true);
+      const order = ChatValidations.startConversationZodSchema.safeParse({
+        body: { type: ConversationType.order, subOrderId: "64f1a2b3c4d5e6f7a8b9c0d1", with: "rider" },
+      });
+      expect(store.success).toBe(true);
+      expect(order.success).toBe(true);
     });
 
-    it("rejects startConversation with invalid mode or type", () => {
-      const invalid = ChatValidations.startConversationZodSchema.safeParse({
-        body: {
-          recipientId: "64f1a2b3c4d5e6f7a8b9c0d1",
-          recipientMode: "alien_mode",
-          myMode: AppMode.customer,
-          type: "unsupported_chat",
-        },
+    it("rejects startConversation with a free recipient, unknown type or missing subject", () => {
+      const recipient = ChatValidations.startConversationZodSchema.safeParse({
+        body: { type: ConversationType.buyer_seller, recipientId: "64f1a2b3c4d5e6f7a8b9c0d1", recipientMode: AppMode.vendor },
       });
-      expect(invalid.success).toBe(false);
+      const unknown = ChatValidations.startConversationZodSchema.safeParse({
+        body: { type: "unsupported_chat", vendorId: "64f1a2b3c4d5e6f7a8b9c0d1" },
+      });
+      const noWith = ChatValidations.startConversationZodSchema.safeParse({
+        body: { type: ConversationType.order, subOrderId: "64f1a2b3c4d5e6f7a8b9c0d1" },
+      });
+      expect(recipient.success).toBe(false);
+      expect(unknown.success).toBe(false);
+      expect(noWith.success).toBe(false);
     });
 
     it("validates text message with valid text content", () => {

@@ -69,7 +69,8 @@ export const sendPushToUser = async (userId: string | Types.ObjectId, message: P
       tokens,
       notification: { title: message.title, body: message.body },
       data,
-      android: { priority: "high" },
+      // "default" = the channel the app creates (sound + heads-up)
+      android: { priority: "high", notification: { channelId: "default", sound: "default" } },
       apns: { payload: { aps: { sound: "default" } } },
     });
 

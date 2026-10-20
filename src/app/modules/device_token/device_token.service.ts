@@ -9,8 +9,9 @@ const upsertToken = async (payload: Partial<IDeviceToken>) => {
   );
 };
 
-const removeToken = async (token: string) => {
-  return DeviceToken.findOneAndDelete({ token });
+// Only my own device (sign-out on this phone)
+const removeToken = async (userId: string, token: string) => {
+  return DeviceToken.findOneAndDelete({ token, userId });
 };
 
 const getUserTokens = async (userId: string) => {

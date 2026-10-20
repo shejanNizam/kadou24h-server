@@ -17,7 +17,8 @@ const upsertToken = catchAsync(async (req: Request, res: Response) => {
 });
 
 const removeToken = catchAsync(async (req: Request, res: Response) => {
-  await DeviceTokenServices.removeToken(req.body.token);
+  const { _id: userId } = req.user as JwtPayload;
+  await DeviceTokenServices.removeToken(userId, req.body.token);
   sendResponse(res, {
     statusCode: httpStatus.OK,
     success: true,
