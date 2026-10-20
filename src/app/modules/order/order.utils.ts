@@ -10,6 +10,8 @@ import { CancelledBy, Notify } from "../notification/notification.events";
 import { Product } from "../product/product.model";
 import { RiderProfile } from "../rider_profile/rider_profile.model";
 import { WalletServices } from "../wallet/wallet.service";
+import { RefundSource } from "../payment/payment.interface";
+import { RefundServices } from "../payment/refund.service";
 import { ISubOrder, OrderStatus, SubOrderStatus } from "./order.interface";
 import { Order } from "./order.model";
 import { SubOrder } from "./sub_order.model";
@@ -107,6 +109,15 @@ const cancelSubOrder = async (opts: {
 
   await WalletServices.reverseEscrowForSubOrder(String(previous._id), opts.actorUserId);
 
+  // Paid online? The customer's money for this store goes into a refund request (admin approves)
+  await RefundServices.requestRefund({
+    orderId: previous.orderId,
+    subOrderId: previous._id,
+    amount: previous.total,
+    source: RefundSource.cancellation,
+    reason: `${previous.subOrderNumber} cancelled by ${opts.by}: ${opts.reason}`,
+  });
+
   const openLegStatuses = parcelWithRider
     ? [...NOT_PICKED_UP_LEGS, DeliveryStatus.picked_up, DeliveryStatus.in_transit]
     : NOT_PICKED_UP_LEGS;
@@ -128,7 +139,11 @@ const cancelSubOrder = async (opts: {
     }
   }
 
-  if (opts.syncParent !== false) await syncOrderStatus(previous.orderId);
+  if (opts.syncParent !== false) {
+    await syncOrderStatus(previous.orderId);
+    // Whole order cancelled: the service fee and tax go back too
+    await RefundServices.requestRemainingIfCancelled(previous.orderId);
+  }
 
   const riderIds = openLegs.flatMap((leg) => (leg.riderId ? [leg.riderId] : []));
   Notify.orderCancelled(previous, opts.by, opts.reason, riderIds);

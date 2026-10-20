@@ -15,13 +15,16 @@ import { TransactionType, WalletMode } from "../wallet/wallet.interface";
 import { WalletServices } from "../wallet/wallet.service";
 import { cancelSubOrder, syncOrderStatus } from "./order.utils";
 import { Notify } from "../notification/notification.events";
+import { SettingsServices } from "../settings/settings.service";
+import { RefundSource } from "../payment/payment.interface";
+import { RefundServices } from "../payment/refund.service";
 
 /**
  * Vendor retrieves their assigned sub-orders.
  */
 const getVendorSubOrders = async (
   vendorUserId: string,
-  query: { page?: number; limit?: number; status?: SubOrderStatus },
+  query: { page?: number; limit?: number; status?: string },
 ) => {
   const vendor = await VendorProfile.findOne({ userId: vendorUserId });
   if (!vendor) {
@@ -33,12 +36,25 @@ const getVendorSubOrders = async (
   const skip = (page - 1) * limit;
 
   const filter: Record<string, unknown> = { vendorId: vendor._id };
-  if (query.status) filter.status = query.status;
+  // One status or several, comma-separated (the app's tabs: "accepted,preparing,…")
+  if (query.status) {
+    const statuses = String(query.status)
+      .split(",")
+      .filter((s): s is SubOrderStatus => Object.values(SubOrderStatus).includes(s as SubOrderStatus));
+    if (!statuses.length) throw new AppError(httpStatus.BAD_REQUEST, "Invalid sub-order status");
+    filter.status = { $in: statuses };
+  }
 
   const [subOrders, total] = await Promise.all([
     SubOrder.find(filter)
       .populate("customerId", "name phone avatar")
-      .populate("currentRiderId", "vehicleType plateNumber")
+      // Payment state on the card: an online order may still be unpaid
+      .populate("orderId", "orderNumber deliveryType paymentMethod paymentStatus")
+      .populate({
+        path: "currentRiderId",
+        select: "userId vehicle.type",
+        populate: { path: "userId", select: "name avatar" },
+      })
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit),
@@ -275,82 +291,69 @@ const modifySubOrderItems = async (
   const oldTotal = subOrder.total;
   const removedRecord: ISubOrderModification["removedItems"] = [];
 
-  for (const mod of modifications) {
+  // Validate everything first, so a bad line changes nothing. The order can only
+  // shrink: the customer agreed to (and maybe paid) the original amount.
+  const plan = modifications.map((mod) => {
     const item = subOrder.items.find(
       (i) => String(i.productId) === mod.productId && !i.removed,
     );
-    if (!item) continue;
-
-    if (mod.action === "remove") {
-      item.removed = true;
-      removedRecord.push({
-        productId: item.productId,
-        name: item.name,
-        qty: item.qty,
-        unitPrice: item.unitPrice,
-        lineTotal: item.lineTotal,
-      });
-
-      // Restore stock
-      await Product.findByIdAndUpdate(item.productId, {
-        $inc: { stockQty: item.qty, soldCount: -item.qty },
-      });
-    } else if (mod.action === "update_qty" && mod.newQty !== undefined) {
-      const newQty = Math.max(0, mod.newQty);
-      if (newQty === 0) {
-        item.removed = true;
-        removedRecord.push({
-          productId: item.productId,
-          name: item.name,
-          qty: item.qty,
-          unitPrice: item.unitPrice,
-          lineTotal: item.lineTotal,
-        });
-        await Product.findByIdAndUpdate(item.productId, {
-          $inc: { stockQty: item.qty, soldCount: -item.qty },
-        });
-      } else {
-        const qtyDiff = item.qty - newQty;
-        if (qtyDiff > 0) {
-          // restored items
-          await Product.findByIdAndUpdate(item.productId, {
-            $inc: { stockQty: qtyDiff, soldCount: -qtyDiff },
-          });
-        } else if (qtyDiff < 0) {
-          // deducting more items
-          const product = await Product.findById(item.productId);
-          if (!product || product.stockQty < Math.abs(qtyDiff)) {
-            throw new AppError(
-              httpStatus.BAD_REQUEST,
-              `Insufficient stock for "${item.name}"`,
-            );
-          }
-          await Product.findByIdAndUpdate(item.productId, {
-            $inc: { stockQty: qtyDiff, soldCount: -qtyDiff },
-          });
-        }
-
-        item.qty = newQty;
-        item.lineTotal = item.unitPrice * newQty;
-        removedRecord.push({
-          productId: item.productId,
-          name: item.name,
-          qty: Math.abs(qtyDiff),
-          unitPrice: item.unitPrice,
-          lineTotal: item.unitPrice * Math.abs(qtyDiff),
-        });
-      }
+    if (!item) {
+      throw new AppError(httpStatus.BAD_REQUEST, "This item is not in the order");
     }
+    const newQty = mod.action === "remove" ? 0 : mod.newQty;
+    if (newQty === undefined) {
+      throw new AppError(httpStatus.BAD_REQUEST, "newQty is required to change a quantity");
+    }
+    if (newQty >= item.qty) {
+      throw new AppError(
+        httpStatus.BAD_REQUEST,
+        `You can only reduce the quantity of "${item.name}" (now ${item.qty})`,
+      );
+    }
+    return { item, newQty };
+  });
+  const touched = new Set(plan.map((p) => p.item));
+  const leftAfter =
+    subOrder.items.filter((i) => !i.removed && !touched.has(i)).length +
+    plan.filter((p) => p.newQty > 0).length;
+  if (leftAfter === 0) {
+    throw new AppError(
+      httpStatus.BAD_REQUEST,
+      "An order needs at least one item. To remove everything, cancel the order instead.",
+    );
+  }
+
+  for (const { item, newQty } of plan) {
+    const qtyRemoved = item.qty - newQty;
+    removedRecord.push({
+      productId: item.productId,
+      name: item.name,
+      qty: qtyRemoved,
+      unitPrice: item.unitPrice,
+      lineTotal: item.unitPrice * qtyRemoved,
+    });
+    if (newQty === 0) {
+      item.removed = true;
+    } else {
+      item.qty = newQty;
+      item.lineTotal = item.unitPrice * newQty;
+    }
+    // Back on the shelf
+    await Product.findByIdAndUpdate(item.productId, {
+      $inc: { stockQty: qtyRemoved, soldCount: -qtyRemoved },
+    });
   }
 
   // Recalculate subtotal of active items
   const activeItems = subOrder.items.filter((i) => !i.removed);
   const newSubtotal = activeItems.reduce((sum, i) => sum + i.lineTotal, 0);
 
-  // Recalculate commission safely
-  const commissionRate = subOrder.commissionRate || 10;
+  // Same commission rule as checkout (rate stored on the sub-order, minimum from settings)
+  const settings = await SettingsServices.getSettings();
+  const commissionRate = subOrder.commissionRate ?? settings.commission?.rate ?? 10;
+  const commissionMin = settings.commission?.min ?? 1000;
   const rawCommission = Math.round((commissionRate / 100) * newSubtotal);
-  const cappedMin = Math.min(1000, Math.round(newSubtotal * 0.9));
+  const cappedMin = Math.min(commissionMin, Math.round(newSubtotal * 0.9));
   const newCommissionAmount = Math.min(
     Math.max(rawCommission, cappedMin),
     Math.round(newSubtotal * 0.9),
@@ -423,6 +426,17 @@ const modifySubOrderItems = async (
   });
 
   await subOrder.save();
+  Notify.orderModified(subOrder, newTotal);
+  // Paid online: the difference goes into a refund request (admin approves)
+  if (refundAmount > 0) {
+    await RefundServices.requestRefund({
+      orderId: subOrder.orderId,
+      subOrderId: subOrder._id,
+      amount: refundAmount,
+      source: RefundSource.modification,
+      reason: `${subOrder.subOrderNumber} changed by the store: ${reason || "items removed"}`,
+    });
+  }
 
   // Re-sync parent Order totals
   const allSubOrders = await SubOrder.find({ orderId: subOrder.orderId });

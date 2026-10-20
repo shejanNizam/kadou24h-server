@@ -24,6 +24,7 @@ import { WalletServices, walletSummary } from "../wallet/wallet.service";
 import { IStoreAvailability, IVendorProfile } from "./vendor_profile.interface";
 import { VendorProfile } from "./vendor_profile.model";
 import { Notify } from "../notification/notification.events";
+import { Product } from "../product/product.model";
 
 interface StoreInput {
   storeName?: string;
@@ -145,6 +146,13 @@ const updateMyStore = async (userId: string, payload: StoreInput) => {
   assertApproved(profile);
   await applyStoreInput(profile, payload);
   await profile.save();
+  // Products carry the store's point for "near me" search: keep them in step
+  if (payload.address?.location) {
+    await Product.updateMany(
+      { vendorId: profile._id },
+      { $set: { vendorLocation: profile.address.location } },
+    );
+  }
   return present(profile);
 };
 

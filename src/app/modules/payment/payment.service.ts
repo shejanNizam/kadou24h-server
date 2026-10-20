@@ -3,6 +3,8 @@ import { Types } from "mongoose";
 import AppError from "../../errorHelpers/AppError";
 import { emitToUser } from "../../../socket/socket";
 import { Notify } from "../notification/notification.events";
+import { RefundServices } from "./refund.service";
+import { RefundSource } from "./payment.interface";
 import { AppMode } from "../user/user.interface";
 import { Order } from "../order/order.model";
 import { SubOrder } from "../order/sub_order.model";
@@ -253,109 +255,9 @@ const handleWebhook = async (payload: {
   return payment;
 };
 
-/**
- * Admin issues a refund for an order.
- * If vendor earnings were already released, writes refund_deduction to vendor ledger.
- */
-const issueRefund = async (
-  adminUserId: string,
-  payload: {
-    orderId: string;
-    subOrderId?: string;
-    amount: number;
-    reason: string;
-    notes?: string;
-  },
-) => {
-  const order = await Order.findById(payload.orderId);
-  if (!order) throw new AppError(httpStatus.NOT_FOUND, "Order not found");
-
-  // Only money the customer actually paid can go back
-  if (order.paymentStatus === OrderPaymentStatus.unpaid) {
-    throw new AppError(
-      httpStatus.BAD_REQUEST,
-      "This order has not been paid (COD orders are paid at delivery) — nothing to refund. Cancel it instead.",
-    );
-  }
-
-  const previous = await Refund.aggregate<{ total: number }>([
-    { $match: { orderId: order._id, status: RefundStatus.completed } },
-    { $group: { _id: null, total: { $sum: "$amount" } } },
-  ]);
-  const alreadyRefunded = previous[0]?.total ?? 0;
-  const refundable = order.total - alreadyRefunded;
-  if (payload.amount > refundable) {
-    throw new AppError(
-      httpStatus.BAD_REQUEST,
-      `Refund amount (${payload.amount} GNF) exceeds what is left to refund (${refundable} GNF of ${order.total} GNF)`,
-    );
-  }
-
-  // Find linked payment
-  const payment = await Payment.findOne({
-    purpose: PaymentPurpose.order,
-    refId: order._id,
-    status: PaymentStatus.success,
-  });
-
-  const refund = await Refund.create({
-    orderId: order._id,
-    subOrderId: payload.subOrderId ? new Types.ObjectId(payload.subOrderId) : undefined,
-    paymentId: payment?._id,
-    customerId: order.customerId,
-    amount: payload.amount,
-    reason: payload.reason,
-    notes: payload.notes,
-    status: RefundStatus.completed,
-    issuedBy: new Types.ObjectId(adminUserId),
-  });
-
-  // Update order payment status
-  const existingRefunds = await Refund.find({
-    orderId: order._id,
-    status: RefundStatus.completed,
-  });
-  const totalRefunded = existingRefunds.reduce((sum, r) => sum + r.amount, 0);
-
-  if (totalRefunded >= order.total) {
-    order.paymentStatus = OrderPaymentStatus.refunded;
-  } else {
-    order.paymentStatus = OrderPaymentStatus.partially_refunded;
-  }
-  await order.save();
-
-  // If subOrderId specified or available, check if escrow was already released to vendor
-  if (payload.subOrderId) {
-    const subOrder = await SubOrder.findById(payload.subOrderId);
-    if (subOrder && subOrder.settlement === "released") {
-      const vendor = await VendorProfile.findById(subOrder.vendorId);
-      if (vendor) {
-        const vendorWallet = await WalletServices.getMyWallet(
-          String(vendor.userId),
-          WalletMode.vendor,
-        );
-
-        await WalletServices.recordTransaction({
-          walletId: vendorWallet._id,
-          type: TransactionType.refund_deduction,
-          amount: payload.amount,
-          subOrderId: subOrder._id,
-          note: `Refund deduction for ${subOrder.subOrderNumber}: ${payload.reason}`,
-          createdBy: adminUserId,
-        });
-      }
-    }
-  }
-
-  emitToUser(String(order.customerId), "refund:issued", {
-    refundId: refund._id,
-    orderId: order._id,
-    amount: payload.amount,
-    reason: payload.reason,
-  });
-
-  return refund;
-};
+/** Admin refund by hand (already approved). Rules live in refund.service. */
+const issueRefund = (adminUserId: string, payload: Parameters<typeof RefundServices.issueRefund>[1]) =>
+  RefundServices.issueRefund(adminUserId, payload);
 
 /**
  * Customer files a dispute for an order or sub-order.
@@ -441,6 +343,7 @@ const resolveDispute = async (
         subOrderId: dispute.subOrderId ? String(dispute.subOrderId) : undefined,
         amount: refundAmount as number,
         reason: `Dispute resolved: ${payload.adminResolution}`,
+        source: RefundSource.dispute,
       });
     } catch (error) {
       // No refund → the dispute is not resolved either; reopen it
@@ -585,7 +488,9 @@ const getAllRefundsAdmin = async (query: {
   const [refunds, total] = await Promise.all([
     Refund.find(filter)
       .populate("customerId", "name phone email")
-      .populate("orderId", "orderNumber total")
+      .populate("orderId", "orderNumber total paymentMethod paymentStatus status")
+      .populate("lines.subOrderId", "subOrderNumber")
+      .populate("issuedBy", "name")
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit),

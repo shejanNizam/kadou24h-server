@@ -81,6 +81,7 @@ const getProductByIdOrSlug = catchAsync(async (req: Request, res: Response) => {
   const result = await ProductServices.getProductByIdOrSlug(
     req.params.idOrSlug as string,
     currentUserId,
+    req.user?.roles,
   );
   sendResponse(res, {
     statusCode: httpStatus.OK,
@@ -93,7 +94,7 @@ const getProductByIdOrSlug = catchAsync(async (req: Request, res: Response) => {
 const getVendorProducts = catchAsync(async (req: Request, res: Response) => {
   const result = await ProductServices.getVendorProducts(req.user._id, {
     ...flatQuery(req.query),
-    statusTab: enumQuery(req.query.statusTab, ["all", "active", "out_of_stock"] as const, "statusTab"),
+    statusTab: enumQuery(req.query.statusTab, ["all", "active", "in_review", "out_of_stock"] as const, "statusTab"),
   });
   sendResponse(res, {
     statusCode: httpStatus.OK,

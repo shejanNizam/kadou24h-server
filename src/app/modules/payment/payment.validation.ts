@@ -37,7 +37,23 @@ export const issueRefundSchema = z.object({
   amount: z.number().int().min(1, "Refund amount must be at least 1 GNF"),
   reason: z.string().trim().min(3, "Reason is required"),
   notes: z.string().optional(),
+  transactionId: z.string().trim().max(100).optional(),
 });
+
+// Admin decides a pending refund request
+export const processRefundSchema = z
+  .object({
+    status: z.enum(["completed", "rejected"]),
+    // Approve less than requested (e.g. keep a delivery fee already spent)
+    amount: z.number().int().min(1).optional(),
+    transactionId: z.string().trim().max(100).optional(),
+    rejectionReason: z.string().trim().max(500).optional(),
+    notes: z.string().trim().max(500).optional(),
+  })
+  .refine((v) => v.status !== "rejected" || (v.rejectionReason?.length ?? 0) >= 3, {
+    message: "Explain to the customer why the refund is rejected",
+    path: ["rejectionReason"],
+  });
 
 export const createDisputeSchema = z.object({
   orderId: z.string().regex(/^[0-9a-fA-F]{24}$/, "Valid orderId is required"),

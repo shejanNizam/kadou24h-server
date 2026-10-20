@@ -10,6 +10,7 @@ import { OrderStatus, SubOrderStatus } from "./order.interface";
 import { Order } from "./order.model";
 import { SubOrder } from "./sub_order.model";
 import { cancelSubOrder, syncOrderStatus } from "./order.utils";
+import { RefundServices } from "../payment/refund.service";
 
 /**
  * Customer fetches their orders with pagination.
@@ -148,8 +149,12 @@ const getOrderDetails = async (
     for (const r of reviews) reviewed.add(String(r.subOrderId));
   }
 
+  // Money going back (cancellations, store changes, disputes): status shown on the order
+  const refunds = await RefundServices.getOrderRefunds(order._id);
+
   return {
     order,
+    refunds,
     subOrders: subOrders.map((so) => ({
       ...so.toObject(),
       ...(customerId && !options.admin && { reviewed: reviewed.has(String(so._id)) }),
@@ -213,6 +218,8 @@ const cancelOrder = async (
   } finally {
     await syncOrderStatus(order._id);
   }
+  // Whole order cancelled: the service fee and tax join the refund request
+  await RefundServices.requestRemainingIfCancelled(order._id);
 
   return {
     order: await Order.findById(order._id),

@@ -99,6 +99,60 @@ const orderReadyForPickup = (subOrder: SubOrderRef) =>
     data: orderData(subOrder),
   });
 
+/** Store changed the items (agreed in chat) → customer, with the new total. */
+const orderModified = (subOrder: SubOrderRef, newTotal: number) =>
+  send({
+    userId: subOrder.customerId,
+    mode: AppMode.customer,
+    type: NotificationType.order_accepted,
+    title: { fr: "Commande modifiée", en: "Order changed" },
+    body: {
+      fr: `La boutique a modifié votre commande ${subOrder.subOrderNumber}. Nouveau total : ${gnf(newTotal)}.`,
+      en: `The store changed your order ${subOrder.subOrderNumber}. New total: ${gnf(newTotal)}.`,
+    },
+    data: orderData(subOrder),
+  });
+
+// ── Refunds ─────────────────────────────────────────────────────────
+
+/** A refund request was opened for a paid order → customer (the team reviews it). */
+const refundRequested = (refund: { customerId: Id; orderId: Id; amount: number }, orderNumber: string) =>
+  send({
+    userId: refund.customerId,
+    mode: AppMode.customer,
+    type: NotificationType.refund_update,
+    title: { fr: "Remboursement en cours", en: "Refund in progress" },
+    body: {
+      fr: `Commande ${orderNumber} : un remboursement de ${gnf(refund.amount)} est en cours de vérification par l'équipe Kadou24h.`,
+      en: `Order ${orderNumber}: a refund of ${gnf(refund.amount)} is being reviewed by the Kadou24h team.`,
+    },
+    data: { orderId: String(refund.orderId) },
+  });
+
+/** Admin decided → customer. */
+const refundProcessed = (
+  refund: { customerId: Id; orderId: Id; amount: number; rejectionReason?: string; transactionId?: string },
+  orderNumber: string,
+  status: "completed" | "rejected",
+) =>
+  send({
+    userId: refund.customerId,
+    mode: AppMode.customer,
+    type: NotificationType.refund_update,
+    title: status === "completed" ? { fr: "Remboursement envoyé", en: "Refund sent" } : { fr: "Remboursement refusé", en: "Refund declined" },
+    body:
+      status === "completed"
+        ? {
+            fr: `Commande ${orderNumber} : ${gnf(refund.amount)} vous ont été remboursés${refund.transactionId ? ` (réf. ${refund.transactionId})` : ""}.`,
+            en: `Order ${orderNumber}: ${gnf(refund.amount)} has been refunded to you${refund.transactionId ? ` (ref. ${refund.transactionId})` : ""}.`,
+          }
+        : {
+            fr: `Commande ${orderNumber} : le remboursement a été refusé. ${refund.rejectionReason ?? ""}`.trim(),
+            en: `Order ${orderNumber}: the refund was declined. ${refund.rejectionReason ?? ""}`.trim(),
+          },
+    data: { orderId: String(refund.orderId) },
+  });
+
 /** Cancellation → every other party (customer, vendor, riders on active legs). */
 const orderCancelled = (
   subOrder: SubOrderRef,
@@ -332,6 +386,9 @@ export const Notify = {
   orderPlaced,
   orderAccepted,
   orderReadyForPickup,
+  orderModified,
+  refundRequested,
+  refundProcessed,
   orderCancelled,
   orderDelivered,
   deliveryAssigned,

@@ -6,6 +6,7 @@ import AppError from "../../errorHelpers/AppError";
 import catchAsync from "../../utils/catchAsync";
 import sendResponse from "../../utils/sendResponse";
 import { PaymentServices } from "./payment.service";
+import { RefundServices } from "./refund.service";
 import { enumQuery } from "../../utils/queryParams";
 import {
   DisputeStatus,
@@ -118,6 +119,16 @@ const issueRefund = catchAsync(async (req: Request, res: Response) => {
   });
 });
 
+const processRefund = catchAsync(async (req: Request, res: Response) => {
+  const result = await RefundServices.processRefund(req.user._id, req.params.id as string, req.body);
+  sendResponse(res, {
+    statusCode: httpStatus.OK,
+    success: true,
+    message: result.status === "completed" ? "Refund approved" : "Refund rejected",
+    data: result,
+  });
+});
+
 const getAllRefundsAdmin = catchAsync(async (req: Request, res: Response) => {
   const result = await PaymentServices.getAllRefundsAdmin({
     page: Number(req.query.page),
@@ -195,6 +206,7 @@ export const PaymentControllers = {
   getMyDisputes,
   getAllPaymentsAdmin,
   issueRefund,
+  processRefund,
   getAllRefundsAdmin,
   getAllDisputesAdmin,
   resolveDispute,

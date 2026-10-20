@@ -174,6 +174,10 @@ try {
     catId[c.key] = created._id;
   }
   const bizCat = (await call("POST", "/categories", { name: { fr: "Magasin", en: "Store" }, type: "business" }, admin))._id;
+  // More store types for the "Become a vendor" picker
+  for (const [i, [fr, en]] of [["Électronique", "Electronics"], ["Alimentation", "Groceries"], ["Mode & beauté", "Fashion & beauty"], ["Restaurant", "Restaurant"]].entries()) {
+    await call("POST", "/categories", { name: { fr, en }, type: "business", sortOrder: i + 1 }, admin);
+  }
   const SERVICES = [
     ["Plombier", "Plumber"], ["Électricien", "Electrician"], ["Menuisier", "Carpenter"],
     ["Mécanicien", "Mechanic"], ["Coiffeur", "Hairdresser"],
@@ -420,7 +424,27 @@ try {
 
   // On its way with the demo rider: the customer sees the rider and the delivery PIN
   await shipOut(await buy({ productIds: [cheap[1]], paymentMethod: codOrPhone(cheap[1]) }), kamal);
-  console.log("✓ orders (2 delivered + reviewed, 1 on its way with the demo rider)");
+
+  // For the vendor demo: one new order to accept, one being prepared (2 items, so it can be modified)
+  await buy({ productIds: [cheap[2]], paymentMethod: "cod" });
+  const preparing = await buy({ productIds: [cheap[3], cheap[4]], paymentMethod: "cod" });
+  for (const status of ["accepted", "preparing"]) {
+    await call("PATCH", `/orders/vendor/sub-orders/${preparing.subOrder._id}/status`, { status }, techHub.token);
+  }
+  console.log("✓ orders (2 delivered + reviewed, 1 on its way, 1 new, 1 preparing)");
+
+  // TechHub products waiting for the admin: one pending, one sent back with a note
+  const pendingSource = products.find((p) => p.category === "smartphones") ?? products[0];
+  await call("POST", "/products", {
+    name: "Écouteurs sans fil Kadou", categoryId: catId.electronics, description: "Écouteurs Bluetooth, 20 h d’autonomie.",
+    price: 150000, images: [img(pendingSource.thumbnail)], stockQty: 10, minStockAlert: 3,
+  }, techHub.token);
+  const rejected = await call("POST", "/products", {
+    name: "Chargeur rapide", categoryId: catId.electronics, description: "Chargeur",
+    price: 45000, images: [img(pendingSource.thumbnail)], stockQty: 25, minStockAlert: 5,
+  }, techHub.token);
+  await call("PATCH", `/products/${rejected._id}/approval`, { approvalStatus: "rejected", adminReviewNote: "La photo ne montre pas le chargeur. Ajoutez une vraie photo du produit." }, admin);
+  console.log("✓ TechHub: 1 product pending, 1 rejected");
 
   console.log(`
 Demo database ready: ${dbName}
@@ -428,7 +452,7 @@ Start the API on it:   npm run dev:demo
 
 Demo accounts (password for all: ${PASSWORD})
   Customer        +224 620 00 00 01   Aïssatou Bah (address in Kipé, 2 delivered orders + 1 on its way)
-  Vendor          +224 620 00 00 02   TechHub Kaloum (also a customer)
+  Vendor          +224 620 00 00 02   TechHub Kaloum: 1 new + 1 preparing order, 2 linked riders, 1 product pending + 1 rejected
   Rider (moto)    +224 620 00 00 03   linked to TechHub, online, carrying 1 order
   Bus driver      +224 620 00 00 04   Conakry → Labé
   Other stores    +224 620 00 00 12 / 13 / 14

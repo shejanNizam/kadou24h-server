@@ -14,6 +14,7 @@ export enum NotificationType {
   collect_payment = "collect_payment",
   earnings_updated = "earnings_updated",
   withdrawal_update = "withdrawal_update",
+  refund_update = "refund_update",
   application_update = "application_update",
   profile_approved = "profile_approved",
   moderation_warning = "moderation_warning",

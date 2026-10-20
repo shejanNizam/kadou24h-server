@@ -8,6 +8,7 @@ import {
   devConfirmSchema,
   initiatePaymentSchema,
   issueRefundSchema,
+  processRefundSchema,
   resolveDisputeSchema,
   webhookSchema,
 } from "./payment.validation";
@@ -85,6 +86,43 @@ router.get(
   "/admin/refunds",
   checkAuth(...ADMIN_ROLES),
   PaymentControllers.getAllRefundsAdmin,
+);
+
+/**
+ * @swagger
+ * /payments/admin/refunds/{id}:
+ *   patch:
+ *     tags: [Wallet]
+ *     summary: Approve (after sending the money) or reject a pending refund request
+ *     description: Cancellations and store changes of online-paid orders open one pending request per order. Approving may use a lower amount.
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - $ref: '#/components/parameters/id'
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [status]
+ *             properties:
+ *               status: { type: string, enum: [completed, rejected] }
+ *               amount: { type: integer, description: "≤ requested; defaults to the requested amount" }
+ *               transactionId: { type: string, description: "Orange Money / MoMo / bank reference" }
+ *               rejectionReason: { type: string, description: "Required to reject; shown to the customer" }
+ *               notes: { type: string }
+ *     responses:
+ *       200:
+ *         description: Decided; the customer is notified
+ *       409:
+ *         description: Another admin just handled it
+ */
+router.patch(
+  "/admin/refunds/:id",
+  checkAuth(...ADMIN_ROLES),
+  validateRequest(processRefundSchema),
+  PaymentControllers.processRefund,
 );
 
 router.get(

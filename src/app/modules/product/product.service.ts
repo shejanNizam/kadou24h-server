@@ -147,6 +147,17 @@ const updateProduct = async (
     payload.slug = generateSlug(payload.name);
   }
 
+  // A rejected product goes back to the admin once the store edits it
+  // (stock / availability alone is not a fix)
+  const contentKeys = ["name", "description", "images", "categoryId", "subcategoryId", "price", "discountPrice", "features", "inTheBox"];
+  if (
+    !isAdmin &&
+    product.approvalStatus === ProductApprovalStatus.rejected &&
+    contentKeys.some((k) => k in payload)
+  ) {
+    payload.approvalStatus = ProductApprovalStatus.pending;
+  }
+
   const updatedProduct = await Product.findByIdAndUpdate(productId, payload, {
     new: true,
     runValidators: true,
@@ -219,6 +230,7 @@ const reviewProductApproval = async (
 const getProductByIdOrSlug = async (
   identifier: string,
   currentUserId?: string,
+  currentRoles: string[] = [],
 ): Promise<{ product: IProduct; isFavorite: boolean }> => {
   const isObjectId = Types.ObjectId.isValid(identifier);
   const query = isObjectId ? { _id: identifier, isDeleted: false } : { slug: identifier, isDeleted: false };
@@ -234,6 +246,15 @@ const getProductByIdOrSlug = async (
 
   if (!product) {
     throw new AppError(httpStatus.NOT_FOUND, "Product not found.");
+  }
+
+  // Not approved yet (or rejected): only its store and admins may open it
+  if (product.approvalStatus !== ProductApprovalStatus.approved && !isAdminRole(currentRoles)) {
+    const store = product.vendorId as unknown as { _id: Types.ObjectId };
+    const owner = currentUserId
+      ? await VendorProfile.exists({ _id: store?._id ?? product.vendorId, userId: currentUserId })
+      : null;
+    if (!owner) throw new AppError(httpStatus.NOT_FOUND, "Product not found.");
   }
 
   let isFavorite = false;
@@ -350,7 +371,7 @@ const getPublicProducts = async (filters: IProductFilterQuery) => {
 
 const getVendorProducts = async (
   userId: string,
-  query: { statusTab?: "all" | "active" | "out_of_stock"; page?: string; limit?: string },
+  query: { statusTab?: "all" | "active" | "in_review" | "out_of_stock"; page?: string; limit?: string },
 ) => {
   const vendorProfile = await VendorProfile.findOne({ userId });
   if (!vendorProfile) {
@@ -370,6 +391,9 @@ const getVendorProducts = async (
     conditions.isAvailable = true;
     conditions.stockQty = { $gt: 0 };
     conditions.approvalStatus = ProductApprovalStatus.approved;
+  } else if (query.statusTab === "in_review") {
+    // Waiting for the admin, or sent back with a note to fix
+    conditions.approvalStatus = { $in: [ProductApprovalStatus.pending, ProductApprovalStatus.rejected] };
   } else if (query.statusTab === "out_of_stock") {
     conditions.$or = [{ stockQty: 0 }, { isAvailable: false }];
   }

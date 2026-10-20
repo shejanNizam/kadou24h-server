@@ -1088,6 +1088,26 @@ Errors: 409 already connected / already invited · 403 the inviter tried to answ
 | `POST /deliveries/:id/assign` | Vendor / Admin | assign delivery leg to partner: `{ riderId }`; sends real-time push/socket alert |
 | `GET /deliveries/:id/track` | Customer, store owner, riders of the leg chain, admin | live delivery tracking. The customer and the store may follow every leg of their order. **PIN visibility**: `pickupPin` only to the giver (the vendor on the leg that starts at the store, or the rider arriving at a station), `handoverPin` only to the receiver (the customer on the final leg, or the next rider at a station). Middle station→station legs show no PIN to the customer or the store. The assigned rider never sees its own leg's PINs. On the rider's own leg at bus stations: `incomingHandoverPin` (show it to the rider arriving with the parcel) and `outgoingPickupPin` (show it to the rider taking the parcel next). |
 
+### 7.20d Refunds with admin approval
+
+Money paid online (Orange Money / MoMo / card) goes back only after an admin approves it.
+
+- **Requests open automatically** when a store, the customer or an admin cancels a sub-order of a paid order (its total), when the whole order ends up cancelled (what is left: service fee, tax), and when a store removes items (the difference). There is **one pending request per order**: new amounts are added as `lines` (`source`: `cancellation` | `modification` | `order_fees`). The amount never exceeds paid − refunded − already requested. COD and unpaid orders open nothing.
+- `GET /payments/admin/refunds?status=pending|completed|rejected` — with customer (name, phone), order (number, total, payment method/status), `lines[].subOrderId.subOrderNumber`, `issuedBy.name`.
+- `PATCH /payments/admin/refunds/:id` — `{ status: "completed", amount?, transactionId?, notes? }` after sending the money (amount ≤ requested), or `{ status: "rejected", rejectionReason }`. Atomic (409 if another admin decided first). Order → `refunded` / `partially_refunded`. The customer gets a `refund_update` notification.
+- `POST /payments/admin/refunds` (manual) and dispute refunds are created already `completed` (`source`: `admin` | `dispute`), and accept `transactionId`. When the store was already paid for that sub-order, the amount is deducted from its wallet.
+- `GET /orders/:id` (customer) includes `refunds` (no admin notes).
+
+### 7.20c Vendor app changes (Phase 7)
+
+- `GET /orders/vendor/sub-orders?status=new` or several statuses comma-separated (`accepted,preparing,ready_for_pickup,in_delivery`). Each row has `orderId { orderNumber, deliveryType, paymentMethod, paymentStatus }` and the rider's name (no phone).
+- `PATCH /orders/vendor/sub-orders/:id/modify` — `{ modifications: [{ productId, action: "remove" | "update_qty", newQty }], reason }`. Quantities can only go **down**; removing every item is refused (cancel the order instead). Stock goes back, commission is recalculated with the settings minimum, and the customer is notified of the new total.
+- `GET /deliveries/:id/available-riders` — only the store of that order (others get 404).
+- `GET /products/my-products?statusTab=all|active|in_review|out_of_stock` — `in_review` = pending + rejected.
+- `PATCH /products/:id` by the store on a **rejected** product with content changes (name, description, photos, category, prices, features, in the box) sets it back to `pending`.
+- `GET /products/:idOrSlug` — products that are not approved are visible only to their store and admins.
+- `PATCH /vendors/me` — moving `address.location` also moves the store's products for distance search.
+
 ### 7.21a Delete my account
 
 `DELETE /user/me` soft-deletes the account (contacts freed, tokens and devices removed). Refused with **409** and a clear message while: the user has an order in progress as a buyer; their store has sub-orders in progress; they have deliveries in progress; they still owe COD cash; or any of their wallets holds money (held or available).

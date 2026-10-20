@@ -36,6 +36,10 @@ const getAvailableRiders = async (
   const delivery = await Delivery.findById(deliveryId);
   if (!delivery) throw new AppError(httpStatus.NOT_FOUND, "Delivery leg not found");
 
+  // Only the store of this order may see who is online nearby (riders' positions)
+  const ownsLeg = await SubOrder.exists({ _id: delivery.subOrderId, vendorId: vendor._id });
+  if (!ownsLeg) throw new AppError(httpStatus.NOT_FOUND, "Delivery leg not found");
+
   // Determine required partner type: bus drivers for line_haul, moto riders for local/first_mile/last_mile
   const requiredPartnerType =
     delivery.legType === LegType.line_haul ? PartnerType.transit : PartnerType.moto;
