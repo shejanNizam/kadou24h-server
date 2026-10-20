@@ -98,6 +98,52 @@ const resolveAddress = async (
   };
 };
 
+// Moto legs to/from the bus stations (the delivery legs use the same amounts)
+const FIRST_MILE_FEE = 10000;
+const LAST_MILE_FEE = 10000;
+
+interface IStationRoute {
+  fromStationName: string;
+  fromCity: string;
+  toStationName: string;
+  toCity: string;
+  estimatedHours?: number;
+}
+
+/**
+ * Departure = the active station nearest to the store; destination = the buyer's choice.
+ */
+const resolveStationRoute = async (
+  vendorCoords: [number, number],
+  destinationStationId?: string,
+) => {
+  if (!destinationStationId) {
+    throw new AppError(httpStatus.BAD_REQUEST, "Please choose a destination bus station");
+  }
+  const to = await TransitStation.findOne({ _id: destinationStationId, isActive: true });
+  if (!to) {
+    throw new AppError(httpStatus.BAD_REQUEST, "This bus station is not available");
+  }
+  const from =
+    (await TransitStation.findOne({
+      isActive: true,
+      location: { $near: { $geometry: { type: "Point", coordinates: vendorCoords } } },
+    })) ?? (await TransitStation.findOne({ isActive: true }));
+  if (!from) {
+    throw new AppError(
+      httpStatus.BAD_REQUEST,
+      "No active transit stations configured for intercity delivery",
+    );
+  }
+  if (String(from._id) === String(to._id)) {
+    throw new AppError(
+      httpStatus.BAD_REQUEST,
+      "This station is in the store's own city — choose home delivery instead",
+    );
+  }
+  return { from, to };
+};
+
 /**
  * Calculates checkout pricing, delivery fees, platform fee, and splits by vendor.
  */
@@ -198,6 +244,7 @@ const calculateCheckout = async (
     subtotal: number;
     deliveryFee: number;
     deliveryDistanceKm?: number;
+    stationRoute?: IStationRoute;
     commissionRate: number;
     commissionAmount: number;
     vendorEarning: number;
@@ -258,6 +305,7 @@ const calculateCheckout = async (
     // Calculate delivery fee for this vendor
     let vendorDeliveryFee = 0;
     let distanceKm: number | undefined;
+    let stationRoute: IStationRoute | undefined;
 
     if (payload.deliveryType === DeliveryType.local) {
       const vendorCoords: [number, number] = vendorProfile?.address?.location
@@ -273,51 +321,30 @@ const calculateCheckout = async (
       });
       vendorDeliveryFee = rateResult.fee;
       distanceKm = rateResult.distanceKm;
-    } else if (payload.deliveryType === DeliveryType.intercity) {
-      if (!payload.destinationStationId) {
-        throw new AppError(
-          httpStatus.BAD_REQUEST,
-          "destinationStationId is required for intercity delivery",
-        );
-      }
-
+    } else {
+      // intercity (moto → bus → moto) and station_pickup (moto → bus, the buyer
+      // collects at the destination station) both ride the station-to-station rate
       const vendorCoords: [number, number] = vendorProfile?.address?.location
         ?.coordinates || [-13.6785, 9.537];
-
-      // Find nearest station to vendor or default
-      let fromStation = null;
-      if (vendorCoords) {
-        fromStation = await TransitStation.findOne({
-          isActive: true,
-          location: {
-            $near: {
-              $geometry: {
-                type: "Point",
-                coordinates: vendorCoords,
-              },
-            },
-          },
-        });
-      }
-      if (!fromStation) {
-        fromStation = await TransitStation.findOne({ isActive: true });
-      }
-      if (!fromStation) {
-        throw new AppError(
-          httpStatus.BAD_REQUEST,
-          "No active transit stations configured for intercity delivery",
-        );
-      }
+      const route = await resolveStationRoute(vendorCoords, payload.destinationStationId);
 
       const rateResult = await DeliveryRateServices.calculateDeliveryFee({
         type: DeliveryRateType.intercity,
-        fromStationId: String(fromStation._id),
-        toStationId: payload.destinationStationId,
+        fromStationId: String(route.from._id),
+        toStationId: String(route.to._id),
       });
-      vendorDeliveryFee = rateResult.fee;
-    } else if (payload.deliveryType === DeliveryType.station_pickup) {
-      // Station pickup has standard local or station fee
-      vendorDeliveryFee = 10000;
+      // Pickup at the station has no last moto leg
+      vendorDeliveryFee =
+        payload.deliveryType === DeliveryType.station_pickup
+          ? Math.max(rateResult.fee - LAST_MILE_FEE, FIRST_MILE_FEE)
+          : rateResult.fee;
+      stationRoute = {
+        fromStationName: route.from.name,
+        fromCity: route.from.city,
+        toStationName: route.to.name,
+        toCity: route.to.city,
+        estimatedHours: rateResult.estimatedHours,
+      };
     }
 
     // Safe commission: never exceeds 90% of subtotal so vendor earning is never negative
@@ -341,6 +368,7 @@ const calculateCheckout = async (
       subtotal: vendorSubtotal,
       deliveryFee: vendorDeliveryFee,
       deliveryDistanceKm: distanceKm,
+      stationRoute,
       commissionRate,
       commissionAmount,
       vendorEarning,

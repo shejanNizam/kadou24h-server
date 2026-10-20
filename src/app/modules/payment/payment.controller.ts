@@ -162,10 +162,35 @@ const resolveDispute = catchAsync(async (req: Request, res: Response) => {
   });
 });
 
+const getMyPayment = catchAsync(async (req: Request, res: Response) => {
+  const result = await PaymentServices.getMyPayment(req.user._id, String(req.params.id));
+  sendResponse(res, {
+    statusCode: httpStatus.OK,
+    success: true,
+    message: "Payment retrieved successfully!",
+    data: result,
+  });
+});
+
+const devConfirmPayment = catchAsync(async (req: Request, res: Response) => {
+  if (configs.node_env === "production") {
+    throw new AppError(httpStatus.NOT_FOUND, "Route not found");
+  }
+  const result = await PaymentServices.devConfirmPayment(req.user._id, String(req.params.id), req.body.status);
+  sendResponse(res, {
+    statusCode: httpStatus.OK,
+    success: true,
+    message: "Payment updated (development)",
+    data: result,
+  });
+});
+
 export const PaymentControllers = {
   initiatePayment,
   handleWebhook,
   getMyPayments,
+  getMyPayment,
+  devConfirmPayment,
   createDispute,
   getMyDisputes,
   getAllPaymentsAdmin,

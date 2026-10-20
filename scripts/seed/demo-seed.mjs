@@ -373,14 +373,63 @@ try {
   }, customer.token);
   console.log("✓ demo customer");
 
+  // ── Order history: 2 delivered + reviewed, 1 on its way (all real flows) ──
+  const [kamal, ousmane] = riders;
+  const buy = async ({ productIds, paymentMethod }) => {
+    for (const productId of productIds) await call("POST", "/cart/items", { productId, qty: 1 }, customer.token);
+    const { order, subOrders } = await call("POST", "/orders", { deliveryType: "local", paymentMethod }, customer.token);
+    if (paymentMethod !== "cod") {
+      const payment = await call("POST", "/payments/initiate", { purpose: "order", refId: order._id, method: paymentMethod }, customer.token);
+      await paid(payment._id);
+    }
+    return { order, subOrder: subOrders[0] };
+  };
+  const shipOut = async ({ order, subOrder }, rider) => {
+    for (const status of ["accepted", "preparing", "ready_for_pickup"]) {
+      await call("PATCH", `/orders/vendor/sub-orders/${subOrder._id}/status`, { status }, techHub.token);
+    }
+    const legId = subOrder.currentLegId;
+    await call("POST", `/deliveries/${legId}/assign`, { riderId: rider.riderId }, techHub.token);
+    await call("POST", `/deliveries/${legId}/accept`, null, rider.token);
+    await call("PATCH", `/deliveries/${legId}/going-to-pickup`, null, rider.token);
+    const { pickupPin } = await call("GET", `/orders/vendor/sub-orders/${subOrder._id}`, null, techHub.token);
+    await call("POST", `/deliveries/${legId}/verify-pickup`, { pin: pickupPin }, rider.token);
+    return { order, subOrder, legId };
+  };
+  const handOver = async ({ order, subOrder, legId }, rider) => {
+    const details = await call("GET", `/orders/${order._id}`, null, customer.token);
+    const pin = details.subOrders.find((s) => s._id === subOrder._id).deliveryPin;
+    await call("POST", `/deliveries/${legId}/verify-handover`, { pin }, rider.token);
+  };
+  // TechHub's in-stock products, cheapest first. A rider may carry at most
+  // 1 000 000 GNF of COD cash, so only cheap items go cash on delivery.
+  const techHubProducts = await call("GET", `/products?vendorId=${techHub.vendorId}&inStock=true&sort=price_asc&limit=50`);
+  const cheap = techHubProducts.map((p) => p._id);
+  const codOrPhone = (productId) =>
+    (techHubProducts.find((p) => p._id === productId).discountPrice ?? techHubProducts.find((p) => p._id === productId).price) < 600000
+      ? "cod"
+      : "orange_money";
+
+  const first = await shipOut(await buy({ productIds: [cheap[0]], paymentMethod: codOrPhone(cheap[0]) }), ousmane);
+  await handOver(first, ousmane);
+  await call("POST", "/reviews", { subOrderId: first.subOrder._id, rating: 5, comment: "Livraison rapide et produit conforme. Merci TechHub !" }, customer.token);
+
+  const second = await shipOut(await buy({ productIds: [cheap.at(-1)], paymentMethod: "orange_money" }), ousmane);
+  await handOver(second, ousmane);
+  await call("POST", "/reviews", { subOrderId: second.subOrder._id, rating: 4, comment: "Bon produit, le livreur a bien trouvé la maison." }, customer.token);
+
+  // On its way with the demo rider: the customer sees the rider and the delivery PIN
+  await shipOut(await buy({ productIds: [cheap[1]], paymentMethod: codOrPhone(cheap[1]) }), kamal);
+  console.log("✓ orders (2 delivered + reviewed, 1 on its way with the demo rider)");
+
   console.log(`
 Demo database ready: ${dbName}
 Start the API on it:   npm run dev:demo
 
 Demo accounts (password for all: ${PASSWORD})
-  Customer        +224 620 00 00 01   Aïssatou Bah (saved address in Kipé)
+  Customer        +224 620 00 00 01   Aïssatou Bah (address in Kipé, 2 delivered orders + 1 on its way)
   Vendor          +224 620 00 00 02   TechHub Kaloum (also a customer)
-  Rider (moto)    +224 620 00 00 03   linked to TechHub, online
+  Rider (moto)    +224 620 00 00 03   linked to TechHub, online, carrying 1 order
   Bus driver      +224 620 00 00 04   Conakry → Labé
   Other stores    +224 620 00 00 12 / 13 / 14
   Workers         +224 620 00 00 21 … 25

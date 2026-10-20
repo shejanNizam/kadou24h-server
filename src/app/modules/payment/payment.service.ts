@@ -74,6 +74,12 @@ const initiatePayment = async (
     if (order.paymentStatus === OrderPaymentStatus.paid) {
       throw new AppError(httpStatus.BAD_REQUEST, "Order is already paid");
     }
+    if (order.paymentMethod === "cod") {
+      throw new AppError(httpStatus.BAD_REQUEST, "Cash on delivery orders are paid to the rider");
+    }
+    if (order.status === "cancelled") {
+      throw new AppError(httpStatus.BAD_REQUEST, "This order was cancelled");
+    }
 
     amount = order.total;
   } else if (payload.purpose === PaymentPurpose.job_publish) {
@@ -482,6 +488,29 @@ const getMyPayments = async (
   };
 };
 
+/** One of my payments — the app polls it on the "payment pending" screen. */
+const getMyPayment = async (payerId: string, paymentId: string) => {
+  if (!Types.ObjectId.isValid(paymentId)) {
+    throw new AppError(httpStatus.NOT_FOUND, "Payment record not found");
+  }
+  const payment = await Payment.findOne({ _id: paymentId, payerId }).select("-raw");
+  if (!payment) throw new AppError(httpStatus.NOT_FOUND, "Payment record not found");
+  return payment;
+};
+
+/**
+ * Development only: no gateway is connected yet, so the app can finish its own
+ * pending payment the way the gateway webhook would. Disabled in production.
+ */
+const devConfirmPayment = async (
+  payerId: string,
+  paymentId: string,
+  status: "success" | "failed",
+) => {
+  const payment = await getMyPayment(payerId, paymentId);
+  return handleWebhook({ paymentId: String(payment._id), status, amount: payment.amount });
+};
+
 const getMyDisputes = async (
   customerId: string,
   query: { page?: number; limit?: number; status?: DisputeStatus },
@@ -604,6 +633,8 @@ export const PaymentServices = {
   createDispute,
   resolveDispute,
   getMyPayments,
+  getMyPayment,
+  devConfirmPayment,
   getMyDisputes,
   getAllPaymentsAdmin,
   getAllRefundsAdmin,

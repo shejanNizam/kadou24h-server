@@ -25,7 +25,11 @@ const trackDelivery = async (
 ) => {
   const delivery = await Delivery.findById(deliveryId)
     .select("+pickupPin +handoverPin")
-    .populate("riderId", "partnerType vehicle stats lastLocation lastLocationAt")
+    .populate({
+      path: "riderId",
+      select: "userId partnerType vehicle stats lastLocation lastLocationAt",
+      populate: { path: "userId", select: "name avatar" },
+    })
     .populate("subOrderId", "subOrderNumber status total")
     .populate("orderId", "orderNumber addressSnapshot paymentMethod");
 

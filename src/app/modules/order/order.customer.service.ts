@@ -5,6 +5,7 @@ import httpStatus from "http-status";
 import AppError from "../../errorHelpers/AppError";
 import { DeliveryStatus } from "../delivery/delivery.interface";
 import { Delivery } from "../delivery/delivery.model";
+import { Review } from "../review/review.model";
 import { OrderStatus, SubOrderStatus } from "./order.interface";
 import { Order } from "./order.model";
 import { SubOrder } from "./sub_order.model";
@@ -15,14 +16,21 @@ import { cancelSubOrder, syncOrderStatus } from "./order.utils";
  */
 const getMyOrders = async (
   customerId: string,
-  query: { page?: number; limit?: number; status?: OrderStatus },
+  query: { page?: number; limit?: number; status?: string },
 ) => {
   const page = Math.max(1, Number(query.page) || 1);
   const limit = Math.max(1, Math.min(50, Number(query.limit) || 10));
   const skip = (page - 1) * limit;
 
   const filter: Record<string, unknown> = { customerId };
-  if (query.status) filter.status = query.status;
+  // One status or several, comma-separated (e.g. "cancelled,partially_cancelled")
+  if (query.status) {
+    const statuses = String(query.status).split(",").filter((s): s is OrderStatus =>
+      Object.values(OrderStatus).includes(s as OrderStatus),
+    );
+    if (!statuses.length) throw new AppError(httpStatus.BAD_REQUEST, "Invalid order status");
+    filter.status = { $in: statuses };
+  }
 
   const [orders, total] = await Promise.all([
     Order.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit),
@@ -79,7 +87,12 @@ const getOrderDetails = async (
   const subOrders = await SubOrder.find({ orderId: order._id })
     // No businessPhone: buyers and sellers talk through in-app chat (anti off-platform rule)
     .populate("vendorId", "storeName logo address isPlatformStore")
-    .populate("currentRiderId", "partnerType vehicle stats")
+    // The rider: name + photo, never the phone (chat only)
+    .populate({
+      path: "currentRiderId",
+      select: "userId partnerType vehicle stats",
+      populate: { path: "userId", select: "name avatar" },
+    })
     .sort({ createdAt: 1 });
 
   // Delivery legs (1 local, 2–3 intercity) so the app can track each leg; PINs are never included
@@ -126,10 +139,20 @@ const getOrderDetails = async (
     for (const l of finalLegs) deliveryPins.set(String(l.subOrderId), l.handoverPin);
   }
 
+  // Which store parts the buyer already reviewed (one review per sub-order)
+  const reviewed = new Set<string>();
+  if (customerId && !options.admin) {
+    const reviews = await Review.find({ authorId: customerId, subOrderId: { $in: subOrders.map((s) => s._id) } })
+      .select("subOrderId")
+      .lean();
+    for (const r of reviews) reviewed.add(String(r.subOrderId));
+  }
+
   return {
     order,
     subOrders: subOrders.map((so) => ({
       ...so.toObject(),
+      ...(customerId && !options.admin && { reviewed: reviewed.has(String(so._id)) }),
       deliveries: legs.filter((l) => String(l.subOrderId) === String(so._id)),
       ...(deliveryPins.has(String(so._id)) && { deliveryPin: deliveryPins.get(String(so._id)) }),
     })),

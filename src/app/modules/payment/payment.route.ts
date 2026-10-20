@@ -5,6 +5,7 @@ import { ADMIN_ROLES, APP_ROLES } from "../user/user.interface";
 import { PaymentControllers } from "./payment.controller";
 import {
   createDisputeSchema,
+  devConfirmSchema,
   initiatePaymentSchema,
   issueRefundSchema,
   resolveDisputeSchema,
@@ -97,6 +98,44 @@ router.patch(
   checkAuth(...ADMIN_ROLES),
   validateRequest(resolveDisputeSchema),
   PaymentControllers.resolveDispute,
+);
+
+/**
+ * @swagger
+ * /payments/{id}:
+ *   get:
+ *     tags: [Wallet]
+ *     summary: One of my payments (the app polls it while the payment is pending)
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200: { description: "Payment with status pending | success | failed | refunded" }
+ * /payments/{id}/dev-confirm:
+ *   post:
+ *     tags: [Wallet]
+ *     summary: "Development only: finish my pending payment like the gateway webhook would (404 in production)"
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               status: { type: string, enum: [success, failed] }
+ */
+router.get("/:id", checkAuth(...APP_ROLES), PaymentControllers.getMyPayment);
+router.post(
+  "/:id/dev-confirm",
+  checkAuth(...APP_ROLES),
+  validateRequest(devConfirmSchema),
+  PaymentControllers.devConfirmPayment,
 );
 
 export const PaymentRoutes = router;

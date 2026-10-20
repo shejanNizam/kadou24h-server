@@ -1045,10 +1045,10 @@ Errors: 409 already connected / already invited · 403 the inviter tried to answ
 #### Checkout & Customer Orders
 | Endpoint | Who | Notes |
 |---|---|---|
-| `POST /orders/checkout-summary` | Signed-in | preview calculations without placing order: groups vendor splits, calculates vendor delivery fees via distance/station, platform fee (min 1,000 GNF), tax, commission snapshot, and totals |
+| `POST /orders/checkout-summary` | Signed-in | preview calculations without placing order: groups vendor splits, calculates vendor delivery fees via distance/station, platform fee (min 1,000 GNF), tax, commission snapshot, and totals. `intercity` and `station_pickup` need `destinationStationId` (400 if missing, inactive, or the store's own departure station); their splits carry `stationRoute { fromStationName, fromCity, toStationName, toCity, estimatedHours }`. Station pickup = intercity rate minus the last moto leg (10 000 GNF), at least 10 000 GNF. |
 | `POST /orders` | Signed-in | place order: atomically deducts stock, creates parent `Order` (e.g. `AP421`), splits into `SubOrder`s per vendor (`AP421-1`), snapshots address, clears cart |
-| `GET /orders/my-orders` | Signed-in | customer order history with sub-order summaries, status filters, and pagination |
-| `GET /orders/:id` | Customer / Admin | full order details with sub-orders, items, vendor info, status timeline and `deliveries[]` (legs, no PINs). For the customer each open sub-order also has **`deliveryPin`**: the handover PIN of its final leg, to give to the rider (or the bus driver for station pickup). It disappears once that leg is delivered or cancelled. Delivered sub-orders have `deliveredAt`. |
+| `GET /orders/my-orders` | Signed-in | customer order history with sub-order summaries and pagination. `?status=` takes one order status or several, comma-separated (e.g. `cancelled,partially_cancelled`); an unknown status → 400 |
+| `GET /orders/:id` | Customer / Admin | full order details with sub-orders, items, vendor info, status timeline and `deliveries[]` (legs, no PINs). For the customer each open sub-order also has **`deliveryPin`**: the handover PIN of its final leg, to give to the rider (or the bus driver for station pickup). It disappears once that leg is delivered or cancelled. Delivered sub-orders have `deliveredAt`. For the customer, `reviewed: boolean` per sub-order and the rider as `currentRiderId { partnerType, vehicle, stats, userId: { name, avatar } }` — never a phone. |
 | `POST /orders/:id/cancel` | Customer | cancel order before preparation: `{ reason }`, restores product stock, sets status to `cancelled` |
 
 #### Vendor Sub-Orders
@@ -1093,7 +1093,9 @@ Errors: 409 already connected / already invited · 403 the inviter tried to answ
 #### Money IN & Customer Payments
 | Endpoint | Who | Notes |
 |---|---|---|
-| `POST /payments/initiate` | Signed-in | initiate payment for an order, subscription, job publishing, or CV unlock: `{ purpose, refId, method: "orange_money" \| "mobile_money" \| "card" \| "cod", provider?, idempotencyKey? }`. Validates ownership, checks idempotency key, simulates payment gateway, and marks order `paid`. |
+| `POST /payments/initiate` | Signed-in | initiate payment for an order, subscription, job publishing, or CV unlock: `{ purpose, refId, method: "orange_money" \| "mobile_money" \| "card" \| "cod", provider?, idempotencyKey? }`. Validates ownership and the idempotency key (same key → same payment), creates a **pending** payment. The order becomes `paid` only through the webhook. Refused for COD orders, cancelled orders and paid orders. |
+| `GET /payments/:id` | Signed-in (payer) | one of my payments (`pending` / `success` / `failed` / `refunded`), polled by the app's waiting screen. Another user's id → 404. |
+| `POST /payments/:id/dev-confirm` | Signed-in (payer), **development only** | `{ status: "success" \| "failed" }` — finishes my pending payment exactly like the webhook (fulfilment + `payment:successful`). Returns 404 when `NODE_ENV=production`. |
 | `POST /payments/webhook` | Gateway only — header `x-webhook-secret: <PAYMENT_WEBHOOK_SECRET>` | gateway callback for Orange Money / MTN Momo: `{ idempotencyKey?, providerRef?, paymentId?, status: "success" \| "failed", amount?, raw? }`. Wrong/missing secret → 401; not configured → 503; `amount` different from the payment → 400 and the payment is marked failed. Fulfils the purpose: order paid, job published, subscription activated, spontaneous application delivered to the vendor, CV unlocked. |
 | `GET /payments/me` | Signed-in | user's payment history with status and gateway references (`?purpose=&page=&limit=`) |
 

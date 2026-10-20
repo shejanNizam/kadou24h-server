@@ -24,6 +24,10 @@ export const webhookSchema = z.object({
   raw: z.record(z.string(), z.unknown()).optional(),
 });
 
+export const devConfirmSchema = z.object({
+  status: z.enum(["success", "failed"]),
+});
+
 export const issueRefundSchema = z.object({
   orderId: z.string().regex(/^[0-9a-fA-F]{24}$/, "Valid orderId is required"),
   subOrderId: z
