@@ -486,6 +486,78 @@ const run = async () => {
   check("5 simultaneous orders: every escrow hold counted", burst.every(ok) && vw.heldBalance === heldExpected, JSON.stringify([heldExpected, vw.heldBalance]));
   for (const x of burst) await call("POST", `/orders/${x.body.data.order._id}/cancel`, { reason: "Cleanup run" }, C.token);
 
+  // ═════ 5b. Become a worker: admin approval before customers see you ═════
+  const file = (name) => ({ url: `https://example.com/${name}.jpg`, publicId: `e2e/${name}` });
+  r = await call("POST", "/categories", { name: { fr: "Électricien", en: "Electrician" }, type: "service" }, admin);
+  const serviceCat = r.body.data?._id;
+  await call("PUT", "/professional-profiles/me", { profession: "Électricien", summary: "Court" }, C.token);
+  r = await call("POST", "/professional-profiles/me/worker-application/submit", null, C.token);
+  check("worker: incomplete profile cannot be sent (lists what is missing)", r.status === 400 && /idDocument/.test(r.body.message ?? "") && /photo/.test(r.body.message ?? ""), brief(r));
+  r = await call("PUT", "/professional-profiles/me", {
+    profession: "Électricien", summary: "Électricien avec 6 ans d'expérience, installations et dépannages à Conakry.",
+    photo: file("worker-photo"), serviceCategoryId: serviceCat, experienceYears: 6, hourlyRate: 60000, city: "Conakry • Kipé",
+    skills: ["Câblage"], workingHours: { days: [1, 2, 3, 4, 5], from: "08:00", to: "18:00" }, idDocument: file("worker-id"),
+  }, C.token);
+  check("worker: profile with working hours and ID saved", ok(r) && r.body.data?.workingHours?.from === "08:00" && Boolean(r.body.data?.idDocument), brief(r));
+  r = await call("PUT", "/professional-profiles/me", { workingHours: { days: [1], from: "8h", to: "18:00" } }, C.token);
+  check("worker: bad hours refused", r.status === 400, brief(r));
+  r = await call("PATCH", "/professional-profiles/me/worker-listing", { isWorkerListed: true }, C.token);
+  check("worker: cannot list myself before approval", r.status === 400, brief(r));
+  r = await call("POST", "/professional-profiles/me/worker-application/submit", null, C.token);
+  check("worker: sent for review (pending)", ok(r) && r.body.data?.approvalStatus === "pending", brief(r));
+  const workerId = r.body.data?._id;
+  r = await call("POST", "/professional-profiles/me/worker-application/submit", null, C.token);
+  check("worker: cannot send twice", r.status === 409, brief(r));
+  const publicIds = async () => ((await call("GET", "/professional-profiles/workers?limit=50")).body.data ?? []).map((w) => w._id);
+  check("pending: not in the public list", !(await publicIds()).includes(workerId));
+  r = await call("GET", `/professional-profiles/workers/${workerId}`);
+  check("pending: public page 404", r.status === 404, brief(r));
+  r = await call("POST", "/conversations", { type: "worker", workerProfileId: workerId }, X.token);
+  check("pending: nobody can message the worker yet", r.status === 404, brief(r));
+  r = await call("GET", "/professional-profiles/admin/workers?status=pending", null, C.token);
+  check("admin list: customers refused", r.status === 403, brief(r));
+  r = await call("GET", "/professional-profiles/admin/workers?status=pending", null, admin);
+  check("admin list: the application with counts", ok(r) && r.body.data.some((w) => w._id === workerId) && r.body.meta?.counts?.pending >= 1 && r.body.data[0]?.userId?.phone !== undefined, brief(r));
+  r = await call("GET", `/professional-profiles/admin/workers/${workerId}`, null, admin);
+  check("admin detail: shows the ID document", ok(r) && r.body.data?.idDocument?.url === file("worker-id").url, brief(r));
+  r = await call("PATCH", `/professional-profiles/admin/workers/${workerId}/review`, { action: "reject" }, admin);
+  check("admin: reject needs a note", r.status === 400, brief(r));
+  r = await call("PATCH", `/professional-profiles/admin/workers/${workerId}/review`, { action: "needs_changes", note: "Photo floue" }, admin);
+  check("admin: request changes", ok(r) && r.body.data?.approvalStatus === "needs_changes", brief(r));
+  r = await call("GET", "/professional-profiles/me/worker-summary", null, C.token);
+  check("worker summary: status + note", r.body.data?.approvalStatus === "needs_changes" && r.body.data?.reviewNote === "Photo floue", brief(r));
+  check("worker told about the review", (await notificationTypes(C.token, "customer")).includes("system_alert"));
+  await call("PUT", "/professional-profiles/me", { photo: file("worker-photo-2") }, C.token);
+  r = await call("POST", "/professional-profiles/me/worker-application/submit", null, C.token);
+  check("worker: re-sent after changes", ok(r) && r.body.data?.approvalStatus === "pending", brief(r));
+  r = await call("PATCH", `/professional-profiles/admin/workers/${workerId}/review`, { action: "approve" }, admin);
+  check("admin: approve", ok(r) && r.body.data?.approvalStatus === "approved", brief(r));
+  check("approved: in the public list", (await publicIds()).includes(workerId));
+  r = await call("GET", `/professional-profiles/workers/${workerId}`);
+  check("public worker page: no ID document, no CV files, no review data", ok(r) && r.body.data?.idDocument === undefined && r.body.data?.uploadedResume === undefined && r.body.data?.applicationHistory === undefined && r.body.data?.workingHours?.from === "08:00", brief(r));
+  r = await call("GET", "/professional-profiles/workers?limit=50");
+  check("public worker list: no ID document either", (r.body.data ?? []).every((w) => w.idDocument === undefined));
+  check("worker told: approved", (await notificationTypes(C.token, "customer")).includes("profile_approved"));
+  r = await call("POST", "/conversations", { type: "worker", workerProfileId: workerId }, X.token);
+  const workerChat = r.body.data?._id;
+  check("approved: a customer can message the worker", ok(r) && Boolean(workerChat), brief(r));
+  await call("POST", `/conversations/${workerChat}/messages`, { text: "Bonjour, pouvez-vous venir demain ?" }, X.token);
+  r = await call("GET", "/professional-profiles/me/worker-summary", null, C.token);
+  check(
+    "worker summary: the customer's message (count, unread, latest)",
+    r.body.data?.messages?.conversations === 1 && r.body.data?.messages?.unread >= 1 && r.body.data?.recent?.[0]?.peer?.name === "Stranger" && r.body.data?.recent?.[0]?.peer?.phone === undefined,
+    JSON.stringify(r.body.data?.messages ?? brief(r)),
+  );
+  r = await call("PUT", "/professional-profiles/me", { idDocument: file("worker-id-new") }, C.token);
+  check("new ID document → back to review, hidden meanwhile", r.body.data?.approvalStatus === "pending" && !(await publicIds()).includes(workerId), brief(r));
+  await call("PATCH", `/professional-profiles/admin/workers/${workerId}/review`, { action: "approve" }, admin);
+  r = await call("PATCH", `/professional-profiles/admin/workers/${workerId}/review`, { action: "suspend", note: "Plaintes clients" }, admin);
+  check("admin: suspend hides the worker", ok(r) && !(await publicIds()).includes(workerId), brief(r));
+  r = await call("POST", "/professional-profiles/me/worker-application/submit", null, C.token);
+  check("suspended worker cannot re-send", r.status === 409, brief(r));
+  r = await call("PATCH", `/professional-profiles/admin/workers/${workerId}/review`, { action: "reinstate" }, admin);
+  check("admin: reinstate shows it again", ok(r) && (await publicIds()).includes(workerId), brief(r));
+
   // ═════ 6. Access control ═════
   r = await call("GET", `/deliveries/${legId}/track`, null, X.token);
   check("stranger cannot track a delivery", r.status === 403, brief(r));

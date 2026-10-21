@@ -411,6 +411,28 @@ const profileReviewed = (userId: Id, kind: "vendor" | "rider", status: string, n
   });
 };
 
+/** Worker profile reviewed by an admin → the worker (customer mode; any user can be a worker). */
+const workerReviewed = (userId: Id, status: string, note?: string) => {
+  emitToUser(String(userId), "application:reviewed", { kind: "worker", status, note });
+  const approved = status === "approved";
+  const text = {
+    approved: { fr: "Votre profil de travailleur est approuvé : les clients peuvent vous trouver et vous écrire.", en: "Your worker profile is approved: customers can now find you and message you." },
+    rejected: { fr: "Votre profil de travailleur a été refusé", en: "Your worker profile was rejected" },
+    needs_changes: { fr: "Votre profil de travailleur doit être complété", en: "Your worker profile needs changes" },
+    suspended: { fr: "Votre profil de travailleur est suspendu", en: "Your worker profile is suspended" },
+  }[status as "approved" | "rejected" | "needs_changes" | "suspended"] ?? { fr: `Profil de travailleur : ${status}`, en: `Worker profile: ${status}` };
+  send({
+    userId,
+    mode: AppMode.customer,
+    type: approved ? NotificationType.profile_approved : NotificationType.system_alert,
+    title: approved ? { fr: "Profil approuvé", en: "Profile approved" } : { fr: "Profil de travailleur", en: "Worker profile" },
+    body: approved
+      ? text
+      : { fr: `${text.fr}${note ? ` : ${note}` : "."}`, en: `${text.en}${note ? `: ${note}` : "."}` },
+    data: { kind: "worker", status },
+  });
+};
+
 /** Job application events → applicant or employer. */
 const applicationUpdate = (
   userId: Id,
@@ -435,6 +457,7 @@ export const Notify = {
   refundRequested,
   refundProcessed,
   orderCancelled,
+  workerReviewed,
   orderPaymentExpired,
   orderDelivered,
   deliveryAssigned,

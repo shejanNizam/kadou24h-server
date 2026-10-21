@@ -8,6 +8,7 @@ import { seedSuperAdmin } from "./app/utils/seedSuperAdmin";
 import { logger } from "./app/utils/logger";
 import { initSocket } from "./socket/socket";
 import { OrderPaymentServices } from "./app/modules/order/order.payment.service";
+import { ProfessionalProfileServices } from "./app/modules/professional_profile/professional_profile.service";
 
 let server: Server;
 
@@ -19,6 +20,9 @@ async function main() {
     await connectRedis();
     await seedSuperAdmin();
     await seedAdmin();
+    // Workers listed before the approval step stay visible
+    const legacyWorkers = await ProfessionalProfileServices.approveLegacyListedWorkers();
+    if (legacyWorkers) logger.info(`Marked ${legacyWorkers} existing listed worker(s) as approved`);
 
     const httpServer = http.createServer(app);
     await initSocket(httpServer);

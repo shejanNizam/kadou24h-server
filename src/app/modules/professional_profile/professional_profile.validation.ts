@@ -47,6 +47,16 @@ export const upsertProfileSchema = z.object({
     .string()
     .regex(/^[0-9a-fA-F]{24}$/, "Valid categoryId required")
     .optional(),
+  // Worker profile: null clears it
+  workingHours: z
+    .object({
+      days: z.array(z.number().int().min(0).max(6)).max(7),
+      from: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Use HH:mm"),
+      to: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Use HH:mm"),
+    })
+    .nullable()
+    .optional(),
+  idDocument: fileRefZod.nullable().optional(),
 });
 
 export const toggleWorkerListingSchema = z.object({

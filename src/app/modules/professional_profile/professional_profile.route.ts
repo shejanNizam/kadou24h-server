@@ -1,7 +1,8 @@
 import { Router } from "express";
 import { checkAuth } from "../../middlewares/checkAuth";
 import validateRequest from "../../middlewares/validateRequest";
-import { APP_ROLES } from "../user/user.interface";
+import { reviewApplicationZodSchema } from "../profile_common/profile.common";
+import { ADMIN_ROLES, APP_ROLES, UserRole } from "../user/user.interface";
 import { ProfessionalProfileControllers } from "./professional_profile.controller";
 import {
   generateAiCvSchema,
@@ -34,6 +35,50 @@ router.patch(
   checkAuth(...APP_ROLES),
   validateRequest(toggleWorkerListingSchema),
   ProfessionalProfileControllers.toggleWorkerListing,
+);
+
+/**
+ * @swagger
+ * /professional-profiles/me/worker-application/submit:
+ *   post:
+ *     tags: [Professional Profile]
+ *     summary: Send my worker profile for admin review (Become a worker)
+ *     description: Needs photo, profession, serviceCategoryId, experienceYears, hourlyRate, city, summary (≥ 20 chars), at least one skill and idDocument (400 lists what is missing). Allowed from draft, rejected or needs_changes. Customers see the worker only once approved.
+ *     security: [{ bearerAuth: [] }]
+ * /professional-profiles/me/worker-summary:
+ *   get:
+ *     tags: [Professional Profile]
+ *     summary: Worker home — approval status, customer chats (count, unread, latest 5) and rating
+ *     security: [{ bearerAuth: [] }]
+ */
+router.post("/me/worker-application/submit", checkAuth(...APP_ROLES), ProfessionalProfileControllers.submitWorkerApplication);
+router.get("/me/worker-summary", checkAuth(...APP_ROLES), ProfessionalProfileControllers.getWorkerSummary);
+
+/**
+ * @swagger
+ * /professional-profiles/admin/workers:
+ *   get:
+ *     tags: [Professional Profile]
+ *     summary: Worker applications (admin) — ?status=pending|approved|rejected|needs_changes|suspended&search=; meta.counts per status
+ *     security: [{ bearerAuth: [] }]
+ * /professional-profiles/admin/workers/{id}:
+ *   get:
+ *     tags: [Professional Profile]
+ *     summary: One worker application with the ID document and history (admin)
+ *     security: [{ bearerAuth: [] }]
+ * /professional-profiles/admin/workers/{id}/review:
+ *   patch:
+ *     tags: [Professional Profile]
+ *     summary: Approve / reject / request changes / suspend / reinstate a worker (admin; a note is required except to approve or reinstate)
+ *     security: [{ bearerAuth: [] }]
+ */
+router.get("/admin/workers", checkAuth(...ADMIN_ROLES), ProfessionalProfileControllers.getWorkersForAdmin);
+router.get("/admin/workers/:id", checkAuth(...ADMIN_ROLES), ProfessionalProfileControllers.getWorkerForAdmin);
+router.patch(
+  "/admin/workers/:id/review",
+  checkAuth(UserRole.admin, UserRole.super_admin),
+  validateRequest(reviewApplicationZodSchema),
+  ProfessionalProfileControllers.reviewWorker,
 );
 
 router.post(

@@ -70,7 +70,7 @@ export const resolveConversation = async (
   }
 
   if (input.type === ConversationType.worker) {
-    const profile = await ProfessionalProfile.findOne({ _id: input.workerProfileId, isWorkerListed: true }).select("userId");
+    const profile = await ProfessionalProfile.findOne({ _id: input.workerProfileId, isWorkerListed: true, approvalStatus: ApprovalStatus.approved }).select("userId");
     if (!profile) throw notFound("Worker");
     if (String(profile.userId) === userId) {
       throw new AppError(httpStatus.BAD_REQUEST, "You cannot start a conversation with yourself");

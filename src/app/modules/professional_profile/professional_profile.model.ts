@@ -1,5 +1,6 @@
 import { model, Schema } from "mongoose";
 import { fileRefSchema, geoPointSchema } from "../../utils/commonSchemas";
+import { reviewFields } from "../profile_common/profile.common";
 import {
   IProfessionalProfile,
   IProfileEducation,
@@ -51,6 +52,19 @@ const professionalProfileSchema = new Schema<IProfessionalProfile>(
     visibleUntil: { type: Date },
     ratingAvg: { type: Number, default: 0, min: 0, max: 5 },
     ratingCount: { type: Number, default: 0, min: 0 },
+    workingHours: {
+      type: new Schema(
+        {
+          days: { type: [Number], default: [] },
+          from: { type: String },
+          to: { type: String },
+        },
+        { _id: false },
+      ),
+    },
+    idDocument: { type: fileRefSchema },
+    // Worker listing approval (draft → pending → approved / rejected / needs_changes / suspended)
+    ...reviewFields,
   },
   {
     timestamps: true,
@@ -59,6 +73,7 @@ const professionalProfileSchema = new Schema<IProfessionalProfile>(
 );
 
 professionalProfileSchema.index({ isWorkerListed: 1, serviceCategoryId: 1 });
+professionalProfileSchema.index({ approvalStatus: 1, submittedAt: -1 });
 professionalProfileSchema.index({ cvVisible: 1, visibleUntil: 1 });
 professionalProfileSchema.index({ location: "2dsphere" });
 professionalProfileSchema.index(

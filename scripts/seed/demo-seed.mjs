@@ -327,8 +327,12 @@ try {
       experienceYears: w.years,
       serviceCategoryId: serviceId[w.service],
       ...(photo && { photo: img(photo) }),
+      workingHours: { days: [1, 2, 3, 4, 5, 6], from: "08:00", to: "18:00" },
+      idDocument: img("https://picsum.photos/seed/kadou-id-" + i + "/800/500"),
     }, u.token);
-    await call("PATCH", "/professional-profiles/me/worker-listing", { isWorkerListed: true }, u.token);
+    // Become a worker: sent for review, then approved by the team
+    const profile = await call("POST", "/professional-profiles/me/worker-application/submit", null, u.token);
+    await call("PATCH", `/professional-profiles/admin/workers/${profile._id}/review`, { action: "approve" }, admin);
   }
   console.log(`✓ ${WORKERS.length} workers`);
 

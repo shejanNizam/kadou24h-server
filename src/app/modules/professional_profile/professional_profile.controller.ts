@@ -86,7 +86,36 @@ const getWorkerById = catchAsync(async (req: Request, res: Response) => {
   });
 });
 
+const ok = (res: Response, message: string, data: unknown) =>
+  sendResponse(res, { statusCode: httpStatus.OK, success: true, message, data });
+
+const submitWorkerApplication = catchAsync(async (req: Request, res: Response) => {
+  ok(res, "Worker profile sent for review", await ProfessionalProfileServices.submitWorkerApplication(req.user._id));
+});
+
+const getWorkerSummary = catchAsync(async (req: Request, res: Response) => {
+  ok(res, "Worker summary retrieved", await ProfessionalProfileServices.getWorkerSummary(req.user._id));
+});
+
+const getWorkersForAdmin = catchAsync(async (req: Request, res: Response) => {
+  const result = await ProfessionalProfileServices.getWorkersForAdmin(req.query as Record<string, string>);
+  sendResponse(res, { statusCode: httpStatus.OK, success: true, message: "Worker applications retrieved", meta: result.meta, data: result.data });
+});
+
+const getWorkerForAdmin = catchAsync(async (req: Request, res: Response) => {
+  ok(res, "Worker application retrieved", await ProfessionalProfileServices.getWorkerForAdmin(req.params.id as string));
+});
+
+const reviewWorker = catchAsync(async (req: Request, res: Response) => {
+  ok(res, "Worker application reviewed", await ProfessionalProfileServices.reviewWorker(req.params.id as string, req.body, req.user._id));
+});
+
 export const ProfessionalProfileControllers = {
+  submitWorkerApplication,
+  getWorkerSummary,
+  getWorkersForAdmin,
+  getWorkerForAdmin,
+  reviewWorker,
   getMyProfile,
   upsertProfile,
   toggleWorkerListing,

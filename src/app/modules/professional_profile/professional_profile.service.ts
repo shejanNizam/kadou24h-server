@@ -5,6 +5,18 @@ import { toGeoPoint } from "../../utils/commonSchemas";
 import { IProfessionalProfile } from "./professional_profile.interface";
 import { ProfessionalProfile } from "./professional_profile.model";
 import { escapeRegex } from "../../utils/queryParams";
+import { AuditLogServices } from "../audit_log/audit_log.service";
+import { ConversationType } from "../chat/chat.interface";
+import { Conversation } from "../chat/conversation.model";
+import { Notify } from "../notification/notification.events";
+import { ApprovalStatus, ReviewAction, applyReview, markSubmitted } from "../profile_common/profile.common";
+import { User } from "../user/user.model";
+
+/** Never in public worker responses: ID document, CV files (paid unlock for recruiters), review data. */
+const PUBLIC_HIDDEN = "-idDocument -uploadedResume -generatedCv -reviewNote -reviewedBy -reviewedAt -submittedAt -applicationHistory";
+
+/** Customers see a worker only while listed AND approved by an admin. */
+const PUBLIC_WORKER = { isWorkerListed: true, approvalStatus: ApprovalStatus.approved };
 
 /**
  * Gets or initializes the user's professional profile.
@@ -49,8 +61,16 @@ const upsertProfile = async (
     profile.serviceCategoryId = new Types.ObjectId(serviceCategoryId);
   }
 
-  // null = remove the file (photo, uploaded CV, generated CV)
-  for (const key of ["photo", "uploadedResume", "generatedCv"] as const) {
+  // A new ID document on an approved worker profile must be checked again
+  const newId = (rest as { idDocument?: { url: string } | null }).idDocument;
+  if (newId && profile.approvalStatus === ApprovalStatus.approved && newId.url !== profile.idDocument?.url) {
+    profile.approvalStatus = ApprovalStatus.pending;
+    profile.submittedAt = new Date();
+    profile.applicationHistory.push({ action: "id_document_changed", byUserId: new Types.ObjectId(userId), at: new Date() });
+  }
+
+  // null = remove the file or value (photo, CVs, ID document, working hours)
+  for (const key of ["photo", "uploadedResume", "generatedCv", "idDocument", "workingHours"] as const) {
     if ((rest as Record<string, unknown>)[key] === null) {
       profile.set(key, undefined);
       Reflect.deleteProperty(rest, key);
@@ -77,6 +97,9 @@ const toggleWorkerListing = async (
 ) => {
   const profile = await getMyProfile(userId);
 
+  if (payload.isWorkerListed && profile.approvalStatus !== ApprovalStatus.approved) {
+    throw new AppError(httpStatus.BAD_REQUEST, "Your worker profile must be approved before it can be listed");
+  }
   profile.isWorkerListed = payload.isWorkerListed;
   if (payload.hourlyRate !== undefined) profile.hourlyRate = payload.hourlyRate;
   if (payload.experienceYears !== undefined)
@@ -107,7 +130,7 @@ const searchWorkers = async (query: {
   const limit = Math.max(1, Math.min(50, Number(query.limit) || 20));
   const skip = (page - 1) * limit;
 
-  const filter: Record<string, unknown> = { isWorkerListed: true };
+  const filter: Record<string, unknown> = { ...PUBLIC_WORKER };
 
   if (query.categoryId) {
     filter.serviceCategoryId = new Types.ObjectId(query.categoryId);
@@ -143,6 +166,7 @@ const searchWorkers = async (query: {
 
   const [workers, total] = await Promise.all([
     ProfessionalProfile.find(filter)
+      .select(PUBLIC_HIDDEN)
       // Public endpoint: never phone / email (contact goes through in-app chat)
       .populate("userId", "name avatar")
       .populate("serviceCategoryId", "name slug")
@@ -171,11 +195,12 @@ const expireCvVisibility = () =>
  * Public view of a single listed worker profile.
  */
 const getWorkerById = async (profileId: string) => {
-  const profile = await ProfessionalProfile.findById(profileId)
+  const profile = await ProfessionalProfile.findOne({ _id: profileId, ...PUBLIC_WORKER })
+    .select(PUBLIC_HIDDEN)
     .populate("userId", "name avatar")
     .populate("serviceCategoryId", "name slug");
 
-  if (!profile || !profile.isWorkerListed) {
+  if (!profile) {
     throw new AppError(httpStatus.NOT_FOUND, "Worker profile not found");
   }
 
@@ -228,10 +253,191 @@ const generateAiCv = async (
   return { summary: sentences.filter(Boolean).join(" ") };
 };
 
+// ── Worker application (Become a worker) ─────────────────────────────
+
+const MIN_DESCRIPTION = 20;
+
+/** The worker sends the profile for review: everything a customer needs, plus an ID document. */
+const submitWorkerApplication = async (userId: string) => {
+  const profile = await getMyProfile(userId);
+  const missing = [
+    !profile.photo?.url && "photo",
+    (profile.profession?.trim().length ?? 0) < 2 && "profession",
+    !profile.serviceCategoryId && "serviceCategoryId",
+    profile.experienceYears === undefined && "experienceYears",
+    !(profile.hourlyRate && profile.hourlyRate > 0) && "hourlyRate",
+    !profile.city?.trim() && "city",
+    (profile.summary?.trim().length ?? 0) < MIN_DESCRIPTION && "summary",
+    profile.skills.length === 0 && "skills",
+    !profile.idDocument?.url && "idDocument",
+  ].filter(Boolean);
+  if (missing.length) {
+    throw new AppError(httpStatus.BAD_REQUEST, `Complete your worker profile first: ${missing.join(", ")}`);
+  }
+  if (profile.approvalStatus === ApprovalStatus.approved) {
+    throw new AppError(httpStatus.CONFLICT, "Your worker profile is already approved");
+  }
+  // Throws while pending or suspended
+  markSubmitted(profile, userId);
+  // Shown to customers as soon as an admin approves it
+  profile.isWorkerListed = true;
+  await profile.save();
+  return profile;
+};
+
+/**
+ * Worker home: status, the customers who wrote (worker chats) and the rating.
+ * Only real data — there is no booking or earnings system for workers.
+ */
+const getWorkerSummary = async (userId: string) => {
+  const profile = await getMyProfile(userId);
+  const chats = { type: ConversationType.worker, workerProfileId: profile._id, "lastMessage.at": { $exists: true } };
+  const [conversations, unreadAgg, recent] = await Promise.all([
+    Conversation.countDocuments(chats),
+    Conversation.aggregate<{ unread: number; unreadChats: number }>([
+      { $match: chats },
+      { $unwind: "$participants" },
+      { $match: { "participants.userId": profile.userId } },
+      {
+        $group: {
+          _id: null,
+          unread: { $sum: "$participants.unreadCount" },
+          unreadChats: { $sum: { $cond: [{ $gt: ["$participants.unreadCount", 0] }, 1, 0] } },
+        },
+      },
+    ]),
+    Conversation.find(chats).sort({ "lastMessage.at": -1 }).limit(5).lean(),
+  ]);
+
+  const peerOf = (c: (typeof recent)[number]) => c.participants.find((p) => String(p.userId) !== String(profile.userId));
+  const peerIds = recent.flatMap((c) => {
+    const id = peerOf(c)?.userId;
+    return id ? [id] : [];
+  });
+  const peers = await User.find({ _id: { $in: peerIds } })
+    .select("name avatar")
+    .lean();
+  const peerMap = new Map(peers.map((u) => [String(u._id), u]));
+
+  return {
+    profileId: profile._id,
+    approvalStatus: profile.approvalStatus,
+    reviewNote: profile.reviewNote,
+    submittedAt: profile.submittedAt,
+    isWorkerListed: profile.isWorkerListed,
+    ratingAvg: profile.ratingAvg,
+    ratingCount: profile.ratingCount,
+    messages: {
+      conversations,
+      unread: unreadAgg[0]?.unread ?? 0,
+      unreadChats: unreadAgg[0]?.unreadChats ?? 0,
+    },
+    recent: recent.map((c) => {
+      const peer = peerOf(c);
+      const me = c.participants.find((p) => String(p.userId) === String(profile.userId));
+      const user = peer ? peerMap.get(String(peer.userId)) : undefined;
+      return {
+        _id: c._id,
+        peer: user ? { _id: user._id, name: user.name, avatar: user.avatar } : null,
+        lastMessage: c.lastMessage,
+        unreadCount: me?.unreadCount ?? 0,
+      };
+    }),
+  };
+};
+
+/** Admin list (Dashboard → Workers): by status, with counts per status for the tabs. */
+const getWorkersForAdmin = async (query: { status?: string; search?: string; page?: number; limit?: number }) => {
+  const page = Math.max(1, Number(query.page) || 1);
+  const limit = Math.max(1, Math.min(50, Number(query.limit) || 20));
+  // Only people who applied (a CV alone is not a worker application)
+  const filter: Record<string, unknown> = { approvalStatus: { $ne: ApprovalStatus.draft } };
+  const status = Object.values(ApprovalStatus).find((s) => s === query.status);
+  if (status) filter.approvalStatus = status;
+  if (query.search?.trim()) {
+    const rx = { $regex: escapeRegex(query.search.trim()), $options: "i" };
+    const users = await User.find({ $or: [{ name: rx }, { phone: rx }, { email: rx }] }).select("_id").limit(200).lean();
+    filter.$or = [{ profession: rx }, { city: rx }, { userId: { $in: users.map((u) => u._id) } }];
+  }
+
+  const [data, total, counts] = await Promise.all([
+    ProfessionalProfile.find(filter)
+      .select("userId profession city photo hourlyRate experienceYears serviceCategoryId approvalStatus submittedAt reviewedAt isWorkerListed ratingAvg ratingCount")
+      .populate("userId", "name phone email avatar")
+      .populate("serviceCategoryId", "name")
+      .sort({ submittedAt: -1 })
+      .skip((page - 1) * limit)
+      .limit(limit)
+      .lean(),
+    ProfessionalProfile.countDocuments(filter),
+    ProfessionalProfile.aggregate<{ _id: string; n: number }>([
+      { $match: { approvalStatus: { $ne: ApprovalStatus.draft } } },
+      { $group: { _id: "$approvalStatus", n: { $sum: 1 } } },
+    ]),
+  ]);
+  return {
+    meta: { page, limit, total, totalPage: Math.ceil(total / limit), counts: Object.fromEntries(counts.map((c) => [c._id, c.n])) },
+    data,
+  };
+};
+
+const getWorkerForAdmin = async (id: string) => {
+  const profile = await ProfessionalProfile.findById(id)
+    .populate("userId", "name phone email avatar createdAt")
+    .populate("serviceCategoryId", "name")
+    .populate("applicationHistory.byUserId", "name");
+  if (!profile || profile.approvalStatus === ApprovalStatus.draft) {
+    throw new AppError(httpStatus.NOT_FOUND, "Worker application not found");
+  }
+  return profile;
+};
+
+const reviewWorker = async (id: string, payload: { action: ReviewAction; note?: string }, actorId: string) => {
+  const profile = await ProfessionalProfile.findById(id);
+  if (!profile) throw new AppError(httpStatus.NOT_FOUND, "Worker application not found");
+  const owner = await User.findOne({ _id: profile.userId, isDeleted: false }).select("_id");
+  if (!owner) throw new AppError(httpStatus.BAD_REQUEST, "The applicant's account no longer exists");
+
+  const before = profile.approvalStatus;
+  const status = applyReview(profile, payload.action, payload.note, actorId);
+  await profile.save();
+  Notify.workerReviewed(profile.userId, status, payload.note);
+
+  await AuditLogServices.record({
+    actorId,
+    action: `worker.${payload.action}`,
+    targetType: "professional_profile",
+    targetId: id,
+    before: { approvalStatus: before },
+    after: { approvalStatus: status, note: payload.note },
+  });
+  return getWorkerForAdmin(id);
+};
+
+/**
+ * Workers listed before the approval step existed stay visible: marked approved once.
+ * Idempotent; runs at server start.
+ */
+const approveLegacyListedWorkers = async () => {
+  const res = await ProfessionalProfile.updateMany(
+    { isWorkerListed: true, approvalStatus: { $exists: false } },
+    { $set: { approvalStatus: ApprovalStatus.approved, reviewedAt: new Date() } },
+  );
+  // Everyone else never applied: a CV only (keeps them out of the admin list)
+  await ProfessionalProfile.updateMany({ approvalStatus: { $exists: false } }, { $set: { approvalStatus: ApprovalStatus.draft } });
+  return res.modifiedCount;
+};
+
 export const ProfessionalProfileServices = {
   getMyProfile,
   upsertProfile,
   toggleWorkerListing,
+  submitWorkerApplication,
+  getWorkerSummary,
+  getWorkersForAdmin,
+  getWorkerForAdmin,
+  reviewWorker,
+  approveLegacyListedWorkers,
   searchWorkers,
   getWorkerById,
   generateAiCv,
