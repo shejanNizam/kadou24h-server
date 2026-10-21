@@ -7,6 +7,7 @@ import { RefundServices } from "./refund.service";
 import { RefundSource } from "./payment.interface";
 import { AppMode } from "../user/user.interface";
 import { Order } from "../order/order.model";
+import { OrderPaymentServices } from "../order/order.payment.service";
 import { PaymentStatus as OrderPaymentStatus } from "../order/order.interface";
 import { VendorProfile } from "../vendor_profile/vendor_profile.model";
 import { SettingsServices } from "../settings/settings.service";
@@ -59,6 +60,11 @@ const initiatePayment = async (
     }
   }
 
+  // Only goods are paid at the door: fees (job, CV, subscription…) are paid online
+  if (payload.purpose !== PaymentPurpose.order && payload.method === PaymentMethod.cod) {
+    throw new AppError(httpStatus.BAD_REQUEST, "This payment can only be made online (Orange Money, Mobile Money or card)");
+  }
+
   const settings = await SettingsServices.getSettings();
   let amount: number;
 
@@ -78,6 +84,9 @@ const initiatePayment = async (
     }
     if (order.status === "cancelled") {
       throw new AppError(httpStatus.BAD_REQUEST, "This order was cancelled");
+    }
+    if (order.paymentDueAt && order.paymentDueAt.getTime() <= Date.now()) {
+      throw new AppError(httpStatus.BAD_REQUEST, "The time to pay for this order is over. It will be cancelled and the items put back in your cart.");
     }
 
     amount = order.total;
@@ -173,11 +182,9 @@ const handleWebhook = async (payload: {
     if (payload.raw) payment.raw = payload.raw;
     await payment.save();
 
-    // 1. Order fulfillment
+    // 1. Order fulfillment: now the stores receive it (or a refund if it was cancelled meanwhile)
     if (payment.purpose === PaymentPurpose.order) {
-      await Order.findByIdAndUpdate(payment.refId, {
-        paymentStatus: OrderPaymentStatus.paid,
-      });
+      await OrderPaymentServices.confirmOrderPaid(String(payment.refId));
     }
 
     // 2. Job publish fulfillment
@@ -192,11 +199,35 @@ const handleWebhook = async (payload: {
 
     // 3. Subscription fulfillment
     if (payment.purpose === PaymentPurpose.subscription) {
-      const sub = await UserSubscription.findOneAndUpdate(
+      // The period starts when the money arrives; a renewal while still
+      // subscribed starts when the current period ends (no overlap, no loss)
+      const plan = await SubscriptionPlan.findById(payment.refId);
+      const now = new Date();
+      const current = await UserSubscription.findOne({
+        userId: payment.payerId,
+        status: SubscriptionStatus.active,
+        endsAt: { $gt: now },
+      }).sort({ endsAt: -1 });
+      const startsAt = current?.endsAt ?? now;
+      const endsAt = new Date(startsAt.getTime() + (plan?.durationDays ?? 30) * 24 * 60 * 60 * 1000);
+
+      let sub = await UserSubscription.findOneAndUpdate(
         { paymentId: payment._id },
-        { status: SubscriptionStatus.active },
+        { status: SubscriptionStatus.active, startsAt, endsAt },
         { new: true },
       );
+      // A retried payment (the payment screen's "try again") has no subscription yet
+      if (!sub && plan) {
+        sub = await UserSubscription.create({
+          userId: payment.payerId,
+          planId: plan._id,
+          planSnapshot: { name: plan.name, price: plan.price, features: plan.features },
+          status: SubscriptionStatus.active,
+          startsAt,
+          endsAt,
+          paymentId: payment._id,
+        });
+      }
       if (sub && sub.planSnapshot?.features?.includes("cv_visibility")) {
         await ProfessionalProfile.findOneAndUpdate(
           { userId: payment.payerId },

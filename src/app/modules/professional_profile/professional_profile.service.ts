@@ -2,7 +2,6 @@ import httpStatus from "http-status";
 import { Types } from "mongoose";
 import AppError from "../../errorHelpers/AppError";
 import { toGeoPoint } from "../../utils/commonSchemas";
-import { User } from "../user/user.model";
 import { IProfessionalProfile } from "./professional_profile.interface";
 import { ProfessionalProfile } from "./professional_profile.model";
 import { escapeRegex } from "../../utils/queryParams";
@@ -49,6 +48,15 @@ const upsertProfile = async (
   if (serviceCategoryId) {
     profile.serviceCategoryId = new Types.ObjectId(serviceCategoryId);
   }
+
+  // null = remove the file (photo, uploaded CV, generated CV)
+  for (const key of ["photo", "uploadedResume", "generatedCv"] as const) {
+    if ((rest as Record<string, unknown>)[key] === null) {
+      profile.set(key, undefined);
+      Reflect.deleteProperty(rest, key);
+    }
+  }
+  if (rest.generatedCv) profile.generatedAt = new Date();
 
   profile.set(rest);
   await profile.save();
@@ -175,45 +183,49 @@ const getWorkerById = async (profileId: string) => {
 };
 
 /**
- * Generates an AI-crafted CV summary and structured resume for the candidate.
+ * Suggests a CV summary from the profile (template-based, no AI service).
+ * Nothing is saved: the app shows the text, the user edits or keeps it and
+ * saves it with PUT /me. The CV document itself (PDF) is made by the app from
+ * the profile and uploaded; the server never invents a file.
  */
 const generateAiCv = async (
   userId: string,
-  payload: { targetRole?: string; tone?: string },
+  payload: { targetRole?: string; tone?: string; lang?: "fr" | "en" },
 ) => {
-  const [profile, user] = await Promise.all([
-    getMyProfile(userId),
-    User.findById(userId),
-  ]);
+  const profile = await getMyProfile(userId);
+  const fr = payload.lang !== "en";
 
-  if (!user) throw new AppError(httpStatus.NOT_FOUND, "User not found");
+  const role = payload.targetRole?.trim() || profile.profession?.trim();
+  const years = profile.experienceYears;
+  const skills = profile.skills.slice(0, 5);
+  const languages = profile.languages;
+  const latest = [...profile.profileExperience].sort(
+    (a, b) => Number(b.isCurrent) - Number(a.isCurrent) || (b.startDate?.getTime() ?? 0) - (a.startDate?.getTime() ?? 0),
+  )[0];
+  const list = (items: string[], and: string) =>
+    items.length <= 1 ? items.join("") : `${items.slice(0, -1).join(", ")} ${and} ${items.at(-1)}`;
 
-  const profession = payload.targetRole || profile.profession || "Professional Specialist";
-  const toneDesc = payload.tone ? ` characterized by a ${payload.tone} approach` : "";
+  const sentences = fr
+    ? [
+        role
+          ? `${role}${years ? ` avec ${years} an${years > 1 ? "s" : ""} d'expérience` : ""}, sérieux(se) et fiable.`
+          : `Professionnel(le) sérieux(se) et fiable${years ? `, avec ${years} an${years > 1 ? "s" : ""} d'expérience` : ""}.`,
+        latest && `Dernier poste : ${latest.title}${latest.company ? ` chez ${latest.company}` : ""}.`,
+        skills.length && `Compétences : ${list(skills, "et")}.`,
+        languages.length && `Langues parlées : ${list(languages, "et")}.`,
+        "Disponible rapidement et motivé(e) pour rejoindre une nouvelle équipe.",
+      ]
+    : [
+        role
+          ? `${role}${years ? ` with ${years} year${years > 1 ? "s" : ""} of experience` : ""}, serious and reliable.`
+          : `Serious and reliable professional${years ? ` with ${years} year${years > 1 ? "s" : ""} of experience` : ""}.`,
+        latest && `Latest role: ${latest.title}${latest.company ? ` at ${latest.company}` : ""}.`,
+        skills.length && `Skills: ${list(skills, "and")}.`,
+        languages.length && `Languages: ${list(languages, "and")}.`,
+        "Available soon and keen to join a new team.",
+      ];
 
-  // Synthesize AI-crafted professional summary
-  const skillsList = profile.skills.length > 0 ? profile.skills.join(", ") : "Industry best practices, problem solving, task execution";
-  const expYears = profile.experienceYears ? `${profile.experienceYears}+ years` : "proven";
-
-  const aiSummary =
-    `Dedicated and results-oriented ${profession} with ${expYears} of hands-on experience in dynamic environments${toneDesc}. ` +
-    `Proficient in ${skillsList}. Proven track record of delivering high quality work with attention to detail, reliability, and excellence.`;
-
-  // Update profile with generated content
-  profile.summary = aiSummary;
-  profile.generatedAt = new Date();
-  profile.generatedCv = {
-    url: `https://res.cloudinary.com/kadou24h/raw/upload/v1/cv_${userId}.pdf`,
-    publicId: `cv_${userId}`,
-  };
-
-  await profile.save();
-
-  return {
-    profile,
-    generatedSummary: aiSummary,
-    cvMarkdown: `# ${user.name}\n**${profession}**\n\n## Professional Summary\n${aiSummary}\n\n## Core Competencies\n${profile.skills.map((s) => `- ${s}`).join("\n")}\n\n## Experience\n${profile.profileExperience.map((e) => `### ${e.title} - ${e.company || "Independent"}\n*${e.location || "Guinea"}*\n${e.description || ""}`).join("\n\n")}\n\n## Education\n${profile.profileEducation.map((ed) => `- **${ed.degree}**, ${ed.institution} (${ed.year})`).join("\n")}`,
-  };
+  return { summary: sentences.filter(Boolean).join(" ") };
 };
 
 export const ProfessionalProfileServices = {

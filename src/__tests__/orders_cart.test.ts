@@ -59,6 +59,11 @@ describe("Cart, Delivery Rates & Orders Module", () => {
   });
 
   describe("Cart Endpoints", () => {
+    it("GET /api/v1/cart/suggestions rejects unauthenticated request with 401", async () => {
+      const res = await request(app).get("/api/v1/cart/suggestions");
+      expect(res.status).toBe(401);
+    });
+
     it("GET /api/v1/cart rejects unauthenticated request with 401", async () => {
       const res = await request(app).get("/api/v1/cart");
       expect(res.status).toBe(401);

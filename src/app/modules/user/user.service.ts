@@ -183,7 +183,7 @@ const verifyPhoneChange = async (userId: string, phone: string, otp: string) => 
  * order on the way. The message says what to finish first.
  */
 const assertNothingPending = async (userId: string) => {
-  const OPEN_SUB_ORDER = [SubOrderStatus.new, SubOrderStatus.accepted, SubOrderStatus.preparing, SubOrderStatus.ready_for_pickup, SubOrderStatus.in_delivery];
+  const OPEN_SUB_ORDER = [SubOrderStatus.pending_payment, SubOrderStatus.new, SubOrderStatus.accepted, SubOrderStatus.preparing, SubOrderStatus.ready_for_pickup, SubOrderStatus.in_delivery];
   const OPEN_LEG = [DeliveryStatus.assigned, DeliveryStatus.accepted, DeliveryStatus.going_to_pickup, DeliveryStatus.picked_up, DeliveryStatus.in_transit];
 
   if (await Order.exists({ customerId: userId, status: OrderStatus.active })) {

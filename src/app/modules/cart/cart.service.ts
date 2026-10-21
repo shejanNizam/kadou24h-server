@@ -1,8 +1,11 @@
 import httpStatus from "http-status";
+import { Types } from "mongoose";
 import AppError from "../../errorHelpers/AppError";
 import { Product } from "../product/product.model";
 import { ProductApprovalStatus } from "../product/product.interface";
 import { VendorProfile } from "../vendor_profile/vendor_profile.model";
+import { SubOrder } from "../order/sub_order.model";
+import { SubOrderStatus } from "../order/order.interface";
 import {
   ICartItemPopulated,
   ICartResponse,
@@ -283,8 +286,76 @@ const clearCart = async (userId: string) => {
   return getMyCart(userId);
 };
 
+const SUGGESTION_LIMIT_MAX = 20;
+/** Only orders that went ahead count as "bought together". */
+const BOUGHT_STATUSES = [
+  SubOrderStatus.accepted,
+  SubOrderStatus.preparing,
+  SubOrderStatus.ready_for_pickup,
+  SubOrderStatus.in_delivery,
+  SubOrderStatus.delivered,
+];
+
+/**
+ * "Customers also bought" for the cart: products found in the same orders as the cart's
+ * products (most often first), topped up with popular products of the same categories.
+ * Only approved, in-stock products; never what is already in the cart. Counts only —
+ * nothing about who bought them.
+ */
+const getSuggestions = async (userId: string, limitInput?: unknown) => {
+  const limit = Math.min(SUGGESTION_LIMIT_MAX, Math.max(1, Number(limitInput) || 10));
+  const cart = await Cart.findOne({ userId }).lean();
+  const cartIds = (cart?.items ?? []).map((i) => new Types.ObjectId(String(i.productId)));
+  if (cartIds.length === 0) return [];
+
+  const together = await SubOrder.aggregate<{ _id: Types.ObjectId; orders: number }>([
+    { $match: { "items.productId": { $in: cartIds }, status: { $in: BOUGHT_STATUSES } } },
+    { $sort: { createdAt: -1 } },
+    // Recent history is enough and keeps this cheap
+    { $limit: 500 },
+    { $unwind: "$items" },
+    { $match: { "items.productId": { $nin: cartIds } } },
+    { $group: { _id: "$items.productId", orders: { $sum: 1 } } },
+    { $sort: { orders: -1 } },
+    { $limit: limit * 3 },
+  ]);
+
+  const buyable = {
+    isDeleted: false,
+    approvalStatus: ProductApprovalStatus.approved,
+    isAvailable: true,
+    stockQty: { $gt: 0 },
+  };
+  const populateStore = "storeName logo address.city isOpen isPlatformStore stats.ratingAvg";
+
+  const ranked = together.map((t) => t._id);
+  const fromOrders = ranked.length
+    ? await Product.find({ ...buyable, _id: { $in: ranked } })
+        .populate("vendorId", populateStore)
+        .populate("categoryId", "name slug")
+        .lean()
+    : [];
+  const order = new Map(ranked.map((id, i) => [String(id), i]));
+  fromOrders.sort((a, b) => (order.get(String(a._id)) ?? 0) - (order.get(String(b._id)) ?? 0));
+  const picked = fromOrders.slice(0, limit);
+  if (picked.length >= limit) return picked;
+
+  // Top up: best sellers of the cart's categories
+  const cartProducts = await Product.find({ _id: { $in: cartIds } }, { categoryId: 1 }).lean();
+  const categoryIds = [...new Set(cartProducts.map((p) => String(p.categoryId)))].map((id) => new Types.ObjectId(id));
+  const exclude = [...cartIds, ...picked.map((p) => p._id)];
+  const popular = await Product.find({ ...buyable, categoryId: { $in: categoryIds }, _id: { $nin: exclude } })
+    .populate("vendorId", populateStore)
+    .populate("categoryId", "name slug")
+    .sort({ soldCount: -1, ratingAvg: -1, createdAt: -1 })
+    .limit(limit - picked.length)
+    .lean();
+  return [...picked, ...popular];
+};
+
 export const CartServices = {
   getMyCart,
+  getSuggestions,
   addToCart,
   updateItemQty,
   removeItem,

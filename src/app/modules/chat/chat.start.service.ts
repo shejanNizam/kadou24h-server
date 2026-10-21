@@ -10,6 +10,7 @@ import AppError from "../../errorHelpers/AppError";
 import { Delivery } from "../delivery/delivery.model";
 import { Job } from "../job/job.model";
 import { JobApplication } from "../job/job_application.model";
+import { SubOrderStatus } from "../order/order.interface";
 import { SubOrder } from "../order/sub_order.model";
 import { ProfessionalProfile } from "../professional_profile/professional_profile.model";
 import { ApprovalStatus } from "../profile_common/profile.common";
@@ -84,8 +85,12 @@ export const resolveConversation = async (
   }
 
   if (input.type === ConversationType.order) {
-    const subOrder = await SubOrder.findById(input.subOrderId).select("orderId customerId vendorId currentRiderId");
+    const subOrder = await SubOrder.findById(input.subOrderId).select("orderId customerId vendorId currentRiderId status");
     if (!subOrder) throw notFound("Order");
+    // The store only receives an online order once it is paid
+    if (subOrder.status === SubOrderStatus.pending_payment) {
+      throw new AppError(httpStatus.BAD_REQUEST, "Pay for this order first — the store receives it once paid");
+    }
     const [vendor, legs, myRider] = await Promise.all([
       VendorProfile.findById(subOrder.vendorId).select("userId"),
       Delivery.find({ subOrderId: subOrder._id }).select("riderId"),

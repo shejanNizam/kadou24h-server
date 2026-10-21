@@ -26,10 +26,13 @@ const earnedCommission = {
   $cond: [{ $eq: ["$settlement", SettlementStatus.released] }, "$commissionAmount", 0],
 };
 
+/** Not sales: cancelled, and online orders still waiting for their payment. */
+const NOT_SALES = [SubOrderStatus.cancelled, SubOrderStatus.pending_payment];
+
 /** Per-period GMV and earned commission from non-cancelled sub-orders. */
 const subOrderSeries = (format: string, since: Date) =>
   SubOrder.aggregate<{ _id: string; gmv: number; commission: number }>([
-    { $match: { createdAt: { $gte: since }, status: { $ne: SubOrderStatus.cancelled } } },
+    { $match: { createdAt: { $gte: since }, status: { $nin: NOT_SALES } } },
     {
       $group: {
         _id: { $dateToString: { format, date: "$createdAt" } },
@@ -189,7 +192,7 @@ const getPlatformOverview = async () => {
 
     // GMV (non-cancelled sub-orders) and commission actually earned (released)
     SubOrder.aggregate([
-      { $match: { status: { $ne: SubOrderStatus.cancelled } } },
+      { $match: { status: { $nin: NOT_SALES } } },
       { $group: { _id: null, gmv: { $sum: "$total" }, commission: { $sum: earnedCommission } } },
     ]),
     subOrderSeries("%Y-%m-%d", startOfWeek),

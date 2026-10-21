@@ -48,7 +48,7 @@ const generateAiCv = catchAsync(async (req: Request, res: Response) => {
   sendResponse(res, {
     statusCode: httpStatus.OK,
     success: true,
-    message: "AI CV generated successfully!",
+    message: "CV summary suggested",
     data: result,
   });
 });

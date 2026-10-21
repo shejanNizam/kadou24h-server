@@ -356,10 +356,23 @@ const run = async () => {
   check("rejected withdrawal refunded exactly once", vw.availableBalance === earning, JSON.stringify([earning, vw.availableBalance]));
   check("vendor gets a 'withdrawal' notification", (await notificationTypes(V.token, "vendor")).includes("withdrawal_update"));
 
-  // ═════ 3. Prepaid: webhook security, then vendor paid at delivery ═════
+  // ═════ 3. Prepaid: the store gets it once paid, webhook security, vendor paid at delivery ═════
+  const count = (types, type) => types.filter((x) => x === type).length;
+  const heldBeforeOnline = (await wallet(V.token, "vendor")).heldBalance;
+  const placedBefore = count(await notificationTypes(V.token, "vendor"), "order_placed");
   r = await order([{ productId, qty: 1 }], { paymentMethod: "orange_money" });
   const paidOrder = r.body.data.order;
   const paidSub = r.body.data.subOrders[0];
+  check("online order waits for its payment (pending_payment + due time)", paidSub.status === "pending_payment" && Boolean(paidOrder.paymentDueAt), JSON.stringify([paidSub.status, paidOrder.paymentDueAt]));
+  r = await call("GET", `/orders/vendor/sub-orders/${paidSub._id}`, null, V.token);
+  check("unpaid: the store cannot open it", r.status === 404, brief(r));
+  r = await call("GET", "/orders/vendor/sub-orders?limit=50", null, V.token);
+  check("unpaid: not in the store's list", ok(r) && !(r.body.data ?? []).some((s) => s._id === paidSub._id), brief(r));
+  r = await call("GET", "/orders/vendor/sub-orders?status=pending_payment", null, V.token);
+  check("unpaid: the store cannot ask for that status", r.status === 400, brief(r));
+  check("unpaid: no escrow held, no 'new order' notice", (await wallet(V.token, "vendor")).heldBalance === heldBeforeOnline && count(await notificationTypes(V.token, "vendor"), "order_placed") === placedBefore);
+  r = await call("POST", "/conversations", { type: "order", subOrderId: paidSub._id }, C.token);
+  check("unpaid: no chat with the store about it yet", r.status === 400, brief(r));
   r = await call("POST", "/payments/initiate", { purpose: "order", refId: paidOrder._id, method: "orange_money" }, C.token);
   check("payment starts pending", r.status === 201 && r.body.data.status === "pending", brief(r));
   const paymentId = r.body.data._id;
@@ -373,12 +386,75 @@ const run = async () => {
   const paymentId2 = r.body.data._id;
   r = await webhook({ paymentId: paymentId2, status: "success", amount: paidOrder.total });
   check("valid webhook → paid", r.status === 200 && r.body.data.status === "success", brief(r));
+  const paidSubNow = (await call("GET", `/orders/${paidOrder._id}`, null, C.token)).body.data?.subOrders?.[0];
+  check("paid: the store receives it (new, delivery planned)", paidSubNow?.status === "new" && Boolean(paidSubNow?.currentLegId), JSON.stringify([paidSubNow?.status, paidSubNow?.currentLegId]));
+  check("paid: escrow held now", (await wallet(V.token, "vendor")).heldBalance === heldBeforeOnline + paidSub.vendorEarning);
+  check("paid: the store gets its 'new order' notice", count(await notificationTypes(V.token, "vendor"), "order_placed") === placedBefore + 1);
+  r = await webhook({ paymentId: paymentId2, status: "success", amount: paidOrder.total });
+  check("same webhook twice: nothing doubled", r.status === 200 && (await wallet(V.token, "vendor")).heldBalance === heldBeforeOnline + paidSub.vendorEarning);
   const before = (await wallet(V.token, "vendor")).availableBalance;
-  await deliver(paidSub, "Prepaid");
+  await deliver(paidSubNow, "Prepaid");
   vw = await wallet(V.token, "vendor");
   check("prepaid: vendor paid at delivery", vw.availableBalance === before + paidSub.vendorEarning, JSON.stringify([before, vw.availableBalance]));
   r = await call("POST", `/orders/admin/sub-orders/${paidSub._id}/cancel`, { reason: "Too late to cancel" }, admin);
   check("admin cannot cancel a delivered sub-order (refund instead)", r.status === 400, brief(r));
+
+  // ═════ 3b. Unpaid online order: cancelled when the payment window is over ═════
+  const stockB = await stockOf(productId);
+  const vendorCancelledBefore = count(await notificationTypes(V.token, "vendor"), "order_cancelled");
+  const heldB = (await wallet(V.token, "vendor")).heldBalance;
+  r = await order([{ productId, qty: 2 }], { paymentMethod: "mobile_money" });
+  const lateOrder = r.body.data.order;
+  check("online order reserves the stock", (await stockOf(productId)) === stockB - 2, JSON.stringify([stockB, await stockOf(productId)]));
+  r = await call("POST", "/payments/initiate", { purpose: "order", refId: lateOrder._id, method: "mobile_money" }, C.token);
+  const latePaymentId = r.body.data?._id;
+  // Jump past the 30-minute window
+  await mongoose.connect(DATABASE_URL);
+  await mongoose.connection.collection("orders").updateOne({ _id: new mongoose.Types.ObjectId(lateOrder._id) }, { $set: { paymentDueAt: new Date(Date.now() - 1000) } });
+  await mongoose.disconnect();
+  r = await call("POST", "/payments/initiate", { purpose: "order", refId: lateOrder._id, method: "mobile_money" }, C.token);
+  check("window over: no new payment", r.status === 400 && /time to pay/i.test(r.body.message ?? ""), brief(r));
+  let expired;
+  for (let i = 0; i < 80 && !expired; i++) {
+    await sleep(1000);
+    const d = (await call("GET", `/orders/${lateOrder._id}`, null, C.token)).body.data;
+    if (d?.order?.status === "cancelled") expired = d;
+  }
+  check("window over: the sweep cancels it", expired?.subOrders?.[0]?.cancellation?.by === "system", JSON.stringify(expired?.subOrders?.[0]?.cancellation ?? "not cancelled after 80 s"));
+  check("…stock released", (await stockOf(productId)) === stockB, JSON.stringify([stockB, await stockOf(productId)]));
+  check("…no escrow movement for the store", (await wallet(V.token, "vendor")).heldBalance === heldB);
+  r = await call("GET", "/cart", null, C.token);
+  const cartLine = r.body.data?.groupedByVendor?.flatMap((g) => g.items).find((i) => i.productId === productId);
+  check("…items back in the customer's cart", cartLine?.qty === 2, JSON.stringify(cartLine ?? r.body.data));
+  check("…customer told", (await notificationTypes(C.token, "customer")).includes("order_cancelled"));
+  check("…store never told (it never saw it)", count(await notificationTypes(V.token, "vendor"), "order_cancelled") === vendorCancelledBefore);
+  r = await webhook({ paymentId: latePaymentId, status: "success", amount: lateOrder.total });
+  check("late payment still recorded", r.status === 200, brief(r));
+  r = await call("GET", "/payments/admin/refunds?limit=100", null, admin);
+  const lateRefund = (r.body.data ?? []).find((x) => String(x.orderId?._id ?? x.orderId) === lateOrder._id);
+  check("late payment → refund request for the admin", lateRefund?.status === "pending" && lateRefund?.amount === lateOrder.total, JSON.stringify(lateRefund ?? brief(r)));
+  r = await call("GET", `/orders/${lateOrder._id}`, null, C.token);
+  check("late payment does not revive the order", r.body.data?.order?.status === "cancelled" && r.body.data?.subOrders?.[0]?.status === "cancelled");
+  await call("DELETE", "/cart", null, C.token);
+
+  // ═════ 3c. Cash on delivery above the rider cash limit ═════
+  const settingsNow = (await call("GET", "/settings", null, admin)).body.data;
+  const summaryInput = { items: [{ productId, qty: 1 }], addressId, deliveryType: "local", paymentMethod: "cod" };
+  r = await call("POST", "/orders/checkout-summary", summaryInput, C.token);
+  check("checkout summary says COD is fine under the limit", r.body.data?.cod?.allowed === true && r.body.data?.cod?.limit === settingsNow.riderCashLimitDefault, JSON.stringify(r.body.data?.cod ?? brief(r)));
+  await call("PATCH", "/settings", { riderCashLimitDefault: 50000 }, admin);
+  r = await call("POST", "/orders/checkout-summary", summaryInput, C.token);
+  check("above the limit: summary says COD not allowed", r.status === 200 && r.body.data?.cod?.allowed === false && r.body.data?.cod?.limit === 50000, JSON.stringify(r.body.data?.cod ?? brief(r)));
+  const stockC = await stockOf(productId);
+  r = await order([{ productId, qty: 1 }]);
+  check("above the limit: COD order refused", r.status === 400 && /cash on delivery is not available/i.test(r.body.message ?? ""), brief(r));
+  check("…nothing reserved", (await stockOf(productId)) === stockC);
+  r = await order([{ productId, qty: 1 }], { paymentMethod: "card" });
+  check("above the limit: online payment still works", ok(r), brief(r));
+  if (ok(r)) await call("POST", `/orders/${r.body.data.order._id}/cancel`, { reason: "Cleanup run" }, C.token);
+  check("customer can cancel an unpaid online order (stock back)", (await stockOf(productId)) === stockC);
+  r = await call("PATCH", "/settings", { riderCashLimitDefault: settingsNow.riderCashLimitDefault }, admin);
+  check("cash limit restored", r.status === 200, brief(r));
 
   // ═════ 4. Cancellations: stock and escrow restored exactly once ═════
   let stock = await stockOf(productId);

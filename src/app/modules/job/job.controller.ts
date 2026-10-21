@@ -208,7 +208,56 @@ const unlockCandidateCv = catchAsync(async (req: Request, res: Response) => {
   });
 });
 
+const getMyJobs = catchAsync(async (req: Request, res: Response) => {
+  const result = await JobServices.getMyJobs(req.user._id, {
+    tab: enumQuery(req.query.tab, ["active", "draft", "closed"] as const, "tab"),
+    page: Number(req.query.page),
+    limit: Number(req.query.limit),
+  });
+  sendResponse(res, {
+    statusCode: httpStatus.OK,
+    success: true,
+    message: "My jobs retrieved successfully!",
+    meta: result.meta,
+    data: result.data,
+  });
+});
+
+const getApplication = catchAsync(async (req: Request, res: Response) => {
+  const result = await JobServices.getApplication(req.user._id, req.params.applicationId as string);
+  sendResponse(res, {
+    statusCode: httpStatus.OK,
+    success: true,
+    message: "Application retrieved successfully!",
+    data: result,
+  });
+});
+
+const withdrawApplication = catchAsync(async (req: Request, res: Response) => {
+  const result = await JobServices.withdrawApplication(req.user._id, req.params.applicationId as string);
+  sendResponse(res, {
+    statusCode: httpStatus.OK,
+    success: true,
+    message: "Application withdrawn",
+    data: result,
+  });
+});
+
+const confirmInterview = catchAsync(async (req: Request, res: Response) => {
+  const result = await JobServices.confirmInterview(req.user._id, req.params.applicationId as string);
+  sendResponse(res, {
+    statusCode: httpStatus.OK,
+    success: true,
+    message: "Interview confirmed",
+    data: result,
+  });
+});
+
 export const JobControllers = {
+  getMyJobs,
+  getApplication,
+  withdrawApplication,
+  confirmInterview,
   createJob,
   updateJob,
   publishJob,

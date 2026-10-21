@@ -35,12 +35,14 @@ const getVendorSubOrders = async (
   const limit = Math.max(1, Math.min(50, Number(query.limit) || 10));
   const skip = (page - 1) * limit;
 
-  const filter: Record<string, unknown> = { vendorId: vendor._id };
+  // Unpaid online orders are not the store's yet
+  const filter: Record<string, unknown> = { vendorId: vendor._id, status: { $ne: SubOrderStatus.pending_payment } };
   // One status or several, comma-separated (the app's tabs: "accepted,preparing,…")
   if (query.status) {
     const statuses = String(query.status)
       .split(",")
-      .filter((s): s is SubOrderStatus => Object.values(SubOrderStatus).includes(s as SubOrderStatus));
+      .filter((s): s is SubOrderStatus => Object.values(SubOrderStatus).includes(s as SubOrderStatus))
+      .filter((s) => s !== SubOrderStatus.pending_payment);
     if (!statuses.length) throw new AppError(httpStatus.BAD_REQUEST, "Invalid sub-order status");
     filter.status = { $in: statuses };
   }
@@ -101,6 +103,8 @@ const getVendorSubOrderDetail = async (
   const subOrder = await SubOrder.findOne({
     _id: subOrderId,
     vendorId: vendor._id,
+    // Unpaid online orders are not the store's yet
+    status: { $ne: SubOrderStatus.pending_payment },
   })
     .populate("customerId", "name phone avatar")
     // Rider phone stays hidden (client rule); vehicle + rating identify them at pickup
@@ -169,6 +173,8 @@ const updateSubOrderStatus = async (
   const subOrder = await SubOrder.findOne({
     _id: subOrderId,
     vendorId: vendor._id,
+    // Unpaid online orders are not the store's yet
+    status: { $ne: SubOrderStatus.pending_payment },
   });
 
   if (!subOrder) {
@@ -177,6 +183,7 @@ const updateSubOrderStatus = async (
 
   // Allowed transitions (Vendor cannot mark in_delivery or delivered; only rider PIN verification does)
   const validTransitions: Record<SubOrderStatus, SubOrderStatus[]> = {
+    [SubOrderStatus.pending_payment]: [],
     [SubOrderStatus.new]: [SubOrderStatus.accepted, SubOrderStatus.cancelled],
     [SubOrderStatus.accepted]: [
       SubOrderStatus.preparing,
@@ -268,6 +275,8 @@ const modifySubOrderItems = async (
   const subOrder = await SubOrder.findOne({
     _id: subOrderId,
     vendorId: vendor._id,
+    // Unpaid online orders are not the store's yet
+    status: { $ne: SubOrderStatus.pending_payment },
   });
 
   if (!subOrder) {
@@ -478,6 +487,8 @@ const cancelVendorSubOrder = async (
   const subOrder = await SubOrder.findOne({
     _id: subOrderId,
     vendorId: vendor._id,
+    // Unpaid online orders are not the store's yet
+    status: { $ne: SubOrderStatus.pending_payment },
   });
 
   if (!subOrder) {

@@ -16,7 +16,7 @@ import { NotificationType } from "./notification.interface";
 
 type Id = Types.ObjectId | string;
 type SubOrderRef = Pick<ISubOrder, "_id" | "orderId" | "subOrderNumber" | "customerId" | "vendorId">;
-export type CancelledBy = "customer" | "vendor" | "admin";
+export type CancelledBy = "customer" | "vendor" | "admin" | "system";
 
 const gnf = (amount: number) => `${amount.toLocaleString("fr-FR")} GNF`;
 
@@ -159,12 +159,15 @@ const orderCancelled = (
   by: CancelledBy,
   reason: string,
   riderIds: Id[] = [],
+  /** false when the store never saw the order (cancelled before it was paid) */
+  notifyVendor = true,
 ) =>
   safely(async () => {
     const byText = {
       customer: { fr: "par le client", en: "by the customer" },
       vendor: { fr: "par la boutique", en: "by the store" },
       admin: { fr: "par Kadou24h", en: "by Kadou24h" },
+      system: { fr: "automatiquement", en: "automatically" },
     }[by];
     const notice = (userId: Id, mode: AppMode) =>
       send({
@@ -180,7 +183,7 @@ const orderCancelled = (
       });
 
     if (by !== "customer") notice(subOrder.customerId, AppMode.customer);
-    if (by !== "vendor") {
+    if (by !== "vendor" && notifyVendor) {
       const userId = await vendorUserId(subOrder.vendorId);
       if (userId) notice(userId, AppMode.vendor);
     }
@@ -188,6 +191,20 @@ const orderCancelled = (
       const userId = await riderUserId(riderId);
       if (userId) notice(userId, AppMode.rider);
     }
+  });
+
+/** Online order not paid in time → customer (one notice per order, the store never saw it). */
+const orderPaymentExpired = (order: { _id: Id; orderNumber: string; customerId: Id }, minutes: number) =>
+  send({
+    userId: order.customerId,
+    mode: AppMode.customer,
+    type: NotificationType.order_cancelled,
+    title: { fr: "Commande annulée", en: "Order cancelled" },
+    body: {
+      fr: `Le paiement de la commande ${order.orderNumber} n'a pas été reçu en ${minutes} minutes. Elle a été annulée et les articles sont de retour dans votre panier.`,
+      en: `Payment for order ${order.orderNumber} was not received within ${minutes} minutes. It was cancelled and the items are back in your cart.`,
+    },
+    data: { orderId: String(order._id), cancelledBy: "system" },
   });
 
 /** Final leg handed over → customer (+ review request) and vendor. */
@@ -418,6 +435,7 @@ export const Notify = {
   refundRequested,
   refundProcessed,
   orderCancelled,
+  orderPaymentExpired,
   orderDelivered,
   deliveryAssigned,
   deliveryDeclined,

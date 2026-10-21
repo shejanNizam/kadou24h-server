@@ -35,6 +35,28 @@ router.delete("/", CartControllers.clearCart);
 
 /**
  * @swagger
+ * /cart/suggestions:
+ *   get:
+ *     tags: [Cart]
+ *     summary: Customers also bought
+ *     description: Approved, in-stock products bought in the same orders as the cart's products (most often first), topped up with best sellers of the same categories. Excludes the cart's products. Empty when the cart is empty.
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *           default: 10
+ *           maximum: 20
+ *     responses:
+ *       200:
+ *         description: Product list (same shape as GET /products items)
+ */
+router.get("/suggestions", CartControllers.getSuggestions);
+
+/**
+ * @swagger
  * /cart/items:
  *   post:
  *     tags: [Cart]

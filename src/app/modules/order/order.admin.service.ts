@@ -87,6 +87,7 @@ const adminCancelSubOrder = async (
   return cancelSubOrder({
     filter: { _id: subOrder._id },
     allowedFrom: [
+      SubOrderStatus.pending_payment,
       SubOrderStatus.new,
       SubOrderStatus.accepted,
       SubOrderStatus.preparing,

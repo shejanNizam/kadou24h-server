@@ -1088,6 +1088,30 @@ Errors: 409 already connected / already invited · 403 the inviter tried to answ
 | `POST /deliveries/:id/assign` | Vendor / Admin | assign delivery leg to partner: `{ riderId }`; sends real-time push/socket alert |
 | `GET /deliveries/:id/track` | Customer, store owner, riders of the leg chain, admin | live delivery tracking. The customer and the store may follow every leg of their order. **PIN visibility**: `pickupPin` only to the giver (the vendor on the leg that starts at the store, or the rider arriving at a station), `handoverPin` only to the receiver (the customer on the final leg, or the next rider at a station). Middle station→station legs show no PIN to the customer or the store. The assigned rider never sees its own leg's PINs. On the rider's own leg at bus stations: `incomingHandoverPin` (show it to the rider arriving with the parcel) and `outgoingPickupPin` (show it to the rider taking the parcel next). |
 
+### 7.20i Cash-on-delivery limit and pay-first online orders (2026-10-21)
+
+- **COD limit:** `POST /orders/checkout-summary` returns `cod: { allowed, limit }`. Each store's cash part (`total` of the store; the first store also carries the platform fee + tax — the same amount as `codAmountToCollect`) must be ≤ `settings.riderCashLimitDefault`, the cash any rider may carry. `POST /orders` with `paymentMethod: cod` above it → 400. Online methods are unaffected.
+- **Online orders (orange_money, mobile_money, card):** sub-orders are created `pending_payment` and the order gets `paymentDueAt` = placed + 30 min (`PAYMENT_WINDOW_MINUTES`). The stock is reserved; the store sees nothing (vendor list / detail / status / modify / cancel exclude it, `?status=pending_payment` → 400), no escrow is held, no delivery legs exist, `POST /conversations` about it → 400, and it is not counted in GMV.
+- **Payment confirmed** (webhook or dev confirm): each sub-order → `new` (timeline `payment_received`), escrow held, delivery legs created, `order_placed` sent to the store. Repeat webhooks change nothing.
+- **Not paid in time:** a sweep started with the server (every minute; safe with several instances — every change is an atomic claim) cancels the sub-orders (`cancellation.by = "system"`), releases the stock, puts the items back in the customer's cart and sends one `order_cancelled` notice to the customer (the store is never told). `POST /payments/initiate` after `paymentDueAt` → 400.
+- **Paid after cancellation** (expired or cancelled by the customer): the payment is recorded and a pending refund request (source `cancellation`) is opened for the admin; the order stays cancelled.
+- Older orders without `paymentDueAt` are left as they are.
+
+### 7.20h Customers also bought (Phase 11)
+
+- `GET /cart/suggestions?limit=10` (signed in, max 20): products found in the same sub-orders as the cart's products (accepted → delivered only; the latest 500 such sub-orders), ranked by how many orders they share, then topped up with the best sellers (`soldCount`) of the cart's categories. Only approved, available, in-stock products; never what is already in the cart; empty cart → `[]`. Same item shape as `GET /products` (store without phone). Counts only — nothing about other buyers.
+- Demo seed: two home banners, a home `popup` and a category `interstitial`.
+
+### 7.20g Jobs, CV and plans (Phase 10)
+
+- **Recruiter home:** `GET /jobs/my?tab=active|draft|closed` — my offers in any state (active = published and not past 30 days; draft = draft or unpaid; closed = closed or expired), each with `isOpen`; `meta.counts = { active, draft, closed, applicants, views }`.
+- **Job details** (`GET /jobs/:id`, sign-in optional): drafts and unpaid offers only for their poster (404 for others). Adds `isOwner`, `isOpen` and, for a signed-in viewer, `myApplication { _id, status, createdAt }`.
+- **Applications:** applying twice → 409. `GET /jobs/applications/:id` → the candidate's own (job populated) or, for the recruiter, behind the CV paywall; `viewerRole` says which. `PATCH /jobs/applications/:id/withdraw` (candidate; while applied / under review / shortlisted / interview) and `POST /jobs/applications/:id/interview/confirm` (candidate) notify the recruiter in the mode the job was posted from.
+- **Recruiter decisions:** `PATCH /jobs/applications/:id/status` accepts only under_review, shortlisted, hired, rejected, and not on a withdrawn application; `interview` goes through `POST …/interview` (a new date for the same candidate is a reschedule, not one more interview in the stats).
+- **Fees** (publish, CV unlock, spontaneous application, subscription) are online only: `cod` → 400. `unlock-cv` validates `paymentMethod`.
+- **CV:** `generate-ai-cv` suggests a summary from the profile in `lang` (fr / en) and saves nothing; the app makes the CV PDF, uploads it and saves it as `generatedCv` (`generatedAt` set). `null` removes `photo`, `uploadedResume` or `generatedCv`.
+- **Subscriptions:** the period starts when the payment succeeds; a renewal while still subscribed starts at the current end. A payment retried from the payment screen (no subscription record yet) creates and activates one.
+
 ### 7.20f Bus driver / station relay (Phase 9)
 
 - **Choosing a driver:** `GET /deliveries/:id/available-riders` on a bus leg (`line_haul`) returns only bus drivers, each with `servesRoute` (true = their `transitRoutes` include this station → station pair); those come first. On a leg leaving the store, the store's linked riders come first; on a leg leaving a station, riders are sorted by distance only. Then the nearest.
@@ -1173,7 +1197,7 @@ Money paid online (Orange Money / MoMo / card) goes back only after an admin app
 | `GET /professional-profiles/me` | Signed-in | view own professional profile (CV, education, experience, worker listing status). |
 | `PUT /professional-profiles/me` | Signed-in | create or update professional profile (`profession, summary, photo, city, location, skills, languages, achievements, profileEducation, profileExperience, hourlyRate, experienceYears, serviceCategoryId`). |
 | `PATCH /professional-profiles/me/worker-listing` | Signed-in | toggle listing in "Popular Workers" directory (`{ isWorkerListed: boolean, hourlyRate?, experienceYears?, serviceCategoryId? }`). |
-| `POST /professional-profiles/me/generate-ai-cv` | Signed-in | generate AI-crafted CV summary and formatted markdown resume (`{ targetRole?, tone? }`). |
+| `POST /professional-profiles/me/generate-ai-cv` | Signed-in | suggests a CV summary from the profile, template-based (`{ targetRole?, tone?, lang?: "fr" or "en" }` → `{ summary }`). Saves nothing; the app builds the CV PDF, uploads it and saves it as `generatedCv` with `PUT /me` (`null` removes `photo` / `uploadedResume` / `generatedCv`). |
 
 ### 7.24 Jobs & Job Applications
 

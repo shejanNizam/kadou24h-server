@@ -7,6 +7,7 @@ import { seedAdmin } from "./app/utils/seedAdmin";
 import { seedSuperAdmin } from "./app/utils/seedSuperAdmin";
 import { logger } from "./app/utils/logger";
 import { initSocket } from "./socket/socket";
+import { OrderPaymentServices } from "./app/modules/order/order.payment.service";
 
 let server: Server;
 
@@ -25,6 +26,8 @@ async function main() {
     server = httpServer.listen(configs.port, () => {
       logger.info(`Server running on port ${configs.port} [${configs.node_env}]`);
     });
+    // Online orders not paid in time are cancelled and their stock released
+    OrderPaymentServices.startPaymentExpirySweep();
   } catch (error) {
     logger.error("Startup failed", { error });
     process.exit(1);

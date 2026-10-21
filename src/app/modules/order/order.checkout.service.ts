@@ -25,6 +25,7 @@ import {
   IAddressSnapshotInput,
   ICheckoutItemInput,
   ICheckoutSummaryInput,
+  ISubOrder,
   ISubOrderItem,
   OrderStatus,
   PaymentMethod,
@@ -99,6 +100,9 @@ const resolveAddress = async (
 };
 
 // Moto legs to/from the bus stations (the delivery legs use the same amounts)
+/** Online orders must be paid within this window, or they are cancelled (stock released). */
+export const PAYMENT_WINDOW_MINUTES = 30;
+
 const FIRST_MILE_FEE = 10000;
 const LAST_MILE_FEE = 10000;
 
@@ -379,11 +383,25 @@ const calculateCheckout = async (
   const taxAmount = Math.round(overallSubtotal * (taxRate / 100));
   const total = overallSubtotal + overallDeliveryFee + taxAmount + platformFee;
 
+  // Cash on delivery: each store's rider collects its part (the first also takes the service
+  // fee and tax). A rider may carry at most riderCashLimitDefault, so above it no rider could
+  // accept the delivery — those orders must be paid online.
+  const codLimit = settings.riderCashLimitDefault || 1_000_000;
+  const codLargestStoreAmount = Math.max(
+    0,
+    ...vendorSplits.map((split, i) => split.total + (i === 0 ? platformFee + taxAmount : 0)),
+  );
+
   return {
     addressSnapshot,
     deliveryType: payload.deliveryType,
     destinationStationId: payload.destinationStationId,
     paymentMethod: payload.paymentMethod,
+    cod: {
+      allowed: codLargestStoreAmount <= codLimit,
+      /** GNF — the most cash one rider may collect for one store's part */
+      limit: codLimit,
+    },
     pricing: {
       subtotal: overallSubtotal,
       deliveryFee: overallDeliveryFee,
@@ -404,6 +422,12 @@ const placeOrder = async (
   payload: ICheckoutSummaryInput,
 ) => {
   const calculation = await calculateCheckout(customerId, payload);
+  if (calculation.paymentMethod === PaymentMethod.cod && !calculation.cod.allowed) {
+    throw new AppError(
+      httpStatus.BAD_REQUEST,
+      `Cash on delivery is not available above ${calculation.cod.limit.toLocaleString("fr-FR")} GNF per store. Please pay online.`,
+    );
+  }
 
   // Everything done so far, so a failure at any step can be undone.
   // (Works on a standalone MongoDB; with a replica set this could become one transaction.)
@@ -440,8 +464,11 @@ const placeOrder = async (
 
   try {
     const result = await createOrderRecords(customerId, payload, calculation, done);
-    // Only once everything succeeded — a rolled-back checkout notifies nobody
-    for (const subOrder of result.subOrders) Notify.orderPlaced(subOrder);
+    // Only once everything succeeded — a rolled-back checkout notifies nobody.
+    // Online orders reach the store once paid (OrderPaymentServices.confirmOrderPaid)
+    for (const subOrder of result.subOrders) {
+      if (subOrder.status === SubOrderStatus.new) Notify.orderPlaced(subOrder);
+    }
     return result;
   } catch (error) {
     try {
@@ -493,6 +520,9 @@ const createOrderRecords = async (
 
   // Generate order number
   const orderNumber = await CounterServices.nextCode("order");
+  // Online: the store sees nothing until the payment is confirmed; the stock above stays reserved
+  const payOnline = calculation.paymentMethod !== PaymentMethod.cod;
+  const placedAt = new Date();
 
   // Create parent order
   const order = await Order.create({
@@ -513,7 +543,8 @@ const createOrderRecords = async (
     discount: calculation.pricing.discount,
     total: calculation.pricing.total,
     status: OrderStatus.active,
-    placedAt: new Date(),
+    placedAt,
+    ...(payOnline && { paymentDueAt: new Date(placedAt.getTime() + PAYMENT_WINDOW_MINUTES * 60_000) }),
   });
   done.orderId = order._id as Types.ObjectId;
 
@@ -544,9 +575,9 @@ const createOrderRecords = async (
       timeline: [
         {
           status: "order_placed",
-          note: "Order placed by customer",
+          note: payOnline ? "Order placed by customer — waiting for the online payment" : "Order placed by customer",
           byUserId: new Types.ObjectId(customerId),
-          at: new Date(),
+          at: placedAt,
         },
       ],
       modifications: [],
@@ -557,7 +588,7 @@ const createOrderRecords = async (
       commissionRate: split.commissionRate,
       commissionAmount: split.commissionAmount,
       vendorEarning: split.vendorEarning,
-      status: SubOrderStatus.new,
+      status: payOnline ? SubOrderStatus.pending_payment : SubOrderStatus.new,
       settlement: SettlementStatus.held,
       codAmountToCollect,
     });
@@ -565,22 +596,13 @@ const createOrderRecords = async (
     createdSubOrders.push(subOrder);
     done.subOrderIds.push(subOrder._id as Types.ObjectId);
 
+    // Online orders: escrow and delivery legs follow the payment (confirmOrderPaid)
+    if (payOnline) continue;
+
     // Hold vendor earning in escrow — a failure here aborts the whole checkout
-    const vendor = await VendorProfile.findById(split.vendorId);
-    if (!vendor) {
-      throw new AppError(httpStatus.BAD_REQUEST, `Store ${split.storeName} is no longer available`);
-    }
-    const vendorWallet = await WalletServices.ensureWallet(vendor.userId, WalletMode.vendor);
-    await WalletServices.recordTransaction({
-      walletId: vendorWallet._id,
-      type: TransactionType.earning_held,
-      amount: split.vendorEarning,
-      subOrderId: subOrder._id,
-      note: `Escrow held for sub-order ${subOrderNumber}`,
-      createdBy: customerId,
-    });
+    const walletId = await holdEscrow(subOrder, customerId);
     done.escrowHeld.push({
-      walletId: vendorWallet._id as Types.ObjectId,
+      walletId,
       amount: split.vendorEarning,
       subOrderId: subOrder._id as Types.ObjectId,
     });
@@ -603,7 +625,29 @@ const createOrderRecords = async (
   };
 };
 
+/** Holds the store's earning in escrow: at checkout for COD, once paid for online orders. */
+const holdEscrow = async (
+  subOrder: Pick<ISubOrder, "_id" | "vendorId" | "vendorEarning" | "subOrderNumber">,
+  actorId: string,
+) => {
+  const vendor = await VendorProfile.findById(subOrder.vendorId);
+  if (!vendor) {
+    throw new AppError(httpStatus.BAD_REQUEST, `The store of ${subOrder.subOrderNumber} is no longer available`);
+  }
+  const vendorWallet = await WalletServices.ensureWallet(vendor.userId, WalletMode.vendor);
+  await WalletServices.recordTransaction({
+    walletId: vendorWallet._id,
+    type: TransactionType.earning_held,
+    amount: subOrder.vendorEarning,
+    subOrderId: subOrder._id,
+    note: `Escrow held for sub-order ${subOrder.subOrderNumber}`,
+    createdBy: actorId,
+  });
+  return vendorWallet._id as Types.ObjectId;
+};
+
 export {
+  holdEscrow,
   resolveAddress,
   calculateCheckout,
   placeOrder,

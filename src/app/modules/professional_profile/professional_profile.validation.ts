@@ -24,7 +24,7 @@ const experienceZod = z.object({
 export const upsertProfileSchema = z.object({
   profession: z.string().trim().min(2).max(100).optional(),
   summary: z.string().trim().max(2000).optional(),
-  photo: fileRefZod.optional(),
+  photo: fileRefZod.nullable().optional(),
   city: z.string().trim().optional(),
   location: z
     .object({
@@ -32,7 +32,10 @@ export const upsertProfileSchema = z.object({
       lng: z.number().min(-180).max(180),
     })
     .optional(),
-  uploadedResume: fileRefZod.optional(),
+  // null removes the file
+  uploadedResume: fileRefZod.nullable().optional(),
+  // The CV PDF the app made from this profile (uploaded first)
+  generatedCv: fileRefZod.nullable().optional(),
   skills: z.array(z.string().trim().min(1)).optional(),
   languages: z.array(z.string().trim().min(1)).optional(),
   achievements: z.array(z.string().trim().min(1)).optional(),
@@ -59,4 +62,5 @@ export const toggleWorkerListingSchema = z.object({
 export const generateAiCvSchema = z.object({
   targetRole: z.string().trim().optional(),
   tone: z.enum(["professional", "technical", "executive", "creative"]).optional(),
+  lang: z.enum(["fr", "en"]).optional(),
 });

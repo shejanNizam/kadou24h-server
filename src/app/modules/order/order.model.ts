@@ -111,6 +111,9 @@ const orderSchema = new Schema<IOrder>(
       default: Date.now,
       required: true,
     },
+    paymentDueAt: {
+      type: Date,
+    },
   },
   {
     timestamps: true,
@@ -120,5 +123,7 @@ const orderSchema = new Schema<IOrder>(
 
 orderSchema.index({ customerId: 1, createdAt: -1 });
 orderSchema.index({ status: 1, createdAt: -1 });
+// The unpaid-order sweep (order.payment.service.ts)
+orderSchema.index({ paymentDueAt: 1 }, { partialFilterExpression: { paymentStatus: "unpaid" } });
 
 export const Order = model<IOrder>("orders", orderSchema);

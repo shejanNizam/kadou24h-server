@@ -5,7 +5,6 @@ import {
   SalaryFrequency,
   WorkplaceType,
 } from "./job.interface";
-import { PaymentMethod } from "../payment/payment.interface";
 
 const fileRefZod = z.object({
   url: z.string().url(),
@@ -57,7 +56,7 @@ export const updateJobSchema = createJobSchema
   .partial();
 
 export const publishJobSchema = z.object({
-  paymentMethod: z.enum(Object.values(PaymentMethod) as [string, ...string[]]),
+  paymentMethod: z.enum(["orange_money", "mobile_money", "card"], { error: "Choose Orange Money, Mobile Money or card" }),
 });
 
 export const applyJobSchema = z.object({
@@ -72,7 +71,7 @@ export const applySpontaneousSchema = z.object({
     .regex(/^[0-9a-fA-F]{24}$/, "Valid targetVendorId required"),
   resume: fileRefZod.optional(),
   coverNote: z.string().trim().max(1000).optional(),
-  paymentMethod: z.enum(Object.values(PaymentMethod) as [string, ...string[]]),
+  paymentMethod: z.enum(["orange_money", "mobile_money", "card"], { error: "Choose Orange Money, Mobile Money or card" }),
 });
 
 export const updateApplicationStatusSchema = z.object({
@@ -85,3 +84,8 @@ export const scheduleInterviewSchema = z.object({
   mapUrl: z.string().url().optional(),
   note: z.string().trim().optional(),
 });
+
+// Fees (CV unlock, job publish, spontaneous application) are paid online only
+const onlineMethod = z.enum(["orange_money", "mobile_money", "card"], { error: "Choose Orange Money, Mobile Money or card" });
+
+export const unlockCvSchema = z.object({ paymentMethod: onlineMethod });

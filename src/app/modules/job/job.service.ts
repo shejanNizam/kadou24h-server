@@ -225,6 +225,9 @@ const searchJobs = async (query: {
 
 /**
  * Public view of a single job. Increments views count.
+ * Drafts and unpaid jobs are only visible to their poster; closed / expired
+ * jobs stay readable (candidates open them from their applications).
+ * A signed-in viewer also gets `myApplication` (to show "Applied" instead of Apply).
  */
 const getJobDetails = async (jobId: string, viewerId?: string) => {
   const job = await Job.findOne({ _id: jobId, isDeleted: false })
@@ -233,13 +236,74 @@ const getJobDetails = async (jobId: string, viewerId?: string) => {
 
   if (!job) throw new AppError(httpStatus.NOT_FOUND, "Job not found");
 
+  const isOwner = Boolean(viewerId && String(job.postedBy._id) === viewerId);
+  if (!isOwner && [JobStatus.draft, JobStatus.pending_payment].includes(job.status)) {
+    throw new AppError(httpStatus.NOT_FOUND, "Job not found");
+  }
+
   // Increment views if viewer is not the creator
-  if (viewerId && String(job.postedBy._id) !== viewerId) {
+  if (viewerId && !isOwner) {
     job.stats.views = (job.stats.views || 0) + 1;
     await job.save();
   }
 
-  return job;
+  const mine = viewerId && !isOwner
+    ? await JobApplication.findOne({ jobId: job._id, applicantId: viewerId }).select("status createdAt")
+    : null;
+
+  return {
+    ...job.toObject(),
+    isOwner,
+    isOpen: isOpenForApplications(job),
+    myApplication: mine ? { _id: mine._id, status: mine.status, createdAt: mine.get("createdAt") } : null,
+  };
+};
+
+const isOpenForApplications = (job: IJob) =>
+  job.status === JobStatus.published && Boolean(job.expiresAt && job.expiresAt > new Date());
+
+// Recruiter's "my jobs" tabs; a published job past its 30 days counts as closed
+const MY_JOB_TABS = {
+  active: () => ({ status: JobStatus.published, expiresAt: { $gt: new Date() } }),
+  draft: () => ({ status: { $in: [JobStatus.draft, JobStatus.pending_payment] } }),
+  closed: () => ({
+    $or: [
+      { status: { $in: [JobStatus.closed, JobStatus.expired] } },
+      { status: JobStatus.published, expiresAt: { $lte: new Date() } },
+    ],
+  }),
+} as const;
+export type MyJobsTab = keyof typeof MY_JOB_TABS;
+
+/** Recruiter: my posted jobs (any status) + the counts for the operations home. */
+const getMyJobs = async (userId: string, query: { tab?: MyJobsTab; page?: number; limit?: number }) => {
+  const page = Math.max(1, Number(query.page) || 1);
+  const limit = Math.max(1, Math.min(50, Number(query.limit) || 20));
+  const base = { postedBy: new Types.ObjectId(userId), isDeleted: false };
+  const filter = { ...base, ...(query.tab ? MY_JOB_TABS[query.tab]() : {}) };
+
+  const [jobs, total, active, draft, closed, totals] = await Promise.all([
+    Job.find(filter).populate("categoryId", "name slug").sort({ updatedAt: -1 }).skip((page - 1) * limit).limit(limit),
+    Job.countDocuments(filter),
+    Job.countDocuments({ ...base, ...MY_JOB_TABS.active() }),
+    Job.countDocuments({ ...base, ...MY_JOB_TABS.draft() }),
+    Job.countDocuments({ ...base, ...MY_JOB_TABS.closed() }),
+    Job.aggregate<{ applicants: number; views: number }>([
+      { $match: base },
+      { $group: { _id: null, applicants: { $sum: "$stats.applicants" }, views: { $sum: "$stats.views" } } },
+    ]),
+  ]);
+
+  return {
+    meta: {
+      page,
+      limit,
+      total,
+      totalPage: Math.ceil(total / limit),
+      counts: { active, draft, closed, applicants: totals[0]?.applicants ?? 0, views: totals[0]?.views ?? 0 },
+    },
+    data: jobs.map((job) => ({ ...job.toObject(), isOpen: isOpenForApplications(job) })),
+  };
 };
 
 /**
@@ -266,6 +330,9 @@ const applyToJob = async (
 
   if (String(job.postedBy) === applicantId) {
     throw new AppError(httpStatus.BAD_REQUEST, "Cannot apply to your own job");
+  }
+  if (await JobApplication.exists({ jobId: job._id, applicantId })) {
+    throw new AppError(httpStatus.CONFLICT, "You already applied to this job");
   }
 
   const profile = await ProfessionalProfile.findOne({ userId: applicantId });
@@ -507,6 +574,13 @@ const getJobApplicants = async (
   };
 };
 
+const RECRUITER_STATUSES = [
+  ApplicationStatus.under_review,
+  ApplicationStatus.shortlisted,
+  ApplicationStatus.hired,
+  ApplicationStatus.rejected,
+];
+
 /**
  * Recruiter updates applicant status (shortlisted, rejected, hired).
  */
@@ -519,6 +593,14 @@ const updateApplicationStatus = async (
   if (!application) throw new AppError(httpStatus.NOT_FOUND, "Application not found");
 
   const job = await assertCanManageApplication(recruiterId, application);
+  // The recruiter decides; "interview" goes through scheduleInterview (date, place),
+  // "withdrawn" is the candidate's own choice
+  if (!RECRUITER_STATUSES.includes(status)) {
+    throw new AppError(httpStatus.BAD_REQUEST, "Use: under_review, shortlisted, hired or rejected (interview: schedule it)");
+  }
+  if (application.status === ApplicationStatus.withdrawn) {
+    throw new AppError(httpStatus.BAD_REQUEST, "The candidate withdrew this application");
+  }
   if (
     job &&
     status === ApplicationStatus.shortlisted &&
@@ -566,7 +648,11 @@ const scheduleInterview = async (
   if (!application) throw new AppError(httpStatus.NOT_FOUND, "Application not found");
 
   const job = await assertCanManageApplication(recruiterId, application);
-  if (job) {
+  if (application.status === ApplicationStatus.withdrawn) {
+    throw new AppError(httpStatus.BAD_REQUEST, "The candidate withdrew this application");
+  }
+  // A new date for the same candidate is a reschedule, not one more interview
+  if (job && application.status !== ApplicationStatus.interview) {
     job.stats.interviews = (job.stats.interviews || 0) + 1;
     await job.save();
   }
@@ -595,6 +681,89 @@ const scheduleInterview = async (
     { applicationId: String(application._id), interviewAt: when },
   );
 
+  return application;
+};
+
+/** Who receives a job application: the poster (in the mode they posted from) or the store. */
+const recruiterOf = async (application: IJobApplication) => {
+  if (application.jobId) {
+    const job = await Job.findById(application.jobId).select("postedBy postedByMode title");
+    return job ? { userId: job.postedBy, mode: (job.postedByMode as AppMode) || AppMode.customer, title: job.title } : null;
+  }
+  const vendor = await VendorProfile.findById(application.targetVendorId).select("userId");
+  return vendor ? { userId: vendor.userId, mode: AppMode.vendor, title: undefined } : null;
+};
+
+/**
+ * One application: the candidate sees their own (with the job and the
+ * interview); the recruiter sees it behind the CV paywall.
+ */
+const getApplication = async (userId: string, applicationId: string) => {
+  const application = await JobApplication.findById(applicationId)
+    .populate("jobId", "title organizationName organizationLogo city area salaryMin salaryMax salaryFrequency salaryCurrency status expiresAt postedBy")
+    .populate("targetVendorId", "storeName logo");
+  if (!application) throw new AppError(httpStatus.NOT_FOUND, "Application not found");
+
+  if (String(application.applicantId) === userId) {
+    return { ...application.toObject(), viewerRole: "candidate" as const };
+  }
+
+  // Recruiter: the check works on ids, so read the raw ids under the populated docs
+  const raw = await JobApplication.findById(applicationId);
+  await assertCanManageApplication(userId, raw!);
+  const [view] = await withPaywall(userId, [raw!]);
+  return { ...view, jobId: application.jobId, targetVendorId: application.targetVendorId, viewerRole: "recruiter" as const };
+};
+
+/** Candidate takes their application back (not once hired or rejected). */
+const withdrawApplication = async (applicantId: string, applicationId: string) => {
+  const application = await JobApplication.findOneAndUpdate(
+    {
+      _id: applicationId,
+      applicantId,
+      status: { $in: [ApplicationStatus.applied, ApplicationStatus.under_review, ApplicationStatus.shortlisted, ApplicationStatus.interview] },
+    },
+    { $set: { status: ApplicationStatus.withdrawn } },
+    { returnDocument: "after" },
+  );
+  if (!application) {
+    throw new AppError(httpStatus.BAD_REQUEST, "This application can no longer be withdrawn");
+  }
+
+  const recruiter = await recruiterOf(application);
+  if (recruiter) {
+    emitToUser(String(recruiter.userId), "job_application:status_changed", { applicationId: application._id, status: application.status });
+    Notify.applicationUpdate(
+      recruiter.userId,
+      recruiter.mode,
+      recruiter.title
+        ? { fr: `Un candidat a retiré sa candidature pour « ${recruiter.title} ».`, en: `A candidate withdrew their application for "${recruiter.title}".` }
+        : { fr: "Un candidat a retiré sa candidature spontanée.", en: "A candidate withdrew their spontaneous application." },
+      { applicationId: String(application._id), ...(application.jobId && { jobId: String(application.jobId) }), status: application.status },
+    );
+  }
+  return application;
+};
+
+/** Candidate confirms they will come to the interview. */
+const confirmInterview = async (applicantId: string, applicationId: string) => {
+  const application = await JobApplication.findOneAndUpdate(
+    { _id: applicationId, applicantId, status: ApplicationStatus.interview, "interview.at": { $exists: true } },
+    { $set: { "interview.confirmedAt": new Date() } },
+    { returnDocument: "after" },
+  );
+  if (!application) throw new AppError(httpStatus.BAD_REQUEST, "There is no interview to confirm");
+
+  const recruiter = await recruiterOf(application);
+  if (recruiter) {
+    emitToUser(String(recruiter.userId), "job_application:status_changed", { applicationId: application._id, status: application.status });
+    Notify.applicationUpdate(
+      recruiter.userId,
+      recruiter.mode,
+      { fr: "Un candidat a confirmé sa présence à l'entretien.", en: "A candidate confirmed the interview." },
+      { applicationId: String(application._id), ...(application.jobId && { jobId: String(application.jobId) }) },
+    );
+  }
   return application;
 };
 
@@ -691,4 +860,8 @@ export const JobServices = {
   getMyApplications,
   unlockCandidateCv,
   getReceivedApplications,
+  getMyJobs,
+  getApplication,
+  withdrawApplication,
+  confirmInterview,
 };

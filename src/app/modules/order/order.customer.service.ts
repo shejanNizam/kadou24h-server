@@ -207,7 +207,7 @@ const cancelOrder = async (
       if (so.status !== SubOrderStatus.cancelled) {
         await cancelSubOrder({
           filter: { _id: so._id, customerId: order.customerId },
-          allowedFrom: [SubOrderStatus.new, SubOrderStatus.accepted],
+          allowedFrom: [SubOrderStatus.pending_payment, SubOrderStatus.new, SubOrderStatus.accepted],
           by: "customer",
           reason,
           actorUserId: customerId,

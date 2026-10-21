@@ -29,6 +29,9 @@ export enum OrderStatus {
 }
 
 export enum SubOrderStatus {
+  // Online payment not confirmed yet: only the customer sees it (stock is reserved);
+  // it becomes "new" for the store once paid, or is cancelled after the payment window
+  pending_payment = "pending_payment",
   new = "new",
   accepted = "accepted",
   preparing = "preparing",
@@ -151,6 +154,8 @@ export interface IOrderInitial {
   couponCode?: string;
   status: OrderStatus;
   placedAt: Date;
+  /** Online orders: pay before this, or the order is cancelled and the stock released. */
+  paymentDueAt?: Date;
 }
 
 export type IOrder = IOrderInitial & Document;

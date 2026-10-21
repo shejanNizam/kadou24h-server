@@ -356,18 +356,29 @@ try {
   }
   console.log(`✓ ${JOBS.length} published jobs`);
 
-  // ── Home & search banners ──────────────────────────────────────────
+  // ── Subscription plans (demo prices; the admin sets the real ones) ──
+  const PLANS = [
+    { name: "CV en avant — 30 jours", audience: "job_seeker", price: 10000, durationDays: 30, features: ["cv_visibility"], highlights: ["Votre profil en tête de la liste des travailleurs", "Badge « Profil en avant »"] },
+    { name: "Pro — 90 jours", audience: "service_provider", price: 25000, durationDays: 90, features: ["cv_visibility"], highlights: ["Votre profil en tête pendant 3 mois", "Badge « Profil en avant »"] },
+  ];
+  for (const plan of PLANS) await call("POST", "/subscriptions/admin/plans", plan, admin);
+  console.log(`✓ ${PLANS.length} subscription plans`);
+
+  // ── Ads: banners (2 on home = carousel), a home popup, a category interstitial ──
   const now = Date.now();
   for (const ad of [
-    { name: "Promo électronique", placement: "home", image: "https://picsum.photos/seed/kadou-home/1200/500", advertiser: "TechHub Kaloum" },
-    { name: "Marché frais", placement: "search", image: "https://picsum.photos/seed/kadou-search/1200/500", advertiser: "Marché Madina Express" },
+    { name: "Promo électronique", type: "banner", placement: "home", image: "https://picsum.photos/seed/kadou-home/1200/500", advertiser: "TechHub Kaloum" },
+    { name: "Livraison offerte ce week-end", type: "banner", placement: "home", image: "https://picsum.photos/seed/kadou-home2/1200/500", advertiser: "Kadou24h" },
+    { name: "Marché frais", type: "banner", placement: "search", image: "https://picsum.photos/seed/kadou-search/1200/500", advertiser: "Marché Madina Express" },
+    { name: "Soldes de la rentrée — jusqu’à -30 %", type: "popup", placement: "home", image: "https://picsum.photos/seed/kadou-popup/800/1000", advertiser: "Mode Conakry" },
+    { name: "Nouveaux smartphones en stock", type: "interstitial", placement: "category", image: "https://picsum.photos/seed/kadou-inter/900/1600", advertiser: "TechHub Kaloum" },
   ]) {
     await call("POST", "/advertisements/admin", {
-      name: ad.name, advertiserName: ad.advertiser, type: "banner", placement: ad.placement, images: [ad.image],
+      name: ad.name, advertiserName: ad.advertiser, type: ad.type, placement: ad.placement, images: [ad.image],
       description: ad.name, startAt: new Date(now - 864e5).toISOString(), endAt: new Date(now + 90 * 864e5).toISOString(), status: "active",
     }, admin);
   }
-  console.log("✓ banners");
+  console.log("✓ ads (banners, popup, interstitial)");
 
   // ── Demo customer with a saved address ─────────────────────────────
   const customer = await signup("Aïssatou Bah", "+224620000001", "aissatou.demo@kadou24h.test");
@@ -385,6 +396,9 @@ try {
     if (paymentMethod !== "cod") {
       const payment = await call("POST", "/payments/initiate", { purpose: "order", refId: order._id, method: paymentMethod }, customer.token);
       await paid(payment._id);
+      // The store receives an online order once paid: re-read it (status new, delivery leg set)
+      const details = await call("GET", `/orders/${order._id}`, null, customer.token);
+      return { order, subOrder: details.subOrders[0] };
     }
     return { order, subOrder: subOrders[0] };
   };
