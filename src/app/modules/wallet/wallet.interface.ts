@@ -119,6 +119,7 @@ export interface ICodSettlementInitial {
   status: CodSettlementStatus;
   confirmedBy?: Types.ObjectId;
   confirmedAt?: Date;
+  rejectionReason?: string; // shown to the rider
 }
 
 export type ICodSettlement = ICodSettlementInitial & Document;

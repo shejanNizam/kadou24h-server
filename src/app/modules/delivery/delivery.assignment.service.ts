@@ -16,7 +16,7 @@ import { User } from "../user/user.model";
 import { VendorProfile } from "../vendor_profile/vendor_profile.model";
 import { LinkStatus } from "../vendor_rider_link/vendor_rider_link.interface";
 import { VendorRiderLink } from "../vendor_rider_link/vendor_rider_link.model";
-import { DeliveryStatus, IAvailableRider, LegType } from "./delivery.interface";
+import { DeliveryStatus, EndpointKind, IAvailableRider, LegType } from "./delivery.interface";
 import { Delivery } from "./delivery.model";
 import { WalletMode } from "../wallet/wallet.interface";
 import { WalletServices } from "../wallet/wallet.service";
@@ -59,6 +59,13 @@ const getAvailableRiders = async (
   }).populate("userId", "name avatar");
 
   const originCoords = delivery.fromLocation.coordinates;
+  // Bus leg: drivers who run this exact station → station route come first
+  const isBusLeg = delivery.legType === LegType.line_haul;
+  const runsThisRoute = (rider: (typeof onlineRiders)[number]) =>
+    isBusLeg &&
+    (rider.transitRoutes ?? []).some(
+      (r) => String(r.fromStationId) === String(delivery.fromRefId) && String(r.toStationId) === String(delivery.toRefId),
+    );
 
   const ridersList: IAvailableRider[] = onlineRiders.map((rider) => {
     const isLinked = linkedRiderIds.has(String(rider._id));
@@ -83,6 +90,7 @@ const getAvailableRiders = async (
       vehicleBrand: rider.vehicle?.brand,
       plateNumber: rider.vehicle?.plateNumber,
       isLinked,
+      ...(isBusLeg && { servesRoute: runsThisRoute(rider) }),
       ratingAvg: rider.stats?.ratingAvg || 0,
       totalDeliveries: rider.stats?.totalDeliveries || 0,
       activeDeliveryCount: rider.activeDeliveryCount || 0,
@@ -91,13 +99,18 @@ const getAvailableRiders = async (
     };
   });
 
-  // Sort: linked riders first, then by shortest distance
+  // Sort: bus leg → drivers of this route first; leg leaving the store → my
+  // linked riders first (they're in my town; a leg leaving a far station is
+  // not); then the nearest to the pickup point.
+  const fromStore = delivery.fromKind === EndpointKind.vendor;
+  const rank = (r: IAvailableRider) => (isBusLeg ? (r.servesRoute ? 0 : 1) : fromStore && r.isLinked ? 0 : 1);
   ridersList.sort((a, b) => {
-    if (a.isLinked && !b.isLinked) return -1;
-    if (!a.isLinked && b.isLinked) return 1;
+    if (rank(a) !== rank(b)) return rank(a) - rank(b);
     if (a.distanceKm !== undefined && b.distanceKm !== undefined) {
       return a.distanceKm - b.distanceKm;
     }
+    if (a.distanceKm !== undefined) return -1;
+    if (b.distanceKm !== undefined) return 1;
     return 0;
   });
 

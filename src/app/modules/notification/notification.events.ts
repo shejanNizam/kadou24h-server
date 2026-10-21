@@ -309,6 +309,34 @@ const earningsUpdated = (
     data: { amount, ...data },
   });
 
+/** Admin checked the COD cash a rider declared → the rider. */
+const codSettlementProcessed = (
+  riderUser: Id,
+  settlement: { _id: unknown; amount: number },
+  status: "confirmed" | "rejected",
+  reason?: string,
+) =>
+  send({
+    userId: riderUser,
+    mode: AppMode.rider,
+    type: NotificationType.earnings_updated,
+    title:
+      status === "confirmed"
+        ? { fr: "Versement confirmé", en: "Cash hand-over confirmed" }
+        : { fr: "Versement refusé", en: "Cash hand-over rejected" },
+    body:
+      status === "confirmed"
+        ? {
+            fr: `Kadou24h a bien reçu ${gnf(settlement.amount)}. Votre dette de cash a baissé.`,
+            en: `Kadou24h received ${gnf(settlement.amount)}. Your cash to hand over went down.`,
+          }
+        : {
+            fr: `Votre versement de ${gnf(settlement.amount)} a été refusé : ${reason ?? "—"}. Le montant reste à reverser.`,
+            en: `Your hand-over of ${gnf(settlement.amount)} was rejected: ${reason ?? "—"}. The amount is still owed.`,
+          },
+    data: { settlementId: String(settlement._id), status },
+  });
+
 const withdrawalProcessed = (
   withdrawal: { _id: unknown; ownerId: Id; ownerMode: string; requestNumber: string; amount: number },
   status: "completed" | "rejected",
@@ -396,6 +424,7 @@ export const Notify = {
   riderOnTheWay,
   earningsUpdated,
   withdrawalProcessed,
+  codSettlementProcessed,
   profileReviewed,
   applicationUpdate,
 };

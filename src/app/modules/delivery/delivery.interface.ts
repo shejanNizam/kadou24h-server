@@ -74,6 +74,7 @@ export interface IAvailableRider {
   vehicleBrand?: string;
   plateNumber?: string;
   isLinked: boolean;
+  servesRoute?: boolean; // bus leg: the driver runs this station → station route
   ratingAvg: number;
   totalDeliveries: number;
   activeDeliveryCount: number;

@@ -1088,6 +1088,20 @@ Errors: 409 already connected / already invited · 403 the inviter tried to answ
 | `POST /deliveries/:id/assign` | Vendor / Admin | assign delivery leg to partner: `{ riderId }`; sends real-time push/socket alert |
 | `GET /deliveries/:id/track` | Customer, store owner, riders of the leg chain, admin | live delivery tracking. The customer and the store may follow every leg of their order. **PIN visibility**: `pickupPin` only to the giver (the vendor on the leg that starts at the store, or the rider arriving at a station), `handoverPin` only to the receiver (the customer on the final leg, or the next rider at a station). Middle station→station legs show no PIN to the customer or the store. The assigned rider never sees its own leg's PINs. On the rider's own leg at bus stations: `incomingHandoverPin` (show it to the rider arriving with the parcel) and `outgoingPickupPin` (show it to the rider taking the parcel next). |
 
+### 7.20f Bus driver / station relay (Phase 9)
+
+- **Choosing a driver:** `GET /deliveries/:id/available-riders` on a bus leg (`line_haul`) returns only bus drivers, each with `servesRoute` (true = their `transitRoutes` include this station → station pair); those come first. On a leg leaving the store, the store's linked riders come first; on a leg leaving a station, riders are sorted by distance only. Then the nearest.
+- **Customer data:** a rider's list and track only include `orderId.addressSnapshot` and `toPhone` on the leg that ends with the customer: the door (local / last mile) or the bus leg of a `station_pickup` order. The first-mile rider and a relay bus driver hand over at a station and never get them. `orderId.deliveryType` is included.
+- **Codes at a station** (unchanged, see the relay rules): the receiver shows `incomingHandoverPin` and the giver types it (`verify-handover`); the giver shows `outgoingPickupPin` and the receiver types it (`verify-pickup`).
+
+### 7.20e Rider app (Phase 8)
+
+- **My jobs:** `GET /deliveries/rider/my-deliveries` takes `type`: `new` (assigned, waiting for my answer), `ongoing` (accepted → in transit), `completed` (delivered / cancelled), `active` (new + ongoing), plus `page` / `limit` (max 50). Running tabs are oldest first; history is newest first. Each row has the sub-order number, items and `codAmountToCollect`, and the order's number, payment method and address snapshot. PINs are never included.
+- **Step screen:** `GET /deliveries/:id/track` as the assigned rider also returns the items and `codAmountToCollect`.
+- **Wrong PINs:** 5 wrong codes lock the leg for 15 minutes (429, "Try again in N min."). When the lock has passed, the rider gets a fresh round of 5 attempts.
+- **COD cash:** `GET /wallets/me/cod-settlements` lists my declarations (newest first, paged; `rejectionReason` when rejected). The rider summary has `balances.cashDeclared` (declared, waiting for an admin; still counted in `cashOwed`).
+- **Admin:** `PATCH /wallets/admin/cod-settlements/:id` needs `rejectionReason` (3–300 chars) to reject. The rider gets a notification for both outcomes and a socket event (`cod_settlement:confirmed` / `cod_settlement:rejected`).
+
 ### 7.20d Refunds with admin approval
 
 Money paid online (Orange Money / MoMo / card) goes back only after an admin approves it.

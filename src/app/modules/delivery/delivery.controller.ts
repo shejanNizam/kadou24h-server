@@ -145,13 +145,14 @@ const toggleRiderOnline = catchAsync(async (req: Request, res: Response) => {
 const getMyDeliveries = catchAsync(async (req: Request, res: Response) => {
   const result = await DeliveryServices.getMyDeliveries(
     req.user._id,
-    req.query,
+    req.query as Record<string, string>,
   );
   sendResponse(res, {
     statusCode: httpStatus.OK,
     success: true,
     message: "Rider deliveries retrieved successfully",
-    data: result,
+    meta: result.meta,
+    data: result.data,
   });
 });
 

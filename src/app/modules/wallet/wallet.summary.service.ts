@@ -10,7 +10,8 @@ import { SubOrder } from "../order/sub_order.model";
 import { RiderProfile } from "../rider_profile/rider_profile.model";
 import { SettingsServices } from "../settings/settings.service";
 import { VendorProfile } from "../vendor_profile/vendor_profile.model";
-import { WalletMode } from "./wallet.interface";
+import { CodSettlement } from "./cod_settlement.model";
+import { CodSettlementStatus, WalletMode } from "./wallet.interface";
 import { WalletServices } from "./wallet.service";
 
 export const SUMMARY_RANGES = ["7d", "30d", "6m", "12m"] as const;
@@ -174,7 +175,7 @@ const getMySummary = async (ownerId: string, mode: WalletMode, range: SummaryRan
   const riderId = rider?._id ?? new Types.ObjectId();
   const settings = await SettingsServices.getSettings();
 
-  const [stats, newRequests, activeDeliveries] = await Promise.all([
+  const [stats, newRequests, activeDeliveries, declared] = await Promise.all([
     aggregateEarnings(
       Delivery,
       { riderId, status: DeliveryStatus.delivered },
@@ -183,6 +184,10 @@ const getMySummary = async (ownerId: string, mode: WalletMode, range: SummaryRan
     ),
     Delivery.countDocuments({ riderId, status: DeliveryStatus.assigned }),
     Delivery.countDocuments({ riderId, status: { $in: ACTIVE_DELIVERY } }),
+    CodSettlement.aggregate<{ total: number }>([
+      { $match: { riderId, status: CodSettlementStatus.pending } },
+      { $group: { _id: null, total: { $sum: "$amount" } } },
+    ]),
   ]);
 
   return {
@@ -192,6 +197,8 @@ const getMySummary = async (ownerId: string, mode: WalletMode, range: SummaryRan
     balances: {
       ...base,
       cashOwed: wallet.cashOwed,
+      // Declared hand-overs waiting for an admin (still inside cashOwed)
+      cashDeclared: declared[0]?.total ?? 0,
       // Same default as the COD check when a rider accepts a delivery
       cashLimit: rider?.cashLimit || settings.riderCashLimitDefault || 500000,
       // Cash owed to the platform is kept back from withdrawals

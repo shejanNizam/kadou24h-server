@@ -113,6 +113,21 @@ const getMyWithdrawals = catchAsync(async (req: Request, res: Response) => {
   });
 });
 
+const getMyCodSettlements = catchAsync(async (req: Request, res: Response) => {
+  const result = await WalletServices.getMyCodSettlements(req.user._id, {
+    page: Number(req.query.page),
+    limit: Number(req.query.limit),
+    status: enumQuery(req.query.status, CodSettlementStatus, "status"),
+  });
+  sendResponse(res, {
+    statusCode: httpStatus.OK,
+    success: true,
+    message: "COD settlements retrieved successfully!",
+    meta: result.meta,
+    data: result.data,
+  });
+});
+
 const getMyTransactions = catchAsync(async (req: Request, res: Response) => {
   const mode = modeFromQuery(req);
   const result = await WalletServices.getMyTransactions(req.user._id, mode, {
@@ -191,6 +206,7 @@ const confirmCodSettlement = catchAsync(async (req: Request, res: Response) => {
     req.user._id,
     req.params.id as string,
     req.body.status,
+    req.body.rejectionReason,
   );
   sendResponse(res, {
     statusCode: httpStatus.OK,
@@ -210,6 +226,7 @@ export const WalletControllers = {
   getMyWithdrawals,
   getMyTransactions,
   submitCodSettlement,
+  getMyCodSettlements,
   getAllWithdrawalsAdmin,
   processWithdrawal,
   getAllCodSettlementsAdmin,

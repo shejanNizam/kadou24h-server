@@ -194,14 +194,29 @@ router.get(
  *         application/json:
  *           schema:
  *             type: object
- *             required: [amount, paymentMethod]
+ *             required: [amount, method]
  *             properties:
- *               amount: { type: number, example: 250000 }
- *               paymentMethod: { type: string, enum: [orange_money, mobile_money, bank] }
- *               transactionReference: { type: string, example: "TXN123456" }
+ *               amount: { type: integer, example: 250000, description: "≤ cash owed − already declared (pending)" }
+ *               method: { type: string, enum: [orange_money, mobile_money, cash_at_office, earnings_offset] }
+ *               reference: { type: string, example: "OM-TXN123456" }
+ *               proofImage: { type: object, properties: { url: { type: string }, publicId: { type: string } } }
  *     responses:
  *       201:
- *         description: COD settlement submitted
+ *         description: COD settlement submitted (earnings_offset is confirmed at once; the others wait for an admin)
+ *   get:
+ *     tags: [Wallet]
+ *     summary: My COD cash hand-overs, newest first (Rider)
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: status
+ *         schema: { type: string, enum: [pending, confirmed, rejected] }
+ *       - $ref: '#/components/parameters/page'
+ *       - $ref: '#/components/parameters/limit'
+ *     responses:
+ *       200:
+ *         description: Paginated settlements
  */
 router.post(
   "/me/cod-settlements",
@@ -209,6 +224,7 @@ router.post(
   validateRequest(submitCodSettlementSchema),
   WalletControllers.submitCodSettlement,
 );
+router.get("/me/cod-settlements", checkAuth(...APP_ROLES), WalletControllers.getMyCodSettlements);
 
 // ── Admin Routes ──
 
@@ -279,6 +295,31 @@ router.get(
   WalletControllers.getAllCodSettlementsAdmin,
 );
 
+/**
+ * @swagger
+ * /wallets/admin/cod-settlements/{id}:
+ *   patch:
+ *     tags: [Wallet]
+ *     summary: Confirm (cash arrived) or reject a rider's COD hand-over (Admin)
+ *     description: The rider is notified either way; a rejection needs a reason the rider sees.
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - $ref: '#/components/parameters/id'
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [status]
+ *             properties:
+ *               status: { type: string, enum: [confirmed, rejected] }
+ *               rejectionReason: { type: string, description: "Required when rejected (3–300 chars)" }
+ *     responses:
+ *       200:
+ *         description: Settlement decided (`releasedSubOrders` lists the store payments released)
+ */
 router.patch(
   "/admin/cod-settlements/:id",
   checkAuth(...ADMIN_ROLES),

@@ -75,9 +75,18 @@ router.patch(
  *   get:
  *     tags: [Delivery]
  *     summary: Get rider assigned deliveries & trips (Rider)
+ *     description: >
+ *       Tabs with `type`: new (assigned, waiting for my answer), ongoing (accepted → in transit),
+ *       completed (delivered / cancelled), active (new + ongoing). Running tabs are oldest first.
+ *       Each row has `subOrderId.codAmountToCollect` (cash to collect when `collectsCash`).
  *     security:
  *       - bearerAuth: []
  *     parameters:
+ *       - in: query
+ *         name: type
+ *         schema:
+ *           type: string
+ *           enum: [new, ongoing, completed, active]
  *       - in: query
  *         name: status
  *         schema:

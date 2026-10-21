@@ -62,6 +62,12 @@ export const submitCodSettlementSchema = z.object({
     .optional(),
 });
 
-export const confirmCodSettlementSchema = z.object({
-  status: z.enum(["confirmed", "rejected"]),
-});
+export const confirmCodSettlementSchema = z
+  .object({
+    status: z.enum(["confirmed", "rejected"]),
+    rejectionReason: z.string().trim().max(300).optional(),
+  })
+  .refine((v) => v.status !== "rejected" || (v.rejectionReason?.length ?? 0) >= 3, {
+    message: "Tell the rider why the declaration is rejected",
+    path: ["rejectionReason"],
+  });

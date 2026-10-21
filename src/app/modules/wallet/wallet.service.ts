@@ -729,6 +729,7 @@ const confirmCodSettlement = async (
   adminUserId: string,
   settlementId: string,
   status: "confirmed" | "rejected",
+  rejectionReason?: string,
 ) => {
   // Claim the pending settlement atomically so it can never be confirmed twice
   const settlement = await CodSettlement.findOneAndUpdate(
@@ -739,6 +740,7 @@ const confirmCodSettlement = async (
           status === "confirmed" ? CodSettlementStatus.confirmed : CodSettlementStatus.rejected,
         confirmedBy: new Types.ObjectId(adminUserId),
         confirmedAt: new Date(),
+        ...(status === "rejected" && rejectionReason && { rejectionReason }),
       },
     },
     { returnDocument: "after" },
@@ -750,10 +752,18 @@ const confirmCodSettlement = async (
     throw new AppError(httpStatus.BAD_REQUEST, `Settlement is already ${existing.status}`);
   }
 
-  if (status !== "confirmed") return { ...settlement.toObject(), releasedSubOrders: [] };
-
   const rider = await RiderProfile.findById(settlement.riderId);
   if (!rider) throw new AppError(httpStatus.NOT_FOUND, "Rider profile not found");
+
+  if (status !== "confirmed") {
+    // The cash is still owed: the rider must declare it again (or explain)
+    Notify.codSettlementProcessed(rider.userId, settlement, "rejected", rejectionReason);
+    emitToUser(String(rider.userId), "cod_settlement:rejected", {
+      settlementId: settlement._id,
+      amount: settlement.amount,
+    });
+    return { ...settlement.toObject(), releasedSubOrders: [] };
+  }
 
   const wallet = await getMyWallet(String(rider.userId), WalletMode.rider);
   await recordTransaction({
@@ -767,6 +777,7 @@ const confirmCodSettlement = async (
 
   const allocation = await applyCodRemittance(rider._id, settlement.amount, adminUserId);
 
+  Notify.codSettlementProcessed(rider.userId, settlement, "confirmed");
   emitToUser(String(rider.userId), "cod_settlement:confirmed", {
     settlementId: settlement._id,
     amount: settlement.amount,
@@ -803,6 +814,35 @@ const getMyTransactions = async (
   return {
     meta: { page, limit, total, totalPage: Math.ceil(total / limit) },
     data: transactions,
+  };
+};
+
+/** Rider: my cash hand-overs (pending / confirmed / rejected), newest first, plus what I still owe. */
+const getMyCodSettlements = async (
+  riderUserId: string,
+  query: { page?: number; limit?: number; status?: CodSettlementStatus },
+) => {
+  const rider = await RiderProfile.findOne({ userId: riderUserId }).select("_id");
+  if (!rider) throw new AppError(httpStatus.FORBIDDEN, "Rider profile not found");
+
+  const page = Math.max(1, Number(query.page) || 1);
+  const limit = Math.max(1, Math.min(50, Number(query.limit) || 20));
+  const filter: Record<string, unknown> = { riderId: rider._id };
+  if (query.status) filter.status = query.status;
+
+  const [settlements, total] = await Promise.all([
+    CodSettlement.find(filter)
+      .select("-confirmedBy")
+      .sort({ createdAt: -1 })
+      .skip((page - 1) * limit)
+      .limit(limit)
+      .lean(),
+    CodSettlement.countDocuments(filter),
+  ]);
+
+  return {
+    meta: { page, limit, total, totalPage: Math.ceil(total / limit) },
+    data: settlements,
   };
 };
 
@@ -928,6 +968,7 @@ export const WalletServices = {
   processWithdrawal,
   submitCodSettlement,
   confirmCodSettlement,
+  getMyCodSettlements,
   getMyTransactions,
   getMyWithdrawals,
   getAllWithdrawalsAdmin,

@@ -44,6 +44,11 @@ const codSettlementSchema = new Schema<ICodSettlement>(
     confirmedAt: {
       type: Date,
     },
+    rejectionReason: {
+      type: String,
+      trim: true,
+      maxlength: 300,
+    },
   },
   {
     timestamps: true,

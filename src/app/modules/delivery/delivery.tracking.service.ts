@@ -6,15 +6,33 @@ import { Types } from "mongoose";
 import AppError from "../../errorHelpers/AppError";
 import { toGeoPoint } from "../../utils/commonSchemas";
 import { emitToDelivery } from "../../../socket/socket";
+import { DeliveryType } from "../order/order.interface";
 import { Order } from "../order/order.model";
 import { SubOrder } from "../order/sub_order.model";
 import { RiderProfile } from "../rider_profile/rider_profile.model";
 import { UserRole } from "../user/user.interface";
 import { User } from "../user/user.model";
 import { VendorProfile } from "../vendor_profile/vendor_profile.model";
-import { DeliveryStatus, EndpointKind } from "./delivery.interface";
+import { DeliveryStatus, EndpointKind, LegType } from "./delivery.interface";
 import { Delivery } from "./delivery.model";
 import { withoutPins } from "./delivery.utils";
+
+/**
+ * Riders see the customer's address (name, phone, landmark, gate photo) only
+ * on the leg that ends with the customer: the door (local / last mile) or,
+ * for "station pickup" orders, the bus that the customer meets at the
+ * destination station. A first-mile rider or a relay bus driver never meets
+ * the customer.
+ */
+const withoutCustomerAddress = <T extends { toKind: EndpointKind; legType: LegType; orderId?: unknown; toPhone?: string }>(leg: T): T => {
+  const order = leg.orderId && typeof leg.orderId === "object" ? { ...(leg.orderId as Record<string, unknown>) } : null;
+  const meetsCustomer =
+    leg.toKind === EndpointKind.customer ||
+    (leg.legType === LegType.line_haul && order?.deliveryType === DeliveryType.station_pickup);
+  if (meetsCustomer || !order) return leg;
+  delete order.addressSnapshot;
+  return { ...leg, orderId: order, toPhone: undefined };
+};
 
 /**
  * Returns tracking details for customer, vendor, or rider with secure PIN exposure.
@@ -30,8 +48,8 @@ const trackDelivery = async (
       select: "userId partnerType vehicle stats lastLocation lastLocationAt",
       populate: { path: "userId", select: "name avatar" },
     })
-    .populate("subOrderId", "subOrderNumber status total")
-    .populate("orderId", "orderNumber addressSnapshot paymentMethod");
+    .populate("subOrderId", "subOrderNumber status total items.name items.qty items.image items.removed codAmountToCollect")
+    .populate("orderId", "orderNumber addressSnapshot paymentMethod deliveryType");
 
   if (!delivery) throw new AppError(httpStatus.NOT_FOUND, "Delivery not found");
 
@@ -107,9 +125,12 @@ const trackDelivery = async (
   // and the riders keep the contact numbers they need for the handover.
   const contacts =
     isCustomer && !isVendor && !isRider && !isStaffOrAdmin ? { fromPhone: undefined } : {};
+  // Riders (this leg's or the next / previous one's at a station) on a leg that
+  // ends at a station never meet the customer
+  const view = !isVendor && !isCustomer && !isStaffOrAdmin ? withoutCustomerAddress(deliveryObj) : deliveryObj;
 
   return {
-    ...withoutPins(deliveryObj),
+    ...withoutPins(view),
     ...contacts,
     ...visiblePins,
     ...relayPins,
@@ -182,45 +203,60 @@ const toggleRiderOnline = async (riderUserId: string, isOnline: boolean) => {
   return { isOnline: rider.isOnline };
 };
 
+// The rider app's tabs: waiting for my answer · on the road · finished
+const RIDER_TABS: Record<string, DeliveryStatus[]> = {
+  new: [DeliveryStatus.assigned],
+  active: [
+    DeliveryStatus.assigned,
+    DeliveryStatus.accepted,
+    DeliveryStatus.going_to_pickup,
+    DeliveryStatus.picked_up,
+    DeliveryStatus.in_transit,
+  ],
+  ongoing: [
+    DeliveryStatus.accepted,
+    DeliveryStatus.going_to_pickup,
+    DeliveryStatus.picked_up,
+    DeliveryStatus.in_transit,
+  ],
+  completed: [DeliveryStatus.delivered, DeliveryStatus.cancelled],
+};
+
 /**
- * Rider retrieves list of assigned, active, or completed jobs.
+ * Rider's jobs. `type`: new (to accept) · ongoing (accepted, on the road) ·
+ * completed · active (new + ongoing). Paginated; newest first, except the
+ * running ones (oldest first: the job taken first is done first).
  */
 const getMyDeliveries = async (
   riderUserId: string,
-  query: { status?: DeliveryStatus; type?: "active" | "completed" },
+  query: { status?: DeliveryStatus; type?: string; page?: string; limit?: string },
 ) => {
   const rider = await RiderProfile.findOne({ userId: riderUserId });
   if (!rider) throw new AppError(httpStatus.FORBIDDEN, "Rider profile not found");
 
   const filter: Record<string, unknown> = { riderId: rider._id };
+  if (query.status) filter.status = query.status;
+  else if (query.type && RIDER_TABS[query.type]) filter.status = { $in: RIDER_TABS[query.type] };
 
-  if (query.status) {
-    filter.status = query.status;
-  } else if (query.type === "active") {
-    filter.status = {
-      $in: [
-        DeliveryStatus.assigned,
-        DeliveryStatus.accepted,
-        DeliveryStatus.going_to_pickup,
-        DeliveryStatus.picked_up,
-        DeliveryStatus.in_transit,
-      ],
-    };
-  } else if (query.type === "completed") {
-    filter.status = {
-      $in: [DeliveryStatus.delivered, DeliveryStatus.cancelled],
-    };
-  }
+  const page = Math.max(1, Number(query.page) || 1);
+  const limit = Math.max(1, Math.min(50, Number(query.limit) || 20));
+  const running = query.type === "new" || query.type === "ongoing" || query.type === "active";
 
-  const deliveries = await Delivery.find(filter)
-    .populate("subOrderId", "subOrderNumber total items")
-    .populate("orderId", "orderNumber addressSnapshot paymentMethod")
-    .sort({ createdAt: -1 });
+  const [deliveries, total] = await Promise.all([
+    Delivery.find(filter)
+      .populate("subOrderId", "subOrderNumber total items.name items.qty items.removed codAmountToCollect")
+      .populate("orderId", "orderNumber addressSnapshot paymentMethod deliveryType")
+      .sort(running ? { assignedAt: 1, createdAt: 1 } : { updatedAt: -1 })
+      .skip((page - 1) * limit)
+      .limit(limit),
+    Delivery.countDocuments(filter),
+  ]);
 
-  return deliveries.map((d) => {
+  return {
+    meta: { page, limit, total, totalPage: Math.ceil(total / limit) },
     // Riders never see the PINs of their own legs
-    return withoutPins(d.toObject());
-  });
+    data: deliveries.map((d) => withoutCustomerAddress(withoutPins(d.toObject()))),
+  };
 };
 
 export {
