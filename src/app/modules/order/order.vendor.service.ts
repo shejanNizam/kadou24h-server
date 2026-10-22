@@ -368,7 +368,7 @@ const modifySubOrderItems = async (
     Math.round(newSubtotal * 0.9),
   );
   const newVendorEarning = Math.max(0, newSubtotal - newCommissionAmount);
-  const newTotal = newSubtotal + subOrder.deliveryFee - subOrder.discountShare;
+  const newTotal = Math.max(0, newSubtotal + subOrder.deliveryFee - (subOrder.discountShare ?? 0));
   const refundAmount = Math.max(0, oldTotal - newTotal);
 
   const oldVendorEarning = subOrder.vendorEarning;
@@ -414,7 +414,8 @@ const modifySubOrderItems = async (
   subOrder.vendorEarning = newVendorEarning;
   subOrder.total = newTotal;
   if (subOrder.codAmountToCollect) {
-    subOrder.codAmountToCollect = newTotal;
+    // The first store's cash also carries the service fee and tax: keep it
+    subOrder.codAmountToCollect = newTotal + Math.max(0, subOrder.codAmountToCollect - oldTotal);
   }
 
   // Record modification

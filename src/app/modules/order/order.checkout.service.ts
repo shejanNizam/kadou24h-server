@@ -8,6 +8,7 @@ import { logger } from "../../utils/logger";
 import { Notify } from "../notification/notification.events";
 import { Cart } from "../cart/cart.model";
 import { CounterServices } from "../counter/counter.service";
+import { CouponServices, normalizeCode } from "../coupon/coupon.service";
 import { DeliveryRateType, DeliveryVehicleType } from "../delivery_rate/delivery_rate.interface";
 import { DeliveryRateServices } from "../delivery_rate/delivery_rate.service";
 import { Product } from "../product/product.model";
@@ -154,6 +155,8 @@ const resolveStationRoute = async (
 const calculateCheckout = async (
   customerId: string,
   payload: ICheckoutSummaryInput,
+  /** Placing the order: a bad promo code is an error (the summary only reports it) */
+  opts: { strictCoupon?: boolean } = {},
 ) => {
   const addressSnapshot = await resolveAddress(customerId, {
     addressId: payload.addressId,
@@ -252,6 +255,8 @@ const calculateCheckout = async (
     commissionRate: number;
     commissionAmount: number;
     vendorEarning: number;
+    /** This store's part of the promo discount (paid by Kadou24h, not the store) */
+    discountShare: number;
     total: number;
   }> = [];
 
@@ -376,12 +381,39 @@ const calculateCheckout = async (
       commissionRate,
       commissionAmount,
       vendorEarning,
+      discountShare: 0,
       total: vendorTotal,
     });
   }
 
+  // Promo code: Kadou24h pays the discount, so store earnings and commissions don't change
+  let discount = 0;
+  let appliedCoupon: Awaited<ReturnType<typeof CouponServices.evaluate>>["coupon"] | undefined;
+  let coupon: { code: string; valid: boolean; discount: number; description?: string; message?: string } | undefined;
+  if (payload.couponCode?.trim()) {
+    try {
+      const result = await CouponServices.evaluate(payload.couponCode, customerId, overallSubtotal);
+      discount = result.discount;
+      appliedCoupon = result.coupon;
+      coupon = { code: result.coupon.code, valid: true, discount, description: result.coupon.description };
+    } catch (error) {
+      if (opts.strictCoupon || !(error instanceof AppError)) throw error;
+      coupon = { code: normalizeCode(payload.couponCode), valid: false, discount: 0, message: error.message };
+    }
+  }
+  // Spread over the stores by their share of the products (the last one takes the rounding)
+  if (discount > 0) {
+    let left = discount;
+    vendorSplits.forEach((split, i) => {
+      const share = i === vendorSplits.length - 1 ? left : Math.min(left, Math.round((discount * split.subtotal) / overallSubtotal));
+      split.discountShare = share;
+      split.total -= share;
+      left -= share;
+    });
+  }
+
   const taxAmount = Math.round(overallSubtotal * (taxRate / 100));
-  const total = overallSubtotal + overallDeliveryFee + taxAmount + platformFee;
+  const total = overallSubtotal + overallDeliveryFee + taxAmount + platformFee - discount;
 
   // Cash on delivery: each store's rider collects its part (the first also takes the service
   // fee and tax). A rider may carry at most riderCashLimitDefault, so above it no rider could
@@ -407,9 +439,12 @@ const calculateCheckout = async (
       deliveryFee: overallDeliveryFee,
       taxAmount,
       platformFee,
-      discount: 0,
+      discount,
       total,
     },
+    /** The promo code typed: valid (with the discount) or why it can't be used */
+    coupon,
+    appliedCoupon,
     vendorSplits,
   };
 };
@@ -421,7 +456,7 @@ const placeOrder = async (
   customerId: string,
   payload: ICheckoutSummaryInput,
 ) => {
-  const calculation = await calculateCheckout(customerId, payload);
+  const calculation = await calculateCheckout(customerId, payload, { strictCoupon: true });
   if (calculation.paymentMethod === PaymentMethod.cod && !calculation.cod.allowed) {
     throw new AppError(
       httpStatus.BAD_REQUEST,
@@ -436,9 +471,11 @@ const placeOrder = async (
     orderId: undefined as Types.ObjectId | undefined,
     subOrderIds: [] as Types.ObjectId[],
     escrowHeld: [] as { walletId: Types.ObjectId; amount: number; subOrderId: Types.ObjectId }[],
+    coupon: undefined as { couponId: Types.ObjectId; redemptionId: Types.ObjectId; amount: number } | undefined,
   };
 
   const rollback = async () => {
+    if (done.coupon) await CouponServices.undoRedemption(done.coupon);
     for (const hold of done.escrowHeld) {
       await WalletServices.recordTransaction({
         walletId: hold.walletId,
@@ -494,6 +531,7 @@ const createOrderRecords = async (
     orderId?: Types.ObjectId;
     subOrderIds: Types.ObjectId[];
     escrowHeld: { walletId: Types.ObjectId; amount: number; subOrderId: Types.ObjectId }[];
+    coupon?: { couponId: Types.ObjectId; redemptionId: Types.ObjectId; amount: number };
   },
 ) => {
   // Atomically decrement stock
@@ -541,12 +579,23 @@ const createOrderRecords = async (
     taxAmount: calculation.pricing.taxAmount,
     platformFee: calculation.pricing.platformFee,
     discount: calculation.pricing.discount,
+    ...(calculation.appliedCoupon && { couponCode: calculation.appliedCoupon.code }),
     total: calculation.pricing.total,
     status: OrderStatus.active,
     placedAt,
     ...(payOnline && { paymentDueAt: new Date(placedAt.getTime() + PAYMENT_WINDOW_MINUTES * 60_000) }),
   });
   done.orderId = order._id as Types.ObjectId;
+
+  // The customer's one use of the code (the total limit is checked atomically here)
+  if (calculation.appliedCoupon && calculation.pricing.discount > 0) {
+    done.coupon = await CouponServices.redeem(calculation.appliedCoupon, {
+      customerId,
+      orderId: order._id as Types.ObjectId,
+      orderNumber,
+      amount: calculation.pricing.discount,
+    });
+  }
 
   // Create sub-orders
   const createdSubOrders = [];
@@ -583,7 +632,7 @@ const createOrderRecords = async (
       modifications: [],
       subtotal: split.subtotal,
       deliveryFee: split.deliveryFee,
-      discountShare: 0,
+      discountShare: split.discountShare,
       total: split.total,
       commissionRate: split.commissionRate,
       commissionAmount: split.commissionAmount,

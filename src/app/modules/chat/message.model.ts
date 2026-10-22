@@ -42,6 +42,12 @@ export const messageSchema = new Schema<IMessage>(
       type: [String],
       default: [],
     },
+    // Never returned: the sender must not learn they were blocked
+    hiddenFor: {
+      type: [{ type: Schema.Types.ObjectId, ref: "User" }],
+      default: undefined,
+      select: false,
+    },
   },
   {
     timestamps: true,

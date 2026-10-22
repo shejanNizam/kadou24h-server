@@ -30,6 +30,7 @@ import { AdvertisementRoutes } from "../modules/advertisement/advertisement.rout
 import { AdminDashboardRoutes } from "../modules/admin_dashboard/admin_dashboard.route";
 import { ReviewRoutes } from "../modules/review/review.route";
 import { BookingRoutes } from "../modules/booking/booking.route";
+import { CouponRoutes } from "../modules/coupon/coupon.route";
 
 const router = Router();
 
@@ -65,6 +66,7 @@ const moduleRoutes = [
   { path: "/admin/dashboard", route: AdminDashboardRoutes },
   { path: "/reviews", route: ReviewRoutes },
   { path: "/bookings", route: BookingRoutes },
+  { path: "/coupons", route: CouponRoutes },
 ];
 
 moduleRoutes.forEach((route) => {

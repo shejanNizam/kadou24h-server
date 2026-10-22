@@ -80,6 +80,36 @@ router.get("/", checkAuth(...ALL_ROLES), ChatControllers.getMyConversations);
  *       200: { description: "{ unreadCount }" }
  */
 router.get("/unread-count", checkAuth(...ALL_ROLES), ChatControllers.getUnreadCount);
+/**
+ * @swagger
+ * /conversations/blocked:
+ *   get:
+ *     tags: [Chat]
+ *     summary: People I blocked (name, avatar, date)
+ *     security: [{ bearerAuth: [] }]
+ * /conversations/blocked/{userId}:
+ *   delete:
+ *     tags: [Chat]
+ *     summary: Unblock someone from my blocked list
+ *     security: [{ bearerAuth: [] }]
+ * /conversations/{id}/block:
+ *   post:
+ *     tags: [Chat]
+ *     summary: Block the other person of this conversation
+ *     description: >
+ *       Their messages are kept for them only: no unread, no notification, never shown to me — they
+ *       are not told. While an order (sub-order not delivered / cancelled) or a booking between us is
+ *       still open, messages about it still get through. Conversations show blockedByMe.
+ *     security: [{ bearerAuth: [] }]
+ *   delete:
+ *     tags: [Chat]
+ *     summary: Unblock the other person of this conversation
+ *     security: [{ bearerAuth: [] }]
+ */
+router.get("/blocked", checkAuth(...ALL_ROLES), ChatControllers.getBlocked);
+router.delete("/blocked/:userId", checkAuth(...ALL_ROLES), ChatControllers.unblockUser);
+router.post("/:id/block", checkAuth(...ALL_ROLES), ChatControllers.blockPeer);
+router.delete("/:id/block", checkAuth(...ALL_ROLES), ChatControllers.unblockPeer);
 router.get("/:id", checkAuth(...ALL_ROLES), ChatControllers.getConversationById);
 router.patch("/:id/read", checkAuth(...ALL_ROLES), ChatControllers.markConversationAsRead);
 

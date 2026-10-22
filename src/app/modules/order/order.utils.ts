@@ -10,6 +10,7 @@ import { CancelledBy, Notify } from "../notification/notification.events";
 import { Product } from "../product/product.model";
 import { RiderProfile } from "../rider_profile/rider_profile.model";
 import { WalletServices } from "../wallet/wallet.service";
+import { CouponServices } from "../coupon/coupon.service";
 import { RefundSource } from "../payment/payment.interface";
 import { RefundServices } from "../payment/refund.service";
 import { ISubOrder, OrderStatus, SettlementStatus, SubOrderStatus } from "./order.interface";
@@ -36,6 +37,8 @@ const syncOrderStatus = async (orderId: Types.ObjectId | string) => {
   const subOrders = await SubOrder.find({ orderId }).select("status").lean();
   const status = deriveOrderStatus(subOrders.map((s) => s.status));
   await Order.updateOne({ _id: orderId }, { status });
+  // Nothing was bought: the customer can use the promo code again
+  if (status === OrderStatus.cancelled) await CouponServices.releaseForOrder(orderId);
   return status;
 };
 

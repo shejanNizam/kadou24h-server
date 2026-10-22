@@ -193,13 +193,21 @@ const getPlatformOverview = async () => {
     // GMV (non-cancelled sub-orders) and commission actually earned (released)
     SubOrder.aggregate([
       { $match: { status: { $nin: NOT_SALES } } },
-      { $group: { _id: null, gmv: { $sum: "$total" }, commission: { $sum: earnedCommission } } },
+      // GMV = sales value before promo codes; discounts = what Kadou24h paid for promo codes
+      {
+        $group: {
+          _id: null,
+          gmv: { $sum: { $add: ["$total", { $ifNull: ["$discountShare", 0] }] } },
+          commission: { $sum: earnedCommission },
+          discounts: { $sum: { $ifNull: ["$discountShare", 0] } },
+        },
+      },
     ]),
     subOrderSeries("%Y-%m-%d", startOfWeek),
     subOrderSeries("%Y-%m", startOfYear),
   ]);
 
-  const subOrderMoney = subOrderMoneyAgg[0] || { gmv: 0, commission: 0 };
+  const subOrderMoney = subOrderMoneyAgg[0] || { gmv: 0, commission: 0, discounts: 0 };
   const orderStats = ordersAgg[0] || {
     totalPlatformFees: 0,
     completedOrders: 0,
@@ -306,8 +314,9 @@ const getPlatformOverview = async () => {
       totalGmv: subOrderMoney.gmv + orderStats.totalPlatformFees,
       totalPlatformFees: orderStats.totalPlatformFees,
       totalCommission: subOrderMoney.commission,
-      // What the platform earned: platform fees + commission on paid-out sub-orders
-      totalRevenue: orderStats.totalPlatformFees + subOrderMoney.commission,
+      totalDiscounts: subOrderMoney.discounts,
+      // What the platform earned: platform fees + commission on paid-out sub-orders − promo codes it paid
+      totalRevenue: orderStats.totalPlatformFees + subOrderMoney.commission - subOrderMoney.discounts,
     },
     finance: {
       pendingWithdrawalsCount: withdrawalStats.count,

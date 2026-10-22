@@ -178,6 +178,8 @@ export interface ICheckoutSummaryInput {
   destinationStationId?: string;
   specialInstructions?: string;
   paymentMethod: PaymentMethod;
+  /** Promo code typed at checkout */
+  couponCode?: string;
 }
 
 export interface IPlaceOrderInput extends ICheckoutSummaryInput {

@@ -9,6 +9,7 @@ import {
   getMyOrders,
   getOrderDetails,
   cancelOrder,
+  cancelStorePart,
 } from "./order.customer.service";
 import {
   getVendorSubOrders,
@@ -28,6 +29,7 @@ export const OrderServices = {
   getMyOrders,
   getOrderDetails,
   cancelOrder,
+  cancelStorePart,
   getVendorSubOrders,
   getVendorSubOrderDetail,
   updateSubOrderStatus,

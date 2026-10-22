@@ -1,7 +1,9 @@
 import { Request, Response } from "express";
+import httpStatus from "http-status";
 import catchAsync from "../../utils/catchAsync";
 import sendResponse from "../../utils/sendResponse";
 import { AppMode } from "../user/user.interface";
+import { ChatBlockServices } from "./chat.block.service";
 import { ChatServices } from "./chat.service";
 
 const startOrGetConversation = catchAsync(async (req: Request, res: Response) => {
@@ -95,6 +97,26 @@ const markConversationAsRead = catchAsync(async (req: Request, res: Response) =>
   });
 });
 
+const blockPeer = catchAsync(async (req: Request, res: Response) => {
+  const result = await ChatBlockServices.block(req.user._id, req.params.id as string);
+  sendResponse(res, { statusCode: httpStatus.OK, success: true, message: "Blocked", data: result });
+});
+
+const unblockPeer = catchAsync(async (req: Request, res: Response) => {
+  const result = await ChatBlockServices.unblock(req.user._id, req.params.id as string);
+  sendResponse(res, { statusCode: httpStatus.OK, success: true, message: "Unblocked", data: result });
+});
+
+const getBlocked = catchAsync(async (req: Request, res: Response) => {
+  const result = await ChatBlockServices.listBlocked(req.user._id);
+  sendResponse(res, { statusCode: httpStatus.OK, success: true, message: "Blocked people retrieved", data: result });
+});
+
+const unblockUser = catchAsync(async (req: Request, res: Response) => {
+  const result = await ChatBlockServices.unblockUser(req.user._id, req.params.userId as string);
+  sendResponse(res, { statusCode: httpStatus.OK, success: true, message: "Unblocked", data: result });
+});
+
 const getModerationViolationsAdmin = catchAsync(async (req: Request, res: Response) => {
   const result = await ChatServices.getModerationViolationsAdmin(req.query);
 
@@ -120,6 +142,10 @@ const liftUserChatRestrictionAdmin = catchAsync(async (req: Request, res: Respon
 });
 
 export const ChatControllers = {
+  blockPeer,
+  unblockPeer,
+  getBlocked,
+  unblockUser,
   getUnreadCount,
   startOrGetConversation,
   getMyConversations,

@@ -368,6 +368,11 @@ try {
     { name: "Pro — 90 jours", audience: "service_provider", price: 25000, durationDays: 90, features: ["cv_visibility"], highlights: ["Votre profil en tête pendant 3 mois", "Badge « Profil en avant »"] },
   ];
   for (const plan of PLANS) await call("POST", "/subscriptions/admin/plans", plan, admin);
+  // A promo code to try at checkout (Kadou24h pays the discount)
+  await call("POST", "/coupons/admin", {
+    code: "BIENVENUE", type: "percent", value: 10, maxDiscount: 20000, minOrder: 50000,
+    expiresAt: new Date(Date.now() + 90 * 86_400_000).toISOString(), description: "10 % sur votre commande (max 20 000 GNF)",
+  }, admin);
   console.log(`✓ ${PLANS.length} subscription plans`);
 
   // ── Ads: banners (2 on home = carousel), a home popup, a category interstitial ──
@@ -494,6 +499,7 @@ Demo accounts (password for all: ${PASSWORD})
   Bus driver      +224 620 00 00 04   Conakry → Labé
   Other stores    +224 620 00 00 12 / 13 / 14
   Workers         +224 620 00 00 21 … 25 (21 Mamadou: 1 new booking request, 1 completed; 22 Kofi: 1 accepted)
+  Promo code      BIENVENUE (10 %, max 20 000 GNF, from 50 000 GNF)
   Admin (dashboard) ${ADMIN.email} / ${ADMIN.password}
 `);
   stop(0);

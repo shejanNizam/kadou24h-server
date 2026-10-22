@@ -74,6 +74,8 @@ export interface IMessageInitial {
   mediaDurationSec?: number;
   moderationStatus: ModerationStatus;
   moderationRules: string[];
+  /** Blocked sender: the message is kept for the sender only (never sent to these users) */
+  hiddenFor?: Types.ObjectId[];
   createdAt?: Date;
   updatedAt?: Date;
 }

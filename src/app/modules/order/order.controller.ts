@@ -12,7 +12,8 @@ const checkoutSummary = catchAsync(async (req: Request, res: Response) => {
     statusCode: httpStatus.OK,
     success: true,
     message: "Checkout summary calculated successfully",
-    data: result,
+    // The promo code document stays on the server (usage counters); the app gets result.coupon
+    data: { ...result, appliedCoupon: undefined },
   });
 });
 
@@ -185,7 +186,18 @@ const adminCancelSubOrder = catchAsync(async (req: Request, res: Response) => {
   });
 });
 
+const cancelStorePart = catchAsync(async (req: Request, res: Response) => {
+  const result = await OrderServices.cancelStorePart(req.params.id as string, req.params.subOrderId as string, req.user._id, req.body.reason);
+  sendResponse(res, {
+    statusCode: httpStatus.OK,
+    success: true,
+    message: "This store's part was cancelled",
+    data: result,
+  });
+});
+
 export const OrderControllers = {
+  cancelStorePart,
   checkoutSummary,
   placeOrder,
   getMyOrders,

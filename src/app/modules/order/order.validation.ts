@@ -47,6 +47,7 @@ const checkoutSummarySchema = z.object({
       .optional(),
     specialInstructions: z.string().optional(),
     paymentMethod: z.nativeEnum(PaymentMethod),
+    couponCode: z.string().trim().max(30).optional(),
   }),
 });
 
@@ -72,6 +73,7 @@ const placeOrderSchema = z.object({
       .optional(),
     specialInstructions: z.string().optional(),
     paymentMethod: z.nativeEnum(PaymentMethod),
+    couponCode: z.string().trim().max(30).optional(),
   }),
 });
 

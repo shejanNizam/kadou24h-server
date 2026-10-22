@@ -325,4 +325,25 @@ router.post(
   OrderControllers.cancelOrder,
 );
 
+/**
+ * @swagger
+ * /orders/{id}/sub-orders/{subOrderId}/cancel:
+ *   post:
+ *     tags: [Order]
+ *     summary: Cancel one store's part of my order (Customer) — { reason }
+ *     description: >
+ *       Only while that store has not started preparing (new / accepted). Paid online → a refund
+ *       request for that part. Not for an unpaid online order (pay or cancel the whole order).
+ *       The last part cancelled = the whole order (service fee refunded, promo code given back).
+ *       Cash on delivery: the service fee moves to another part.
+ *     security:
+ *       - bearerAuth: []
+ */
+router.post(
+  "/:id/sub-orders/:subOrderId/cancel",
+  checkAuth(...ALL_ROLES),
+  validateRequest(OrderValidations.cancelOrderSchema),
+  OrderControllers.cancelStorePart,
+);
+
 export const OrderRoutes = router;

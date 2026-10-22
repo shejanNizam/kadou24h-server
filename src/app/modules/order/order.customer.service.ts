@@ -2,6 +2,7 @@
  * Customer side: my orders, order details, cancellation.
  */
 import httpStatus from "http-status";
+import { Types } from "mongoose";
 import AppError from "../../errorHelpers/AppError";
 import { DeliveryStatus } from "../delivery/delivery.interface";
 import { Delivery } from "../delivery/delivery.model";
@@ -227,8 +228,58 @@ const cancelOrder = async (
   };
 };
 
+/** Store parts not yet being prepared: the customer can still cancel them */
+const PART_CANCELLABLE = [SubOrderStatus.new, SubOrderStatus.accepted];
+/** Parts whose rider has not collected anything yet (the service fee can move to them) */
+const BEFORE_PICKUP = [SubOrderStatus.new, SubOrderStatus.accepted, SubOrderStatus.preparing, SubOrderStatus.ready_for_pickup];
+
+/**
+ * Customer cancels one store's part (client, 2026-10-22): only while that store has not
+ * started preparing. Paid online → a refund request for that part (what was paid for it,
+ * promo discount included). The other stores carry on. Cancelling the last part = the
+ * whole order (service fee refunded, promo code given back).
+ */
+const cancelStorePart = async (orderId: string, subOrderId: string, customerId: string, reason: string) => {
+  const valid = Types.ObjectId.isValid(orderId) && Types.ObjectId.isValid(subOrderId);
+  const order = valid ? await Order.findOne({ _id: orderId, customerId }) : null;
+  const part = order ? await SubOrder.findOne({ _id: subOrderId, orderId: order._id }) : null;
+  if (!order || !part) throw new AppError(httpStatus.NOT_FOUND, "Order not found");
+  if (part.status === SubOrderStatus.pending_payment) {
+    throw new AppError(httpStatus.BAD_REQUEST, "Pay for this order first, or cancel the whole order");
+  }
+  if (!PART_CANCELLABLE.includes(part.status)) {
+    throw new AppError(httpStatus.BAD_REQUEST, "This store has already started preparing your order: it can no longer be cancelled");
+  }
+
+  const cancelled = await cancelSubOrder({
+    filter: { _id: part._id, customerId: order.customerId },
+    allowedFrom: PART_CANCELLABLE,
+    by: "customer",
+    reason,
+    actorUserId: customerId,
+  });
+
+  // Cash on delivery: this part's cash also carried the service fee and tax → move them to
+  // another part whose rider hasn't collected yet, so the order still pays them once
+  const extra = Math.max(0, (part.codAmountToCollect ?? 0) - part.total);
+  if (extra > 0) {
+    await SubOrder.findOneAndUpdate(
+      { orderId: order._id, _id: { $ne: part._id }, status: { $in: BEFORE_PICKUP }, codAmountToCollect: { $exists: true } },
+      { $inc: { codAmountToCollect: extra } },
+      { sort: { subOrderNumber: 1 } },
+    );
+  }
+
+  return {
+    subOrder: cancelled,
+    order: await Order.findById(order._id),
+    subOrders: await SubOrder.find({ orderId: order._id }),
+  };
+};
+
 export {
   getMyOrders,
   getOrderDetails,
   cancelOrder,
+  cancelStorePart,
 };

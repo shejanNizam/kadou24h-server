@@ -751,6 +751,140 @@ const run = async () => {
   r = await call("GET", "/professional-profiles/me/worker-summary", null, C.token);
   const paidDays = Math.round((new Date(r.body.data?.listing?.listedUntil).getTime() - Date.now()) / 86_400_000);
   check("service-provider plan paid: visible again for its 30 days", r.body.data?.isVisible === true && paidDays === 30 && (await publicIds()).includes(workerId), JSON.stringify(r.body.data?.listing ?? brief(r)));
+  // ═════ 5d. Promo codes, cancelling one store's part, blocking in chat ═════
+  const W = await signup("Second Store", `+22462${stamp}8`);
+  await call("PUT", "/vendors/me/application", {
+    storeName: "Marché Kipé", businessCategoryId: bizCat, businessPhone: "+224620000222",
+    address: { text: "Kipé", city: "Conakry", location: { lat: 9.6, lng: -13.64 } },
+  }, W.token);
+  await call("POST", "/wallets/me/payout-methods", { mode: "vendor", type: "orange_money", accountName: "Second Store", accountNumber: "+224620000222" }, W.token);
+  r = await call("POST", "/vendors/me/application/submit", null, W.token);
+  if (!r.body.data) throw new Error(`second store submit failed: ${brief(r)}`);
+  const storeB = r.body.data?._id;
+  await call("PATCH", `/vendors/admin/${storeB}/review`, { action: "approve" }, admin);
+  await call("PATCH", "/vendors/me/availability", { isOpen: true }, W.token);
+  r = await call("POST", "/products", { name: "Huile 5L", categoryId: prodCat, price: 50000, stockQty: 30 }, W.token);
+  const oilId = r.body.data?._id;
+  await call("PATCH", `/products/${oilId}/approval`, { approvalStatus: "approved" }, admin);
+  const P = await signup("Promo Buyer", `+22462${stamp}9`);
+  r = await call("POST", "/addresses", { fullName: "Promo Buyer", phone: `+22462${stamp}9`, city: "Conakry", location: { lat: 9.55, lng: -13.67 } }, P.token);
+  const pAddr = r.body.data?._id;
+  const basket = [{ productId, qty: 1 }, { productId: oilId, qty: 2 }]; // 100 000 + 2 × 50 000
+  const cart = (extra = {}) => ({ items: basket, addressId: pAddr, deliveryType: "local", paymentMethod: "cod", ...extra });
+  const soon = (days) => new Date(Date.now() + days * 86_400_000).toISOString();
+
+  r = await call("POST", "/coupons/admin", { code: "kadou10", type: "percent", value: 10, maxDiscount: 15000, minOrder: 150000, expiresAt: soon(30) }, P.token);
+  check("promo: customers cannot create codes", r.status === 403, brief(r));
+  r = await call("POST", "/coupons/admin", { code: "kadou10", type: "percent", value: 10, maxDiscount: 15000, minOrder: 150000, expiresAt: soon(30), description: "10 % jusqu'à 15 000 GNF" }, admin);
+  check("promo: admin creates KADOU10 (upper-cased)", r.status === 201 && r.body.data?.code === "KADOU10", brief(r));
+  const promoId = r.body.data?._id;
+  r = await call("POST", "/coupons/admin", { code: "KADOU10", type: "fixed", value: 1000, expiresAt: soon(5) }, admin);
+  check("promo: the same code twice is refused", r.status === 409, brief(r));
+  r = await call("POST", "/coupons/admin", { code: "TOOMUCH", type: "percent", value: 150, expiresAt: soon(5) }, admin);
+  check("promo: more than 100 % is refused", r.status === 400, brief(r));
+  await call("POST", "/coupons/admin", { code: "OLD5", type: "fixed", value: 5000, expiresAt: new Date(Date.now() - 86_400_000).toISOString() }, admin);
+  await call("POST", "/coupons/admin", { code: "WELCOME", type: "fixed", value: 5000, expiresAt: soon(10) }, admin);
+
+  r = await call("POST", "/orders/checkout-summary", cart(), P.token);
+  const base = r.body.data?.pricing;
+  check("two stores in one checkout", r.body.data?.vendorSplits?.length === 2 && base?.subtotal === 200000, brief(r));
+  r = await call("POST", "/orders/checkout-summary", cart({ couponCode: "nope" }), P.token);
+  check("promo: an unknown code is reported, the summary still works", ok(r) && r.body.data?.coupon?.valid === false && r.body.data?.pricing?.discount === 0, JSON.stringify(r.body.data?.coupon ?? brief(r)));
+  r = await call("POST", "/orders/checkout-summary", cart({ couponCode: "OLD5" }), P.token);
+  check("promo: an expired code is reported", r.body.data?.coupon?.valid === false && /expired/i.test(r.body.data?.coupon?.message ?? ""), JSON.stringify(r.body.data?.coupon));
+  r = await call("POST", "/orders/checkout-summary", { ...cart({ couponCode: "kadou10" }), items: [{ productId: oilId, qty: 1 }] }, P.token);
+  check("promo: below the minimum order it is refused", r.body.data?.coupon?.valid === false && /minimum/i.test(r.body.data?.coupon?.message ?? ""), JSON.stringify(r.body.data?.coupon));
+  r = await call("POST", "/orders/checkout-summary", cart({ couponCode: " kadou10 " }), P.token);
+  const promoSplits = r.body.data?.vendorSplits ?? [];
+  check(
+    "promo: 10 % capped at 15 000 GNF, spread over both stores",
+    r.body.data?.coupon?.valid === true && r.body.data?.pricing?.discount === 15000 && r.body.data?.pricing?.total === base.total - 15000 && promoSplits.reduce((a, s) => a + s.discountShare, 0) === 15000,
+    JSON.stringify([r.body.data?.coupon, r.body.data?.pricing]),
+  );
+  check("promo: the summary never exposes the code's usage counters", r.body.data?.appliedCoupon === undefined);
+  r = await call("POST", "/orders", cart({ couponCode: "nope" }), P.token);
+  check("promo: placing an order with a bad code is refused", r.status === 400 && /not valid/i.test(r.body.message ?? ""), brief(r));
+  r = await call("POST", "/orders", cart({ couponCode: "kadou10" }), P.token);
+  const promoOrder = r.body.data?.order;
+  const [partA, partB] = r.body.data?.subOrders ?? [];
+  check("promo order: discount and code saved", ok(r) && promoOrder?.discount === 15000 && promoOrder?.couponCode === "KADOU10" && promoOrder?.total === base.total - 15000, brief(r));
+  check(
+    "promo order: stores keep their full earning (Kadou24h pays the discount)",
+    [partA, partB].every((s) => s && s.vendorEarning === s.subtotal - s.commissionAmount && s.total === s.subtotal + s.deliveryFee - s.discountShare),
+    JSON.stringify([partA, partB].map((s) => s && [s.subtotal, s.vendorEarning, s.discountShare, s.total])),
+  );
+  check("promo order: the first rider collects its part + the service fee", partA?.codAmountToCollect === partA?.total + promoOrder?.platformFee + promoOrder?.taxAmount, JSON.stringify([partA?.codAmountToCollect, partA?.total]));
+  r = await call("POST", "/orders/checkout-summary", cart({ couponCode: "KADOU10" }), P.token);
+  check("promo: one use per customer", r.body.data?.coupon?.valid === false && /already used/i.test(r.body.data?.coupon?.message ?? ""), JSON.stringify(r.body.data?.coupon));
+  r = await call("GET", "/coupons/admin?status=active", null, admin);
+  check("admin promo list: uses and discount given", r.body.data?.some((c) => c.code === "KADOU10" && c.usedCount === 1 && c.discountGiven === 15000) && r.body.meta?.summary?.discountGiven >= 15000, brief(r));
+  r = await call("GET", `/coupons/admin/${promoId}`, null, admin);
+  check("admin promo detail: who used it, on which order", r.body.data?.redemptions?.[0]?.orderNumber === promoOrder?.orderNumber && r.body.data?.redemptions?.[0]?.customerId?.name === "Promo Buyer", brief(r));
+  r = await call("PATCH", `/coupons/admin/${promoId}`, { value: 50 }, admin);
+  check("admin: a used code's value is locked", r.status === 400, brief(r));
+  r = await call("PATCH", `/coupons/admin/${promoId}`, { isActive: false }, admin);
+  check("admin: pause a code", ok(r) && r.body.data?.isActive === false, brief(r));
+
+  // Cancelling one store's part
+  r = await call("POST", `/orders/${promoOrder?._id}/sub-orders/${partA?._id}/cancel`, { reason: "Plus besoin" }, X.token);
+  check("part cancel: a stranger cannot", r.status === 404, brief(r));
+  r = await call("POST", `/orders/${promoOrder?._id}/sub-orders/${partA?._id}/cancel`, { reason: "Plus besoin du riz" }, P.token);
+  const afterPart = r.body.data;
+  const partBNow = afterPart?.subOrders?.find((s) => s._id === partB?._id);
+  check("part cancel: only that store's part is cancelled", ok(r) && afterPart?.subOrder?.status === "cancelled" && partBNow?.status === "new" && afterPart?.order?.status === "active", brief(r));
+  check("part cancel (COD): the service fee moves to the other store's cash", partBNow?.codAmountToCollect === partB?.total + promoOrder?.platformFee + promoOrder?.taxAmount, JSON.stringify([partBNow?.codAmountToCollect, partB?.total]));
+  check("part cancel: the store is told", (await notificationTypes(V.token, "vendor")).includes("order_cancelled"));
+  await call("PATCH", `/orders/vendor/sub-orders/${partB?._id}/status`, { status: "accepted" }, W.token);
+  await call("PATCH", `/orders/vendor/sub-orders/${partB?._id}/status`, { status: "preparing" }, W.token);
+  r = await call("POST", `/orders/${promoOrder?._id}/sub-orders/${partB?._id}/cancel`, { reason: "Trop tard" }, P.token);
+  check("part cancel: refused once the store is preparing", r.status === 400 && /preparing/i.test(r.body.message ?? ""), brief(r));
+  r = await call("POST", "/orders", { ...cart(), items: [{ productId: oilId, qty: 1 }, { productId, qty: 1 }], paymentMethod: "orange_money" }, P.token);
+  const unpaidParts = r.body.data?.subOrders ?? [];
+  r = await call("POST", `/orders/${r.body.data?.order?._id}/sub-orders/${unpaidParts[0]?._id}/cancel`, { reason: "Erreur" }, P.token);
+  check("part cancel: not on an unpaid online order (pay or cancel it all)", r.status === 400 && /pay for this order first/i.test(r.body.message ?? ""), brief(r));
+  await call("POST", `/orders/${unpaidParts[0]?.orderId}/cancel`, { reason: "Erreur" }, P.token);
+
+  // A whole order cancelled gives the promo code back
+  r = await call("POST", "/orders", { ...cart({ couponCode: "welcome" }), items: [{ productId: oilId, qty: 1 }] }, P.token);
+  const welcomeOrder = r.body.data?.order;
+  check("promo: fixed 5 000 GNF off", welcomeOrder?.discount === 5000, brief(r));
+  await call("POST", `/orders/${welcomeOrder?._id}/cancel`, { reason: "Changé d'avis" }, P.token);
+  r = await call("POST", "/orders/checkout-summary", { ...cart({ couponCode: "WELCOME" }), items: [{ productId: oilId, qty: 1 }] }, P.token);
+  check("promo: a cancelled order gives the code back", r.body.data?.coupon?.valid === true && r.body.data?.pricing?.discount === 5000, JSON.stringify(r.body.data?.coupon));
+
+  // Blocking in chat
+  r = await call("POST", "/conversations", { type: "buyer_seller", vendorId: storeB }, P.token);
+  const shopChat = r.body.data?._id;
+  await call("POST", `/conversations/${shopChat}/messages`, { text: "Bonjour, vous livrez à Kipé ?" }, P.token);
+  r = await call("POST", `/conversations/${shopChat}/block`, null, X.token);
+  check("block: only people in the chat", r.status === 403, brief(r));
+  r = await call("POST", `/conversations/${shopChat}/block`, null, W.token);
+  check("block: the store blocks the customer", ok(r) && r.body.data?.blocked === true, brief(r));
+  r = await call("GET", `/conversations/${shopChat}`, null, W.token);
+  const unreadBefore = r.body.data?.myUnread;
+  check("block: the blocker sees blockedByMe", r.body.data?.blockedByMe === true, brief(r));
+  r = await call("GET", `/conversations/${shopChat}`, null, P.token);
+  check("block: the blocked person is not told", r.body.data?.blockedByMe === false, brief(r));
+  r = await call("POST", `/conversations/${shopChat}/messages`, { text: "Vous êtes là ?" }, P.token);
+  check("block: the blocked person can still 'send' (nothing reveals the block)", r.status === 201 && r.body.data?.hiddenFor === undefined, brief(r));
+  r = await call("GET", `/conversations/${shopChat}/messages`, null, P.token);
+  check("block: …and sees their own message", r.body.data?.some((m) => m.text === "Vous êtes là ?") && r.body.data?.every((m) => m.hiddenFor === undefined), brief(r));
+  r = await call("GET", `/conversations/${shopChat}/messages`, null, W.token);
+  check("block: the blocker never gets it", !r.body.data?.some((m) => m.text === "Vous êtes là ?"), brief(r));
+  r = await call("GET", `/conversations/${shopChat}`, null, W.token);
+  check("block: no unread for the blocker", r.body.data?.myUnread === unreadBefore && r.body.data?.lastMessage?.text !== "Vous êtes là ?", JSON.stringify([unreadBefore, r.body.data?.myUnread, r.body.data?.lastMessage?.text]));
+  r = await call("POST", "/conversations", { type: "order", subOrderId: partB?._id, with: "vendor" }, P.token);
+  const orderChat = r.body.data?._id;
+  await call("POST", `/conversations/${orderChat}/messages`, { text: "Ma commande est prête ?" }, P.token);
+  r = await call("GET", `/conversations/${orderChat}/messages`, null, W.token);
+  check("block: an order in progress can still be discussed", r.body.data?.some((m) => m.text === "Ma commande est prête ?"), brief(r));
+  r = await call("GET", "/conversations/blocked", null, W.token);
+  check("blocked list: the customer, name only", r.body.data?.length === 1 && r.body.data?.[0]?.name === "Promo Buyer" && r.body.data?.[0]?.phone === undefined, brief(r));
+  r = await call("DELETE", `/conversations/${shopChat}/block`, null, W.token);
+  check("unblock", ok(r) && r.body.data?.blocked === false, brief(r));
+  await call("POST", `/conversations/${shopChat}/messages`, { text: "Re-bonjour" }, P.token);
+  r = await call("GET", `/conversations/${shopChat}/messages`, null, W.token);
+  check("unblocked: messages arrive again (the hidden one stays hidden)", r.body.data?.some((m) => m.text === "Re-bonjour") && !r.body.data?.some((m) => m.text === "Vous êtes là ?"), brief(r));
   // ═════ 6. Access control ═════
   r = await call("GET", `/deliveries/${legId}/track`, null, X.token);
   check("stranger cannot track a delivery", r.status === 403, brief(r));
@@ -952,7 +1086,7 @@ const run = async () => {
   check("admin: withdrawals can be searched", r.status === 200 && r.body.meta?.total >= 1, brief(r));
   r = await call("GET", "/admin/dashboard/overview", null, admin);
   const money = r.body.data?.orders;
-  check("admin: revenue = platform fees + earned commission", money && money.totalRevenue === money.totalPlatformFees + money.totalCommission && money.totalCommission > 0, JSON.stringify(money));
+  check("admin: revenue = platform fees + earned commission − promo codes", money && money.totalRevenue === money.totalPlatformFees + money.totalCommission - money.totalDiscounts && money.totalCommission > 0 && money.totalDiscounts > 0, JSON.stringify(money));
   r = await call("GET", "/products?searchTerm=((((((a", null);
   check("search text with regex characters is safe (no 500)", r.status === 200, brief(r));
 

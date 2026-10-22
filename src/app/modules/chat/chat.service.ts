@@ -21,6 +21,7 @@ import { assertReachable, resolveConversation, type StartConversationInput } fro
 import { inspectContent } from "./moderation.util";
 import { VendorProfile } from "../vendor_profile/vendor_profile.model";
 import { ModerationViolation } from "./moderation_violation.model";
+import { ChatBlockServices } from "./chat.block.service";
 
 // Set when chat moderation suspends someone — lets an admin lift exactly that suspension
 const CHAT_SUSPENSION_REASON =
@@ -51,6 +52,11 @@ const presentConversations = async <T extends { participants: LeanParticipant[] 
     ? await VendorProfile.find({ userId: { $in: vendorUserIds } }).select("userId storeName logo").lean()
     : [];
   const storeByUser = new Map(stores.map((v) => [String(v.userId), v]));
+  // People the viewer blocked (only the viewer ever knows)
+  const blocked = await ChatBlockServices.blockedAmong(
+    viewerId,
+    conversations.flatMap((c) => c.participants.filter((p) => idOf(p) !== viewerId).map(idOf)),
+  );
 
   return conversations.map((c) => {
     const mine = c.participants.find((p) => idOf(p) === viewerId);
@@ -61,6 +67,7 @@ const presentConversations = async <T extends { participants: LeanParticipant[] 
       ...c,
       myMode: mine?.mode,
       myUnread: mine?.unreadCount ?? 0,
+      blockedByMe: other ? blocked.has(idOf(other)) : false,
       peer: {
         userId: other ? idOf(other) : undefined,
         mode: other?.mode,
@@ -204,7 +211,8 @@ const getMessages = async (
   const limit = Math.min(100, Math.max(1, Number(query.limit) || 50));
   const skip = (page - 1) * limit;
 
-  const filter = { conversationId: new Types.ObjectId(conversationId) };
+  // Messages from someone I blocked were never meant for me
+  const filter = { conversationId: new Types.ObjectId(conversationId), hiddenFor: { $ne: new Types.ObjectId(userId) } };
 
   // Page 1 = the latest messages (a chat opens at the bottom); older pages on scroll-up.
   // Inside a page, oldest → newest.
@@ -379,8 +387,11 @@ const sendMessage = async (
     }
   }
 
-  // 5. Save message
-  const message = await Message.create({
+  // 5. Save message — kept for the sender only when the recipient blocked them
+  const hiddenFor = await ChatBlockServices.hiddenRecipients(conversation, senderId);
+  const isHidden = (id: Types.ObjectId) => hiddenFor.some((h) => String(h) === String(id));
+  const created = await Message.create({
+    ...(hiddenFor.length && { hiddenFor }),
     conversationId: conversation._id,
     senderId: sender._id,
     type: payload.type,
@@ -390,6 +401,9 @@ const sendMessage = async (
     moderationStatus,
     moderationRules,
   });
+  // What the sender (and the sockets) see: never the hidden list
+  const message = created.toObject() as unknown as IMessage;
+  Reflect.deleteProperty(message, "hiddenFor");
 
   // 6. Update conversation lastMessage & participant unread counters
   let previewText = message.text;
@@ -399,27 +413,32 @@ const sendMessage = async (
     else previewText = "Nouveau message";
   }
 
-  conversation.lastMessage = {
-    text: previewText,
-    type: message.type,
-    senderId: sender._id,
-    at: message.createdAt || new Date(),
-  };
+  // A hidden message changes nothing the blocker can see (preview, unread)
+  const visibleToOthers = conversation.participants.some((p) => p.userId.toString() !== senderId.toString() && !isHidden(p.userId));
+  if (visibleToOthers) {
+    conversation.lastMessage = {
+      text: previewText,
+      type: message.type,
+      senderId: sender._id,
+      at: message.createdAt || new Date(),
+    };
+  }
 
   conversation.participants.forEach((p) => {
-    if (p.userId.toString() !== senderId.toString()) {
+    if (p.userId.toString() !== senderId.toString() && !isHidden(p.userId)) {
       p.unreadCount = (p.unreadCount || 0) + 1;
     }
   });
 
   await conversation.save();
 
-  // 7. Emit real-time events via Socket.io
-  emitToConversation(conversationId, "new_message", message);
+  // 7. Emit real-time events via Socket.io (only to the sender when hidden)
+  if (hiddenFor.length) emitToUser(senderId.toString(), "new_message", message);
+  else emitToConversation(conversationId, "new_message", message);
 
   // Notify recipients via push/socket notification
   for (const p of conversation.participants) {
-    if (p.userId.toString() !== senderId.toString()) {
+    if (p.userId.toString() !== senderId.toString() && !isHidden(p.userId)) {
       emitToUser(p.userId.toString(), "conversation_unread", {
         conversationId: conversation._id,
         unreadCount: p.unreadCount,
