@@ -12,7 +12,9 @@ import { Job } from "../job/job.model";
 import { JobApplication } from "../job/job_application.model";
 import { SubOrderStatus } from "../order/order.interface";
 import { SubOrder } from "../order/sub_order.model";
+import { Booking } from "../booking/booking.model";
 import { ProfessionalProfile } from "../professional_profile/professional_profile.model";
+import { publicWorkerFilter } from "../professional_profile/worker_listing";
 import { ApprovalStatus } from "../profile_common/profile.common";
 import { RiderProfile } from "../rider_profile/rider_profile.model";
 import { AppMode } from "../user/user.interface";
@@ -22,7 +24,7 @@ import { ConversationType } from "./chat.interface";
 
 export type StartConversationInput =
   | { type: ConversationType.buyer_seller; vendorId: string }
-  | { type: ConversationType.worker; workerProfileId: string }
+  | { type: ConversationType.worker; workerProfileId?: string; bookingId?: string }
   | { type: ConversationType.order; subOrderId: string; with: "vendor" | "rider" | "customer" }
   | { type: ConversationType.job_application; applicationId: string };
 
@@ -69,8 +71,28 @@ export const resolveConversation = async (
     };
   }
 
+  // A booking: the customer and the worker can write to each other whatever the listing
+  if (input.type === ConversationType.worker && input.bookingId) {
+    const booking = await Booking.findById(input.bookingId).select("customerId workerId workerProfileId");
+    if (!booking) throw notFound("Booking");
+    const parties = [booking.customerId, booking.workerId];
+    const other = parties.find((p) => String(p) !== userId);
+    if (!parties.some((p) => String(p) === userId) || !other) {
+      throw new AppError(httpStatus.FORBIDDEN, "You are not part of this booking");
+    }
+    return {
+      type: input.type,
+      me: { userId: me, mode: AppMode.customer },
+      other: { userId: other, mode: AppMode.customer },
+      context: { workerProfileId: booking.workerProfileId },
+      allowVoice: false,
+    };
+  }
+
   if (input.type === ConversationType.worker) {
-    const profile = await ProfessionalProfile.findOne({ _id: input.workerProfileId, isWorkerListed: true, approvalStatus: ApprovalStatus.approved }).select("userId");
+    if (!input.workerProfileId) throw new AppError(httpStatus.BAD_REQUEST, "workerProfileId or bookingId is required");
+    // Only workers customers can see right now (approved, visibility paid, not suspended)
+    const profile = await ProfessionalProfile.findOne({ _id: input.workerProfileId, ...publicWorkerFilter() }).select("userId");
     if (!profile) throw notFound("Worker");
     if (String(profile.userId) === userId) {
       throw new AppError(httpStatus.BAD_REQUEST, "You cannot start a conversation with yourself");

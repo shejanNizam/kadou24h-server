@@ -1,13 +1,14 @@
 import { ClientSession } from "mongoose";
 import { Counter } from "./counter.model";
 
-export type CounterName = "order" | "sub_order" | "withdrawal" | "ticket";
+export type CounterName = "order" | "sub_order" | "withdrawal" | "ticket" | "booking";
 
 const PREFIX: Record<CounterName, string> = {
   order: "AP",
   sub_order: "SO",
   withdrawal: "WD-",
   ticket: "SUP-",
+  booking: "BK",
 };
 
 /** Atomically increments and returns the next number of a sequence. */

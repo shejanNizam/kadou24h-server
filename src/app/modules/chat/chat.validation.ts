@@ -7,7 +7,8 @@ const objectId = z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid id");
 const startConversationZodSchema = z.object({
   body: z.discriminatedUnion("type", [
     z.object({ type: z.literal(ConversationType.buyer_seller), vendorId: objectId }),
-    z.object({ type: z.literal(ConversationType.worker), workerProfileId: objectId }),
+    // From the worker page (customer → worker) or from a booking (either side)
+    z.object({ type: z.literal(ConversationType.worker), workerProfileId: objectId.optional(), bookingId: objectId.optional() }),
     z.object({
       type: z.literal(ConversationType.order),
       subOrderId: objectId,

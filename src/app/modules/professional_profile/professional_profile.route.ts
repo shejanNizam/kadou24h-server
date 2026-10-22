@@ -3,6 +3,7 @@ import { checkAuth } from "../../middlewares/checkAuth";
 import validateRequest from "../../middlewares/validateRequest";
 import { reviewApplicationZodSchema } from "../profile_common/profile.common";
 import { ADMIN_ROLES, APP_ROLES, UserRole } from "../user/user.interface";
+import { BookingControllers } from "../booking/booking.controller";
 import { ProfessionalProfileControllers } from "./professional_profile.controller";
 import {
   generateAiCvSchema,
@@ -15,6 +16,14 @@ const router = Router();
 // Public worker directory
 router.get("/workers", ProfessionalProfileControllers.searchWorkers);
 router.get("/workers/:id", ProfessionalProfileControllers.getWorkerById);
+/**
+ * @swagger
+ * /professional-profiles/workers/{id}/reviews:
+ *   get:
+ *     tags: [Professional Profile]
+ *     summary: A worker's reviews from completed bookings (stars, comment, work photos); meta.stars = count per rating
+ */
+router.get("/workers/:id/reviews", BookingControllers.getWorkerReviews);
 
 // Authenticated user profile endpoints
 router.get(

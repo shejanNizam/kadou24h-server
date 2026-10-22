@@ -16,6 +16,7 @@ export enum NotificationType {
   withdrawal_update = "withdrawal_update",
   refund_update = "refund_update",
   application_update = "application_update",
+  booking_update = "booking_update",
   profile_approved = "profile_approved",
   moderation_warning = "moderation_warning",
   account_suspended = "account_suspended",

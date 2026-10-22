@@ -313,6 +313,7 @@ try {
     { name: "Ibrahim Traoré", phone: "+224620000024", service: "Mechanic", profession: "Mécanicien moto & auto", rate: 70000, years: 10, area: "Matoto", skills: ["Moteur", "Freins", "Diagnostic"], lat: 9.58, lng: -13.6 },
     { name: "Fatou Keita", phone: "+224620000025", service: "Carpenter", profession: "Menuisière", rate: 55000, years: 7, area: "Dixinn", skills: ["Meubles sur mesure", "Portes et fenêtres", "Réparation"], lat: 9.53, lng: -13.69 },
   ];
+  const workerAccounts = [];
   for (const [i, w] of WORKERS.entries()) {
     const u = await signup(w.name, w.phone);
     const photo = people[i]?.image;
@@ -333,6 +334,7 @@ try {
     // Become a worker: sent for review, then approved by the team
     const profile = await call("POST", "/professional-profiles/me/worker-application/submit", null, u.token);
     await call("PATCH", `/professional-profiles/admin/workers/${profile._id}/review`, { action: "approve" }, admin);
+    workerAccounts.push({ token: u.token, profileId: profile._id });
   }
   console.log(`✓ ${WORKERS.length} workers`);
 
@@ -451,6 +453,23 @@ try {
   }
   console.log("✓ orders (2 delivered + reviewed, 1 on its way, 1 new, 1 preparing)");
 
+  // ── Worker bookings (paid directly to the worker, outside the app) ──
+  const [mamadou, kofi] = workerAccounts;
+  const inDays = (days, hour) => {
+    const d = new Date(Date.now() + days * 86_400_000);
+    d.setUTCHours(hour, 0, 0, 0);
+    return d.toISOString();
+  };
+  const done = await call("POST", "/bookings", { workerProfileId: mamadou.profileId, scheduledAt: inDays(1, 9), description: "Installer trois prises et un interrupteur dans le salon." }, customer.token);
+  await call("PATCH", `/bookings/${done._id}/accept`, null, mamadou.token);
+  await call("PATCH", `/bookings/${done._id}/done`, { agreedPrice: 180000 }, mamadou.token);
+  await call("PATCH", `/bookings/${done._id}/confirm`, null, customer.token);
+  await call("POST", `/bookings/${done._id}/review`, { rating: 5, comment: "Travail propre et rapide, je recommande.", photos: [img("https://picsum.photos/seed/kadou-work-1/800/600")] }, customer.token);
+  const upcoming = await call("POST", "/bookings", { workerProfileId: kofi.profileId, scheduledAt: inDays(2, 10), description: "Fuite sous l'évier de la cuisine, à réparer." }, customer.token);
+  await call("PATCH", `/bookings/${upcoming._id}/accept`, null, kofi.token);
+  await call("POST", "/bookings", { workerProfileId: mamadou.profileId, scheduledAt: inDays(3, 14), description: "Le groupe électrogène ne démarre plus, diagnostic à faire." }, customer.token);
+  console.log("✓ bookings (1 completed + reviewed, 1 accepted, 1 new request for Mamadou)");
+
   // TechHub products waiting for the admin: one pending, one sent back with a note
   const pendingSource = products.find((p) => p.category === "smartphones") ?? products[0];
   await call("POST", "/products", {
@@ -474,7 +493,7 @@ Demo accounts (password for all: ${PASSWORD})
   Rider (moto)    +224 620 00 00 03   linked to TechHub, online, carrying 1 order
   Bus driver      +224 620 00 00 04   Conakry → Labé
   Other stores    +224 620 00 00 12 / 13 / 14
-  Workers         +224 620 00 00 21 … 25
+  Workers         +224 620 00 00 21 … 25 (21 Mamadou: 1 new booking request, 1 completed; 22 Kofi: 1 accepted)
   Admin (dashboard) ${ADMIN.email} / ${ADMIN.password}
 `);
   stop(0);

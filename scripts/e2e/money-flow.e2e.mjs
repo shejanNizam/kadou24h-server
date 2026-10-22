@@ -558,6 +558,199 @@ const run = async () => {
   r = await call("PATCH", `/professional-profiles/admin/workers/${workerId}/review`, { action: "reinstate" }, admin);
   check("admin: reinstate shows it again", ok(r) && (await publicIds()).includes(workerId), brief(r));
 
+  // ═════ 5c. Worker bookings: request → accept → done → confirm → review; penalties; paid visibility ═════
+  const K = await signup("Kadi Booker", `+22462${stamp}6`);
+  const L = await signup("Lamine Client", `+22462${stamp}7`);
+  for (const [u, name, n] of [[K, "Kadi Booker", 6], [L, "Lamine Client", 7]]) {
+    await call("POST", "/addresses", { fullName: name, phone: `+22462${stamp}${n}`, city: "Conakry", commune: "Ratoma", neighborhood: "Kipé", landmark: "Près de la mosquée", location: { lat: 9.6, lng: -13.6 } }, u.token);
+  }
+  const at = (hours) => new Date(Date.now() + hours * 3_600_000).toISOString();
+  const job = "Installer trois prises et un interrupteur dans le salon.";
+  const book = (token, extra = {}) => call("POST", "/bookings", { workerProfileId: workerId, scheduledAt: at(26), description: job, ...extra }, token);
+  const db = async (task) => {
+    await mongoose.connect(DATABASE_URL);
+    try {
+      return await task(mongoose.connection);
+    } finally {
+      await mongoose.disconnect();
+    }
+  };
+  const oid = (id) => new mongoose.Types.ObjectId(id);
+
+  r = await call("GET", "/professional-profiles/me/worker-summary", null, C.token);
+  const trialDays = Math.round((new Date(r.body.data?.listing?.listedUntil).getTime() - Date.now()) / 86_400_000);
+  check("visibility: the first approval gives 30 free days", r.body.data?.isVisible === true && r.body.data?.listing?.trialUsed === true && trialDays >= 29 && trialDays <= 30, JSON.stringify(r.body.data?.listing ?? brief(r)));
+  r = await call("GET", `/professional-profiles/workers/${workerId}`);
+  check("public worker page: no visibility date or penalties", ok(r) && r.body.data?.listedUntil === undefined && r.body.data?.bookingPenalty === undefined, brief(r));
+
+  r = await book(K.token, { scheduledAt: at(0.1) });
+  check("booking: less than 30 min ahead refused", r.status === 400, brief(r));
+  r = await book(K.token, { description: "Court" });
+  check("booking: a description is required", r.status === 400, brief(r));
+  r = await book(C.token);
+  check("booking: a worker cannot book themselves", r.status === 400 && /yourself/i.test(r.body.message ?? ""), brief(r));
+  r = await book(K.token);
+  const bk1 = r.body.data;
+  const respondHours = (new Date(bk1?.respondBy).getTime() - Date.now()) / 3_600_000;
+  check("booking: request sent (BK number, answer within 24 h)", r.status === 201 && bk1?.status === "requested" && /^BK\d+/.test(bk1?.bookingNumber ?? "") && respondHours > 23 && respondHours <= 24, brief(r));
+  r = await book(K.token);
+  check("booking: only one open booking per worker", r.status === 409, brief(r));
+  r = await call("GET", `/bookings/${bk1?._id}`, null, X.token);
+  check("booking: a stranger cannot see it", r.status === 404, brief(r));
+  r = await call("GET", `/bookings/${bk1?._id}`, null, C.token);
+  check(
+    "booking: before accepting, the worker sees the area only (no phone, landmark or map point)",
+    r.body.data?.role === "worker" && r.body.data?.address?.neighborhood === "Kipé" && r.body.data?.address?.landmark === undefined && r.body.data?.address?.phone === undefined && r.body.data?.address?.location === undefined && r.body.data?.customer?.phone === undefined,
+    JSON.stringify(r.body.data?.address ?? brief(r)),
+  );
+  r = await call("GET", "/bookings?as=worker&status=requested", null, C.token);
+  check("worker: the request is in my list", r.body.data?.some((b) => b._id === bk1?._id) && r.body.meta?.counts?.requested === 1, brief(r));
+  check("worker told about the request", (await notificationTypes(C.token, "customer")).includes("booking_update"));
+  r = await call("PATCH", `/bookings/${bk1?._id}/accept`, null, K.token);
+  check("booking: the customer cannot accept", r.status === 404, brief(r));
+  r = await call("PATCH", `/bookings/${bk1?._id}/accept`, null, C.token);
+  check("booking: the worker accepts", ok(r) && r.body.data?.status === "accepted", brief(r));
+  check("…then sees the full address and the customer's phone", r.body.data?.address?.landmark === "Près de la mosquée" && r.body.data?.customer?.phone === `+22462${stamp}6`, JSON.stringify(r.body.data?.customer));
+  r = await call("GET", `/bookings/${bk1?._id}`, null, K.token);
+  check("…and the customer sees the worker's phone", r.body.data?.role === "customer" && r.body.data?.worker?.phone === `+22462${stamp}3` && r.body.data?.worker?.profileId === workerId, JSON.stringify(r.body.data?.worker));
+  check("customer told: accepted", (await notificationTypes(K.token, "customer")).includes("booking_update"));
+  r = await call("POST", "/conversations", { type: "worker", bookingId: bk1?._id }, C.token);
+  check("booking chat: the worker can write to the customer", ok(r) && Boolean(r.body.data?._id), brief(r));
+  r = await call("POST", "/conversations", { type: "worker", bookingId: bk1?._id }, X.token);
+  check("booking chat: a stranger cannot", r.status === 403, brief(r));
+  r = await call("POST", `/bookings/${bk1?._id}/review`, { rating: 5 }, K.token);
+  check("review: not before the job is completed", r.status === 400, brief(r));
+  r = await call("PATCH", `/bookings/${bk1?._id}/done`, { agreedPrice: 150000 }, K.token);
+  check("booking: only the worker marks it done", r.status === 404, brief(r));
+  r = await call("PATCH", `/bookings/${bk1?._id}/done`, { agreedPrice: 150000 }, C.token);
+  const confirmHours = (new Date(r.body.data?.confirmBy).getTime() - Date.now()) / 3_600_000;
+  check("booking: worker marks it done (customer confirms within 48 h)", ok(r) && r.body.data?.status === "done" && confirmHours > 47 && confirmHours <= 48, brief(r));
+  r = await call("PATCH", `/bookings/${bk1?._id}/cancel`, { reason: "Trop tard" }, K.token);
+  check("booking: a finished job cannot be cancelled", r.status === 400, brief(r));
+  r = await call("PATCH", `/bookings/${bk1?._id}/not-done`, { note: "Il manque l'interrupteur" }, K.token);
+  check("booking: customer says it is not finished → back to accepted", ok(r) && r.body.data?.status === "accepted" && r.body.data?.confirmBy === undefined, brief(r));
+  await call("PATCH", `/bookings/${bk1?._id}/done`, { agreedPrice: 150000 }, C.token);
+  r = await call("PATCH", `/bookings/${bk1?._id}/confirm`, null, K.token);
+  check("booking: customer confirms → completed", ok(r) && r.body.data?.status === "completed" && r.body.data?.canReview === true, brief(r));
+  r = await call("POST", `/bookings/${bk1?._id}/review`, { rating: 5, comment: "Travail propre et rapide", photos: [file("work-done")] }, K.token);
+  check("review: 5 stars, comment and a photo of the work", r.status === 201 && r.body.data?.photos?.length === 1, brief(r));
+  r = await call("POST", `/bookings/${bk1?._id}/review`, { rating: 1 }, K.token);
+  check("review: only once per booking", r.status === 409, brief(r));
+  r = await call("GET", `/professional-profiles/workers/${workerId}/reviews`);
+  check("public reviews: the review with its photo, author name only", r.body.meta?.total === 1 && r.body.meta?.stars?.["5"] === 1 && r.body.data?.[0]?.photos?.length === 1 && r.body.data?.[0]?.authorId?.name === "Kadi Booker" && r.body.data?.[0]?.authorId?.phone === undefined, brief(r));
+  r = await call("GET", `/professional-profiles/workers/${workerId}`);
+  check("worker rating updated from the review", r.body.data?.ratingAvg === 5 && r.body.data?.ratingCount === 1, JSON.stringify([r.body.data?.ratingAvg, r.body.data?.ratingCount]));
+  r = await call("GET", "/professional-profiles/me/worker-summary", null, C.token);
+  check("worker summary: completed jobs and estimated earnings", r.body.data?.bookings?.completed === 1 && r.body.data?.earnings?.total === 150000 && r.body.data?.earnings?.thisMonth === 150000, JSON.stringify([r.body.data?.bookings, r.body.data?.earnings]));
+
+  // Decline, unanswered request, unconfirmed job
+  r = await book(K.token);
+  r = await call("PATCH", `/bookings/${r.body.data?._id}/decline`, { reason: "Pas disponible ce jour-là" }, C.token);
+  check("booking: the worker declines (never a penalty)", ok(r) && r.body.data?.status === "declined" && r.body.data?.declineReason === "Pas disponible ce jour-là", brief(r));
+  r = await book(L.token);
+  const bkLate = r.body.data?._id;
+  r = await book(K.token);
+  const bkAuto = r.body.data?._id;
+  await call("PATCH", `/bookings/${bkAuto}/accept`, null, C.token);
+  await call("PATCH", `/bookings/${bkAuto}/done`, null, C.token);
+  await db((c) =>
+    Promise.all([
+      c.collection("bookings").updateOne({ _id: oid(bkLate) }, { $set: { respondBy: new Date(Date.now() - 1000) } }),
+      c.collection("bookings").updateOne({ _id: oid(bkAuto) }, { $set: { confirmBy: new Date(Date.now() - 1000) } }),
+    ]),
+  );
+  r = await call("PATCH", `/bookings/${bkLate}/accept`, null, C.token);
+  check("booking: an expired request cannot be accepted", r.status === 400 && /expired/i.test(r.body.message ?? ""), brief(r));
+  let autoDone;
+  for (let i = 0; i < 80 && !autoDone; i++) {
+    await sleep(1000);
+    const d = (await call("GET", `/bookings/${bkAuto}`, null, K.token)).body.data;
+    if (d?.status === "completed") autoDone = d;
+  }
+  check("sweep: a job not confirmed in 48 h completes by itself", autoDone?.completedBy === "system", JSON.stringify(autoDone?.status ?? "not completed after 80 s"));
+  r = await call("GET", `/bookings/${bkLate}`, null, L.token);
+  check("…and the unanswered request expired", r.body.data?.status === "expired", brief(r));
+  r = await call("GET", "/bookings/me/standing", null, K.token);
+  check("declines and expiries never count against anyone", r.body.data?.customer?.strikes30d === 0, brief(r));
+
+  // Customer cancels before acceptance: free
+  r = await book(K.token);
+  r = await call("PATCH", `/bookings/${r.body.data?._id}/cancel`, null, K.token);
+  check("customer cancels before acceptance: no penalty", ok(r) && r.body.data?.booking?.status === "cancelled" && r.body.data?.penalty === null, brief(r));
+
+  // Worker cancels after acceptance: warning → 15 days less visible → 7-day suspension
+  const acceptedFor = async (u) => {
+    const b = (await book(u.token)).body.data?._id;
+    await call("PATCH", `/bookings/${b}/accept`, null, C.token);
+    return b;
+  };
+  let b = await acceptedFor(K);
+  r = await call("PATCH", `/bookings/${b}/cancel`, {}, C.token);
+  check("cancel after acceptance needs a reason", r.status === 400, brief(r));
+  r = await call("PATCH", `/bookings/${b}/cancel`, { reason: "Urgence familiale" }, C.token);
+  check("worker 1st cancellation: a warning", ok(r) && r.body.data?.penalty?.penalty === "warning" && r.body.data?.penalty?.tier === 1, JSON.stringify(r.body.data?.penalty ?? brief(r)));
+  b = await acceptedFor(L);
+  r = await call("PATCH", `/bookings/${b}/cancel`, { reason: "Malade" }, C.token);
+  const lessDays = Math.round((new Date(r.body.data?.penalty?.lessVisibleUntil).getTime() - Date.now()) / 86_400_000);
+  check("worker 2nd cancellation: less visible for 15 days", r.body.data?.penalty?.penalty === "less_visible" && lessDays === 15, JSON.stringify(r.body.data?.penalty ?? brief(r)));
+  check("…still listed (just lower)", (await publicIds()).includes(workerId));
+  const pendingL = (await book(L.token)).body.data?._id;
+  b = await acceptedFor(K);
+  r = await call("PATCH", `/bookings/${b}/cancel`, { reason: "Pas de transport" }, C.token);
+  check("worker 3rd cancellation: suspended 7 days, then one booking at a time", r.body.data?.penalty?.penalty === "suspension" && Boolean(r.body.data?.penalty?.suspendedUntil) && Boolean(r.body.data?.penalty?.limitedUntil), JSON.stringify(r.body.data?.penalty ?? brief(r)));
+  check("suspended: hidden from customers", !(await publicIds()).includes(workerId));
+  r = await book(X.token);
+  check("suspended: no new bookings", r.status === 404, brief(r));
+  r = await call("PATCH", `/bookings/${pendingL}/accept`, null, C.token);
+  check("suspended: cannot accept a waiting request", r.status === 403 && /suspended/i.test(r.body.message ?? ""), brief(r));
+  r = await call("GET", "/professional-profiles/me/worker-summary", null, C.token);
+  check("worker summary: the penalty and the 3 counted cancellations", Boolean(r.body.data?.penalty?.suspendedUntil) && r.body.data?.penalty?.strikes?.length === 3 && r.body.data?.isVisible === false, JSON.stringify(r.body.data?.penalty ?? brief(r)));
+
+  // Admin
+  r = await call("GET", "/bookings/admin/penalties?role=worker&active=true", null, C.token);
+  check("admin penalties: customers refused", r.status === 403, brief(r));
+  r = await call("GET", "/bookings/admin/penalties?role=worker&active=true", null, admin);
+  const severe = r.body.data?.find((s) => s.penalty === "suspension");
+  check("admin penalties: the worker's 3 strikes with the booking", r.body.meta?.total === 3 && severe?.userId?.name === "Customer One" && /^BK/.test(severe?.bookingId?.bookingNumber ?? ""), brief(r));
+  r = await call("PATCH", `/bookings/admin/penalties/${severe?._id}`, { action: "soften", note: "Première fois" }, admin);
+  check("admin softens the suspension → 30 days less visible", ok(r) && r.body.data?.penalty === "less_visible" && r.body.data?.suspendedUntil === undefined, brief(r));
+  check("…visible again", (await publicIds()).includes(workerId));
+  r = await call("PATCH", `/bookings/${pendingL}/accept`, null, C.token);
+  check("…and can accept again", ok(r) && r.body.data?.status === "accepted", brief(r));
+  r = await call("PATCH", `/bookings/admin/penalties/${severe?._id}`, { action: "lift" }, admin);
+  check("admin lifts it", ok(r) && Boolean(r.body.data?.liftedAt), brief(r));
+  r = await call("PATCH", `/bookings/admin/penalties/${severe?._id}`, { action: "lift" }, admin);
+  check("admin: a lifted penalty cannot be lifted twice", r.status === 400, brief(r));
+  check("worker told about the change", (await notificationTypes(C.token, "customer")).filter((t) => t === "booking_update").length >= 5);
+  r = await call("GET", "/bookings/admin?status=accepted", null, admin);
+  check("admin bookings: list with counts and contacts", ok(r) && r.body.data?.some((x) => x._id === pendingL && x.customer?.phone === `+22462${stamp}7`) && r.body.meta?.counts?.completed >= 2, brief(r));
+  r = await call("PATCH", `/bookings/admin/${pendingL}/cancel`, { reason: "Litige signalé" }, admin);
+  check("admin cancels a booking: no penalty for anyone", ok(r) && r.body.data?.status === "cancelled" && r.body.data?.strikes?.length === 0, brief(r));
+
+  // Customer cancels after acceptance 3 times → one booking at a time
+  for (let i = 1; i <= 3; i++) {
+    b = await acceptedFor(K);
+    r = await call("PATCH", `/bookings/${b}/cancel`, { reason: "Plus besoin" }, K.token);
+  }
+  check("customer 3rd cancellation: one booking at a time for 30 days", r.body.data?.penalty?.penalty === "limited" && Boolean(r.body.data?.penalty?.limitedUntil), JSON.stringify(r.body.data?.penalty ?? brief(r)));
+  r = await call("GET", "/bookings/me/standing", null, K.token);
+  check("customer standing: 3 cancellations, limited", r.body.data?.customer?.strikes30d === 3 && Boolean(r.body.data?.customer?.limitedUntil), brief(r));
+  r = await book(K.token);
+  check("limited customer: a first booking is fine", r.status === 201, brief(r));
+  r = await book(K.token);
+  check("limited customer: a second one is refused", r.status === 400 && /one at a time/i.test(r.body.message ?? ""), brief(r));
+
+  // Paid visibility: when the period ends the worker is hidden; a service-provider plan brings them back
+  await db((c) => c.collection("professionalprofiles").updateOne({ _id: oid(workerId) }, { $set: { listedUntil: new Date(Date.now() - 1000) } }));
+  check("visibility over: hidden from customers", !(await publicIds()).includes(workerId));
+  r = await call("POST", "/conversations", { type: "worker", workerProfileId: workerId }, L.token);
+  check("visibility over: no new chats from the worker page", r.status === 404, brief(r));
+  r = await call("POST", "/subscriptions/admin/plans", { name: "Travailleur 30 jours", audience: "service_provider", price: 20000, durationDays: 30, features: [], highlights: ["Visible par les clients"] }, admin);
+  r = await call("POST", "/subscriptions/subscribe", { planId: r.body.data?._id, paymentMethod: "orange_money" }, C.token);
+  await webhook({ paymentId: r.body.data?.payment?._id, status: "success" });
+  r = await call("GET", "/professional-profiles/me/worker-summary", null, C.token);
+  const paidDays = Math.round((new Date(r.body.data?.listing?.listedUntil).getTime() - Date.now()) / 86_400_000);
+  check("service-provider plan paid: visible again for its 30 days", r.body.data?.isVisible === true && paidDays === 30 && (await publicIds()).includes(workerId), JSON.stringify(r.body.data?.listing ?? brief(r)));
   // ═════ 6. Access control ═════
   r = await call("GET", `/deliveries/${legId}/track`, null, X.token);
   check("stranger cannot track a delivery", r.status === 403, brief(r));

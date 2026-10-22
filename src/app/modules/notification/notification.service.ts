@@ -48,6 +48,8 @@ const PREF_BY_TYPE: Record<NotificationType, keyof INotificationPrefs> = {
   [NotificationType.ready_for_pickup]: "orderUpdates",
   [NotificationType.feedback_request]: "orderUpdates",
   [NotificationType.refund_update]: "orderUpdates",
+  // Worker bookings are service orders
+  [NotificationType.booking_update]: "orderUpdates",
   [NotificationType.rider_on_the_way]: "deliveryUpdates",
   [NotificationType.new_delivery_assigned]: "deliveryUpdates",
   [NotificationType.collect_payment]: "deliveryUpdates",

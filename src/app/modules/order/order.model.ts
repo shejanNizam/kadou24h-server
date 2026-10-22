@@ -9,7 +9,7 @@ import {
   PaymentStatus,
 } from "./order.interface";
 
-const addressSnapshotSchema = new Schema<IAddressSnapshot>(
+export const addressSnapshotSchema = new Schema<IAddressSnapshot>(
   {
     fullName: { type: String, required: true, trim: true },
     phone: { type: String, required: true, trim: true },

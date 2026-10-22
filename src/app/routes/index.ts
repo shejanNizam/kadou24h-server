@@ -29,6 +29,7 @@ import { SupportTicketRoutes } from "../modules/support_ticket/support_ticket.ro
 import { AdvertisementRoutes } from "../modules/advertisement/advertisement.route";
 import { AdminDashboardRoutes } from "../modules/admin_dashboard/admin_dashboard.route";
 import { ReviewRoutes } from "../modules/review/review.route";
+import { BookingRoutes } from "../modules/booking/booking.route";
 
 const router = Router();
 
@@ -63,6 +64,7 @@ const moduleRoutes = [
   { path: "/advertisements", route: AdvertisementRoutes },
   { path: "/admin/dashboard", route: AdminDashboardRoutes },
   { path: "/reviews", route: ReviewRoutes },
+  { path: "/bookings", route: BookingRoutes },
 ];
 
 moduleRoutes.forEach((route) => {

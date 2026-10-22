@@ -13,7 +13,8 @@ import { VendorProfile } from "../vendor_profile/vendor_profile.model";
 import { SettingsServices } from "../settings/settings.service";
 import { SubscriptionPlan } from "../subscription/subscription_plan.model";
 import { UserSubscription } from "../subscription/user_subscription.model";
-import { SubscriptionStatus } from "../subscription/subscription.interface";
+import { PlanAudience, SubscriptionStatus } from "../subscription/subscription.interface";
+import { extendWorkerListing } from "../professional_profile/worker_listing";
 import { ProfessionalProfile } from "../professional_profile/professional_profile.model";
 import { Job } from "../job/job.model";
 import { ApplicationStatus, JobStatus } from "../job/job.interface";
@@ -234,6 +235,10 @@ const handleWebhook = async (payload: {
           { $set: { cvVisible: true, visibleUntil: sub.endsAt } },
           { upsert: true },
         );
+      }
+      // A service-provider plan keeps the worker visible to customers (client, 2026-10-22)
+      if (sub && plan?.audience === PlanAudience.service_provider) {
+        await extendWorkerListing(payment.payerId, plan.durationDays);
       }
     }
 

@@ -12,6 +12,7 @@ import {
 } from "./subscription.interface";
 import { SubscriptionPlan } from "./subscription_plan.model";
 import { UserSubscription } from "./user_subscription.model";
+import { extendWorkerListing } from "../professional_profile/worker_listing";
 
 const createPlan = async (
   adminUserId: string,
@@ -98,6 +99,10 @@ const subscribe = async (
       { $set: { cvVisible: true, visibleUntil: endsAt } },
       { upsert: true },
     );
+  }
+  // A service-provider plan keeps the worker visible to customers
+  if (isPaid && plan.audience === PlanAudience.service_provider) {
+    await extendWorkerListing(userId, plan.durationDays);
   }
 
   return { subscription, payment };

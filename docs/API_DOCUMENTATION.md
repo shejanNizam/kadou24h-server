@@ -1088,6 +1088,32 @@ Errors: 409 already connected / already invited · 403 the inviter tried to answ
 | `POST /deliveries/:id/assign` | Vendor / Admin | assign delivery leg to partner: `{ riderId }`; sends real-time push/socket alert |
 | `GET /deliveries/:id/track` | Customer, store owner, riders of the leg chain, admin | live delivery tracking. The customer and the store may follow every leg of their order. **PIN visibility**: `pickupPin` only to the giver (the vendor on the leg that starts at the store, or the rider arriving at a station), `handoverPin` only to the receiver (the customer on the final leg, or the next rider at a station). Middle station→station legs show no PIN to the customer or the store. The assigned rider never sees its own leg's PINs. On the rider's own leg at bus stations: `incomingHandoverPin` (show it to the rider arriving with the parcel) and `outgoingPickupPin` (show it to the rider taking the parcel next). |
 
+### 7.20k Worker bookings, penalties, reviews and paid visibility (2026-10-22, client rules)
+
+Payment is made **directly** between the customer and the worker (cash / Orange Money), never through the app: no escrow, no commission. Revenue = worker subscriptions.
+
+**Bookings** (`/bookings`, app roles):
+- `POST /bookings` `{ workerProfileId, scheduledAt, addressId?, description (10–1000), photos? (≤ 5) }` → `requested`, number `BK…`, `respondBy` = 24 h (or the date, if sooner). Rules: ≥ 30 min and ≤ 60 days ahead; worker must be public (see visibility); not yourself; one open booking per worker (409); ≤ 5 requests waiting; a limited customer (penalty) can have only one active booking.
+- `GET /bookings?as=customer|worker&status=active|history|<status>` (meta.counts per status), `GET /bookings/:id`, `GET /bookings/me/standing` (customer: cancellations in 30 days, `limitedUntil`).
+- Worker: `PATCH /:id/accept` (not while suspended; one at a time while limited), `PATCH /:id/decline { reason? }`, `PATCH /:id/done { agreedPrice? }` → `done`, `confirmBy` = 48 h.
+- Customer: `PATCH /:id/confirm` → `completed`; `PATCH /:id/not-done { note? }` → back to `accepted`; `POST /:id/review { rating 1–5, comment?, photos? (≤ 4) }` (completed only, once).
+- Either: `PATCH /:id/cancel { reason }` — before acceptance (customer) free; after acceptance the reason is required and it **counts** (response `{ booking, penalty }`). A worker "cancelling" a request declines it. A `done` job can't be cancelled.
+- Privacy: before acceptance the worker sees the area only (city, commune, neighborhood); once accepted both see each other's phone, the worker the full address, landmark, map point and gate photo. Public worker pages never show a phone.
+- Sweep (every minute): unanswered requests → `expired`; `done` not confirmed in 48 h → `completed` (by system).
+- Chat: `POST /conversations { type: "worker", bookingId }` lets either person write (even after the listing ends).
+- Socket `booking:updated { bookingId, status }` to both; notifications type `booking_update` (data `{ kind: "booking", bookingId, status }`).
+
+**Penalties** — cancellations after acceptance over the rolling last 30 days (lifted ones don't count):
+- Worker: 1st warning · 2nd less visible 15 days (sorted after everyone else) · 3rd+ suspended 7 days (hidden, no new bookings, can't accept) then one booking at a time until day 30. Messages use the client's wording (data `{ kind: "booking_penalty" }`).
+- Customer: 1st–2nd warning · 3rd+ one active booking at a time for 30 days.
+- Admin: `GET /bookings/admin/penalties?role=&active=true&search=`, `PATCH /bookings/admin/penalties/:id { action: lift | soften, note? }` (soften = a worker's suspension becomes 30 days less visible). Audit-logged, person notified.
+
+**Reviews**: public `GET /professional-profiles/workers/:id/reviews` (meta.stars per rating; author name + avatar only); the worker's `ratingAvg/ratingCount` come from visible reviews. Admin `GET /bookings/admin/reviews`, `PATCH /bookings/admin/reviews/:id { status: visible | hidden }`.
+
+**Admin bookings**: `GET /bookings/admin?status=&search=` (meta.counts), `GET /bookings/admin/:id` (contacts, history, review, strikes), `PATCH /bookings/admin/:id/cancel { reason }` (never a penalty).
+
+**Paid visibility**: a worker is public only while `listedUntil` > now (plus listed, approved, not suspended). The first approval gives **30 free days**; workers approved before this change got the same at server start. Any **service-provider plan** paid → `listedUntil` extended by its `durationDays` (after what is left). Notices 3 days before the end and at the end (data `{ kind: "worker_listing" }`). Profile also has `workPhotos` (≤ 10, public). The worker summary (`GET /professional-profiles/me/worker-summary`) adds `isVisible`, `listing`, `penalty` (+ strikes), `bookings` counts and `earnings { total, thisMonth, pricedJobs }` (from the prices workers entered).
+
 ### 7.20j Become a worker — admin approval (2026-10-21)
 
 - A professional profile is the CV **and** the worker listing. The listing now has the same approval workflow as stores and riders (`approvalStatus`, `reviewNote`, `reviewedBy`, `reviewedAt`, `submittedAt`, `applicationHistory`; shared `profile_common` transitions). New fields: `workingHours { days: [0–6], from, to }` ("HH:mm"), `idDocument` (file).

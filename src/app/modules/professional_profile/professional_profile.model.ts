@@ -63,6 +63,13 @@ const professionalProfileSchema = new Schema<IProfessionalProfile>(
       ),
     },
     idDocument: { type: fileRefSchema },
+    workPhotos: { type: [fileRefSchema], default: [] },
+    listedUntil: { type: Date },
+    trialUsedAt: { type: Date },
+    listingNotice: { type: new Schema({ soonFor: Date, endedFor: Date }, { _id: false }) },
+    bookingPenalty: {
+      type: new Schema({ lessVisibleUntil: Date, suspendedUntil: Date, limitedUntil: Date }, { _id: false }),
+    },
     // Worker listing approval (draft → pending → approved / rejected / needs_changes / suspended)
     ...reviewFields,
   },
@@ -75,6 +82,7 @@ const professionalProfileSchema = new Schema<IProfessionalProfile>(
 professionalProfileSchema.index({ isWorkerListed: 1, serviceCategoryId: 1 });
 professionalProfileSchema.index({ approvalStatus: 1, submittedAt: -1 });
 professionalProfileSchema.index({ cvVisible: 1, visibleUntil: 1 });
+professionalProfileSchema.index({ approvalStatus: 1, isWorkerListed: 1, listedUntil: 1 });
 professionalProfileSchema.index({ location: "2dsphere" });
 professionalProfileSchema.index(
   { profession: "text", summary: "text", skills: "text" },

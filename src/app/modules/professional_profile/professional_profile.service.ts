@@ -11,12 +11,30 @@ import { Conversation } from "../chat/conversation.model";
 import { Notify } from "../notification/notification.events";
 import { ApprovalStatus, ReviewAction, applyReview, markSubmitted } from "../profile_common/profile.common";
 import { User } from "../user/user.model";
+import { BookingStatus, StrikeRole } from "../booking/booking.interface";
+import { Booking, BookingStrike } from "../booking/booking.model";
+import { PENALTY } from "../booking/booking.constants";
+import { grantListingGrace, isPublicWorker, publicWorkerFilter, startTrialIfFirst } from "./worker_listing";
 
-/** Never in public worker responses: ID document, CV files (paid unlock for recruiters), review data. */
-const PUBLIC_HIDDEN = "-idDocument -uploadedResume -generatedCv -reviewNote -reviewedBy -reviewedAt -submittedAt -applicationHistory";
-
-/** Customers see a worker only while listed AND approved by an admin. */
-const PUBLIC_WORKER = { isWorkerListed: true, approvalStatus: ApprovalStatus.approved };
+/**
+ * Never in public worker responses: ID document, CV files (paid unlock for recruiters),
+ * review data, penalties and subscription details.
+ */
+const HIDDEN_FIELDS = [
+  "idDocument",
+  "uploadedResume",
+  "generatedCv",
+  "reviewNote",
+  "reviewedBy",
+  "reviewedAt",
+  "submittedAt",
+  "applicationHistory",
+  "bookingPenalty",
+  "listingNotice",
+  "trialUsedAt",
+  "listedUntil",
+];
+const PUBLIC_HIDDEN = HIDDEN_FIELDS.map((k) => `-${k}`).join(" ");
 
 /**
  * Gets or initializes the user's professional profile.
@@ -130,7 +148,9 @@ const searchWorkers = async (query: {
   const limit = Math.max(1, Math.min(50, Number(query.limit) || 20));
   const skip = (page - 1) * limit;
 
-  const filter: Record<string, unknown> = { ...PUBLIC_WORKER };
+  const now = new Date();
+  // Listed, approved, visibility paid (or trial), not suspended
+  const filter: Record<string, unknown> = { ...publicWorkerFilter(now) };
 
   if (query.categoryId) {
     filter.serviceCategoryId = new Types.ObjectId(query.categoryId);
@@ -164,22 +184,28 @@ const searchWorkers = async (query: {
 
   await expireCvVisibility();
 
-  const [workers, total] = await Promise.all([
-    ProfessionalProfile.find(filter)
-      .select(PUBLIC_HIDDEN)
-      // Public endpoint: never phone / email (contact goes through in-app chat)
-      .populate("userId", "name avatar")
-      .populate("serviceCategoryId", "name slug")
-      // Subscribers ("priority search visibility") first, then by rating
-      .sort({ cvVisible: -1, ratingAvg: -1, createdAt: -1 })
-      .skip(skip)
-      .limit(limit),
+  const [rows, total] = await Promise.all([
+    ProfessionalProfile.aggregate([
+      { $match: filter },
+      // Reduced visibility after cancellations (penalty): after everyone else
+      { $addFields: { lessVisible: { $cond: [{ $gt: ["$bookingPenalty.lessVisibleUntil", now] }, 1, 0] } } },
+      // Then subscribers ("priority search visibility"), then by rating
+      { $sort: { lessVisible: 1, cvVisible: -1, ratingAvg: -1, createdAt: -1 } },
+      { $skip: skip },
+      { $limit: limit },
+      { $project: Object.fromEntries([...HIDDEN_FIELDS, "lessVisible"].map((k) => [k, 0])) },
+    ]),
     ProfessionalProfile.countDocuments(filter),
+  ]);
+  // Public endpoint: never phone / email (contact goes through in-app chat)
+  const workers = await ProfessionalProfile.populate(rows, [
+    { path: "userId", select: "name avatar" },
+    { path: "serviceCategoryId", select: "name slug" },
   ]);
 
   return {
     meta: { page, limit, total, totalPage: Math.ceil(total / limit) },
-    data: workers.map((w) => ({ ...w.toObject(), isPremium: w.cvVisible })),
+    data: workers.map((w) => ({ ...w, isPremium: w.cvVisible })),
   };
 };
 
@@ -195,7 +221,7 @@ const expireCvVisibility = () =>
  * Public view of a single listed worker profile.
  */
 const getWorkerById = async (profileId: string) => {
-  const profile = await ProfessionalProfile.findOne({ _id: profileId, ...PUBLIC_WORKER })
+  const profile = await ProfessionalProfile.findOne({ _id: profileId, ...publicWorkerFilter() })
     .select(PUBLIC_HIDDEN)
     .populate("userId", "name avatar")
     .populate("serviceCategoryId", "name slug");
@@ -286,8 +312,9 @@ const submitWorkerApplication = async (userId: string) => {
 };
 
 /**
- * Worker home: status, the customers who wrote (worker chats) and the rating.
- * Only real data — there is no booking or earnings system for workers.
+ * Worker home: status, visibility (trial / subscription), penalties, bookings, estimated
+ * earnings (prices the worker entered — payments never go through the app), the customers
+ * who wrote (worker chats) and the rating.
  */
 const getWorkerSummary = async (userId: string) => {
   const profile = await getMyProfile(userId);
@@ -308,6 +335,32 @@ const getWorkerSummary = async (userId: string) => {
     ]),
     Conversation.find(chats).sort({ "lastMessage.at": -1 }).limit(5).lean(),
   ]);
+  const now = new Date();
+  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+  const [byStatus, earned, strikes] = await Promise.all([
+    Booking.aggregate<{ _id: BookingStatus; n: number }>([
+      { $match: { workerId: profile.userId } },
+      { $group: { _id: "$status", n: { $sum: 1 } } },
+    ]),
+    Booking.aggregate<{ total: number; month: number; priced: number }>([
+      { $match: { workerId: profile.userId, status: BookingStatus.completed } },
+      {
+        $group: {
+          _id: null,
+          total: { $sum: { $ifNull: ["$agreedPrice", 0] } },
+          month: { $sum: { $cond: [{ $gte: ["$completedAt", monthStart] }, { $ifNull: ["$agreedPrice", 0] }, 0] } },
+          priced: { $sum: { $cond: [{ $gt: ["$agreedPrice", 0] }, 1, 0] } },
+        },
+      },
+    ]),
+    BookingStrike.find({ userId: profile.userId, role: StrikeRole.worker, liftedAt: { $exists: false }, createdAt: { $gt: new Date(now.getTime() - PENALTY.windowMs) } })
+      .sort({ createdAt: -1 })
+      .select("tier penalty lessVisibleUntil suspendedUntil limitedUntil createdAt softenedAt")
+      .lean(),
+  ]);
+  const count = (status: BookingStatus) => byStatus.find((b) => b._id === status)?.n ?? 0;
+  const active = (date?: Date) => (date && date > now ? date : undefined);
+  const penalty = profile.bookingPenalty;
 
   const peerOf = (c: (typeof recent)[number]) => c.participants.find((p) => String(p.userId) !== String(profile.userId));
   const peerIds = recent.flatMap((c) => {
@@ -325,6 +378,27 @@ const getWorkerSummary = async (userId: string) => {
     reviewNote: profile.reviewNote,
     submittedAt: profile.submittedAt,
     isWorkerListed: profile.isWorkerListed,
+    /** Shown to customers right now (approved, listed, paid or trial, not suspended) */
+    isVisible: isPublicWorker(profile, now),
+    listing: {
+      listedUntil: profile.listedUntil,
+      active: !!profile.listedUntil && profile.listedUntil > now,
+      trialUsed: !!profile.trialUsedAt,
+    },
+    penalty: {
+      lessVisibleUntil: active(penalty?.lessVisibleUntil),
+      suspendedUntil: active(penalty?.suspendedUntil),
+      limitedUntil: active(penalty?.limitedUntil),
+      /** Cancellations counted in the last 30 days (latest first) */
+      strikes,
+    },
+    bookings: {
+      requested: count(BookingStatus.requested),
+      accepted: count(BookingStatus.accepted),
+      done: count(BookingStatus.done),
+      completed: count(BookingStatus.completed),
+    },
+    earnings: { total: earned[0]?.total ?? 0, thisMonth: earned[0]?.month ?? 0, pricedJobs: earned[0]?.priced ?? 0 },
     ratingAvg: profile.ratingAvg,
     ratingCount: profile.ratingCount,
     messages: {
@@ -362,7 +436,7 @@ const getWorkersForAdmin = async (query: { status?: string; search?: string; pag
 
   const [data, total, counts] = await Promise.all([
     ProfessionalProfile.find(filter)
-      .select("userId profession city photo hourlyRate experienceYears serviceCategoryId approvalStatus submittedAt reviewedAt isWorkerListed ratingAvg ratingCount")
+      .select("userId profession city photo hourlyRate experienceYears serviceCategoryId approvalStatus submittedAt reviewedAt isWorkerListed ratingAvg ratingCount listedUntil bookingPenalty")
       .populate("userId", "name phone email avatar")
       .populate("serviceCategoryId", "name")
       .sort({ submittedAt: -1 })
@@ -400,6 +474,8 @@ const reviewWorker = async (id: string, payload: { action: ReviewAction; note?: 
 
   const before = profile.approvalStatus;
   const status = applyReview(profile, payload.action, payload.note, actorId);
+  // First approval: free visibility period starts
+  if (status === ApprovalStatus.approved) startTrialIfFirst(profile);
   await profile.save();
   Notify.workerReviewed(profile.userId, status, payload.note);
 
@@ -425,6 +501,8 @@ const approveLegacyListedWorkers = async () => {
   );
   // Everyone else never applied: a CV only (keeps them out of the admin list)
   await ProfessionalProfile.updateMany({ approvalStatus: { $exists: false } }, { $set: { approvalStatus: ApprovalStatus.draft } });
+  // Approved before subscriptions existed: the same free period as a new worker
+  await grantListingGrace();
   return res.modifiedCount;
 };
 

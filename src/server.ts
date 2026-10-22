@@ -8,6 +8,7 @@ import { seedSuperAdmin } from "./app/utils/seedSuperAdmin";
 import { logger } from "./app/utils/logger";
 import { initSocket } from "./socket/socket";
 import { OrderPaymentServices } from "./app/modules/order/order.payment.service";
+import { BookingServices } from "./app/modules/booking/booking.service";
 import { ProfessionalProfileServices } from "./app/modules/professional_profile/professional_profile.service";
 
 let server: Server;
@@ -32,6 +33,8 @@ async function main() {
     });
     // Online orders not paid in time are cancelled and their stock released
     OrderPaymentServices.startPaymentExpirySweep();
+    // Worker bookings: unanswered requests expire, unconfirmed jobs complete, visibility notices
+    BookingServices.startBookingSweep();
   } catch (error) {
     logger.error("Startup failed", { error });
     process.exit(1);

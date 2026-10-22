@@ -57,6 +57,7 @@ export const upsertProfileSchema = z.object({
     .nullable()
     .optional(),
   idDocument: fileRefZod.nullable().optional(),
+  workPhotos: z.array(fileRefZod).max(10, "Up to 10 work photos").optional(),
 });
 
 export const toggleWorkerListingSchema = z.object({
