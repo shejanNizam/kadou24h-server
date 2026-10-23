@@ -141,6 +141,12 @@ const deliverySchema = new Schema<IDelivery>(
       type: String,
       trim: true,
     },
+    offerOpenedAt: { type: Date },
+    offerRadiusKm: { type: Number },
+    offerNotified: { type: [Schema.Types.ObjectId], default: undefined, select: false },
+    offerSkippedBy: { type: [Schema.Types.ObjectId], default: undefined, select: false },
+    noRiderAlertedAt: { type: Date },
+    reservedUntil: { type: Date },
     assignedAt: {
       type: Date,
     },
@@ -163,5 +169,7 @@ const deliverySchema = new Schema<IDelivery>(
 deliverySchema.index({ subOrderId: 1, legNumber: 1 });
 deliverySchema.index({ riderId: 1, status: 1 });
 deliverySchema.index({ status: 1, createdAt: -1 });
+// Open offers (rider list) and the dispatch sweep
+deliverySchema.index({ status: 1, offerOpenedAt: 1 });
 
 export const Delivery = model<IDelivery>("deliveries", deliverySchema);

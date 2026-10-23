@@ -1,7 +1,7 @@
 import { ClientSession } from "mongoose";
 import { Counter } from "./counter.model";
 
-export type CounterName = "order" | "sub_order" | "withdrawal" | "ticket" | "booking";
+export type CounterName = "order" | "sub_order" | "withdrawal" | "ticket" | "booking" | "ride";
 
 const PREFIX: Record<CounterName, string> = {
   order: "AP",
@@ -9,6 +9,7 @@ const PREFIX: Record<CounterName, string> = {
   withdrawal: "WD-",
   ticket: "SUP-",
   booking: "BK",
+  ride: "RD",
 };
 
 /** Atomically increments and returns the next number of a sequence. */

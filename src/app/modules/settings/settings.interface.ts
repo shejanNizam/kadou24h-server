@@ -35,6 +35,14 @@ export interface ISettingsInitial {
     spontaneousApplicationFee: number;
   };
 
+  // Moto-taxi (A → B): the price is fixed before the request and paid in cash to the rider
+  rides: {
+    enabled: boolean;
+    baseFare: number; // GNF at pickup
+    perKm: number; // GNF per road km
+    minFare: number; // GNF, shortest rides
+  };
+
   moderation: {
     restrictAfter: number; // violations before chat is restricted
     suspendAfter: number; // violations before the account is suspended

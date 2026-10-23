@@ -35,6 +35,7 @@ const getPublicSettings = async () => {
     taxRate: s.taxRate,
     withdrawalFees: s.withdrawalFees,
     pricing: s.pricing,
+    rides: s.rides,
   };
 };
 

@@ -156,7 +156,7 @@ router.patch(
  * /payments/{id}/dev-confirm:
  *   post:
  *     tags: [Wallet]
- *     summary: "Development only: finish my pending payment like the gateway webhook would (404 in production)"
+ *     summary: "Demo payment: finish my pending payment like the gateway webhook would (development, or PAYMENT_MODE=demo; else 404)"
  *     security:
  *       - bearerAuth: []
  *     requestBody:

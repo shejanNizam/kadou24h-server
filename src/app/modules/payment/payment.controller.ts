@@ -16,13 +16,20 @@ import {
   RefundStatus,
 } from "./payment.interface";
 
+/** No gateway connected yet: the app may finish its own payments (see PAYMENT_MODE) */
+const demoPayments = () => configs.payment_mode === "demo";
+const withMode = (payment: { toObject?: () => object } & object) => ({
+  ...(typeof payment.toObject === "function" ? payment.toObject() : payment),
+  demo: demoPayments(),
+});
+
 const initiatePayment = catchAsync(async (req: Request, res: Response) => {
   const result = await PaymentServices.initiatePayment(req.user._id, req.body);
   sendResponse(res, {
     statusCode: httpStatus.CREATED,
     success: true,
     message: "Payment initiated successfully!",
-    data: result,
+    data: withMode(result),
   });
 });
 
@@ -179,19 +186,20 @@ const getMyPayment = catchAsync(async (req: Request, res: Response) => {
     statusCode: httpStatus.OK,
     success: true,
     message: "Payment retrieved successfully!",
-    data: result,
+    data: withMode(result),
   });
 });
 
 const devConfirmPayment = catchAsync(async (req: Request, res: Response) => {
-  if (configs.node_env === "production") {
+  // Real gateway connected: only the gateway confirms payments
+  if (configs.node_env === "production" && !demoPayments()) {
     throw new AppError(httpStatus.NOT_FOUND, "Route not found");
   }
   const result = await PaymentServices.devConfirmPayment(req.user._id, String(req.params.id), req.body.status);
   sendResponse(res, {
     statusCode: httpStatus.OK,
     success: true,
-    message: "Payment updated (development)",
+    message: "Payment updated (demo)",
     data: result,
   });
 });

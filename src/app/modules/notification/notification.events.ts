@@ -260,17 +260,18 @@ interface DeliveryRef {
   collectsCash: boolean;
 }
 
-/** Vendor assigned a leg → the rider (with the cash to collect, if any). */
-const deliveryAssigned = (riderUser: Id, delivery: DeliveryRef, codAmount?: number) => {
+/** Vendor assigned a leg → the rider (with the cash to collect, and how long they have to answer). */
+const deliveryAssigned = (riderUser: Id, delivery: DeliveryRef, codAmount?: number, answerMinutes?: number) => {
   const cash = delivery.collectsCash && codAmount ? codAmount : 0;
+  const within = answerMinutes ? { fr: ` · répondez sous ${answerMinutes} min`, en: ` · answer within ${answerMinutes} min` } : { fr: "", en: "" };
   send({
     userId: riderUser,
     mode: AppMode.rider,
     type: cash ? NotificationType.collect_payment : NotificationType.new_delivery_assigned,
     title: { fr: "Nouvelle livraison", en: "New delivery" },
     body: {
-      fr: `${delivery.fromName ?? "Retrait"} → ${delivery.toName ?? "Livraison"} · gain ${gnf(delivery.fee)}${cash ? ` · encaisser ${gnf(cash)}` : ""}`,
-      en: `${delivery.fromName ?? "Pickup"} → ${delivery.toName ?? "Drop-off"} · earn ${gnf(delivery.fee)}${cash ? ` · collect ${gnf(cash)}` : ""}`,
+      fr: `${delivery.fromName ?? "Retrait"} → ${delivery.toName ?? "Livraison"} · gain ${gnf(delivery.fee)}${cash ? ` · encaisser ${gnf(cash)}` : ""}${within.fr}`,
+      en: `${delivery.fromName ?? "Pickup"} → ${delivery.toName ?? "Drop-off"} · earn ${gnf(delivery.fee)}${cash ? ` · collect ${gnf(cash)}` : ""}${within.en}`,
     },
     data: {
       deliveryId: String(delivery._id),
@@ -280,7 +281,89 @@ const deliveryAssigned = (riderUser: Id, delivery: DeliveryRef, codAmount?: numb
   });
 };
 
-/** Rider declined → vendor must pick someone else. */
+const km = (value: number) => `${value.toLocaleString("fr-FR", { maximumFractionDigits: 1 })} km`;
+
+/** A leg is offered near a rider (open dispatch): distance and earnings; the first to accept takes it. */
+const deliveryOffer = (riderUser: Id, delivery: DeliveryRef, pickupKm?: number, codAmount?: number) => {
+  const cash = delivery.collectsCash && codAmount ? codAmount : 0;
+  const away = pickupKm !== undefined ? { fr: ` · à ${km(pickupKm)}`, en: ` · ${km(pickupKm)} away` } : { fr: "", en: "" };
+  send({
+    userId: riderUser,
+    mode: AppMode.rider,
+    type: NotificationType.new_delivery_assigned,
+    title: { fr: "Nouvelle course près de vous", en: "New delivery near you" },
+    body: {
+      fr: `${delivery.fromName ?? "Retrait"} → ${delivery.toName ?? "Livraison"}${away.fr} · gain ${gnf(delivery.fee)}${cash ? ` · encaisser ${gnf(cash)}` : ""}. Le premier qui accepte la prend.`,
+      en: `${delivery.fromName ?? "Pickup"} → ${delivery.toName ?? "Drop-off"}${away.en} · earn ${gnf(delivery.fee)}${cash ? ` · collect ${gnf(cash)}` : ""}. The first to accept gets it.`,
+    },
+    data: { deliveryId: String(delivery._id), subOrderId: String(delivery.subOrderId), offer: true },
+  });
+};
+
+/** A rider took a leg that leaves the store → the store. */
+const deliveryTaken = (vendorUser: Id, delivery: DeliveryRef, riderName: string, subOrderNumber: string) =>
+  send({
+    userId: vendorUser,
+    mode: AppMode.vendor,
+    type: NotificationType.ready_for_pickup,
+    title: { fr: "Livreur trouvé", en: "Rider found" },
+    body: {
+      fr: `${riderName} vient chercher la commande ${subOrderNumber}.`,
+      en: `${riderName} is coming to collect order ${subOrderNumber}.`,
+    },
+    data: { deliveryId: String(delivery._id), subOrderId: String(delivery.subOrderId) },
+  });
+
+/** The rider chosen by the store did not answer in time → the store (the leg is open to everyone again). */
+const reservationExpired = (vendorUser: Id, delivery: DeliveryRef, riderName: string) =>
+  send({
+    userId: vendorUser,
+    mode: AppMode.vendor,
+    type: NotificationType.ready_for_pickup,
+    title: { fr: "Pas de réponse du livreur", en: "No answer from the rider" },
+    body: {
+      fr: `${riderName} n'a pas répondu à temps. La livraison est proposée aux livreurs proches.`,
+      en: `${riderName} didn't answer in time. The delivery is now offered to nearby riders.`,
+    },
+    data: { deliveryId: String(delivery._id), subOrderId: String(delivery.subOrderId) },
+  });
+
+/** Nobody took an open leg for a while → the store (legs leaving it) and the Kadou24h team. */
+const noRiderYet = (
+  delivery: DeliveryRef & { orderId: Id },
+  subOrderNumber: string,
+  minutes: number,
+  vendorUser: Id | undefined,
+  staffIds: Id[],
+) => {
+  if (vendorUser) {
+    send({
+      userId: vendorUser,
+      mode: AppMode.vendor,
+      type: NotificationType.ready_for_pickup,
+      title: { fr: "Toujours aucun livreur", en: "Still no rider" },
+      body: {
+        fr: `Personne n'a encore pris la commande ${subOrderNumber} (${minutes} min). Vous pouvez choisir un livreur, ou attendre : l'équipe Kadou24h est prévenue.`,
+        en: `Nobody has taken order ${subOrderNumber} yet (${minutes} min). You can choose a rider, or wait: the Kadou24h team has been told.`,
+      },
+      data: { deliveryId: String(delivery._id), subOrderId: String(delivery.subOrderId) },
+    });
+  }
+  for (const userId of staffIds) {
+    send({
+      userId,
+      type: NotificationType.system_alert,
+      title: { fr: "Livraison sans livreur", en: "Delivery without a rider" },
+      body: {
+        fr: `${subOrderNumber} : ${delivery.fromName ?? ""} → ${delivery.toName ?? ""}, aucun livreur depuis ${minutes} min.`,
+        en: `${subOrderNumber}: ${delivery.fromName ?? ""} → ${delivery.toName ?? ""}, no rider for ${minutes} min.`,
+      },
+      data: { deliveryId: String(delivery._id), subOrderId: String(delivery.subOrderId), orderId: String(delivery.orderId) },
+    });
+  }
+};
+
+/** Rider declined → vendor (the leg is offered to nearby riders again). */
 const deliveryDeclined = (vendorUser: Id, delivery: DeliveryRef, reason?: string) =>
   send({
     userId: vendorUser,
@@ -288,8 +371,8 @@ const deliveryDeclined = (vendorUser: Id, delivery: DeliveryRef, reason?: string
     type: NotificationType.ready_for_pickup,
     title: { fr: "Livraison refusée", en: "Delivery declined" },
     body: {
-      fr: `Le livreur a refusé la course${reason ? ` (${reason})` : ""}. Choisissez un autre livreur.`,
-      en: `The delivery partner declined${reason ? ` (${reason})` : ""}. Please choose another one.`,
+      fr: `Le livreur a refusé la course${reason ? ` (${reason})` : ""}. Elle est proposée aux livreurs proches ; vous pouvez aussi en choisir un.`,
+      en: `The delivery partner declined${reason ? ` (${reason})` : ""}. It is offered to nearby riders; you can also choose one.`,
     },
     data: { deliveryId: String(delivery._id), subOrderId: String(delivery.subOrderId) },
   });
@@ -461,6 +544,10 @@ export const Notify = {
   orderPaymentExpired,
   orderDelivered,
   deliveryAssigned,
+  deliveryOffer,
+  deliveryTaken,
+  reservationExpired,
+  noRiderYet,
   deliveryDeclined,
   riderOnTheWay,
   earningsUpdated,

@@ -7,13 +7,14 @@ import AppError from "../../errorHelpers/AppError";
 import { Product } from "../product/product.model";
 import { DeliveryStatus, EndpointKind } from "../delivery/delivery.interface";
 import { Delivery } from "../delivery/delivery.model";
+import { DeliveryDispatch } from "../delivery/delivery.dispatch.service";
 import { VendorProfile } from "../vendor_profile/vendor_profile.model";
 import { ISubOrderModification, SettlementStatus, SubOrderStatus } from "./order.interface";
 import { Order } from "./order.model";
 import { SubOrder } from "./sub_order.model";
 import { TransactionType, WalletMode } from "../wallet/wallet.interface";
 import { WalletServices } from "../wallet/wallet.service";
-import { cancelSubOrder, syncOrderStatus } from "./order.utils";
+import { cancelSubOrder, codCashBase, syncOrderStatus } from "./order.utils";
 import { Notify } from "../notification/notification.events";
 import { SettingsServices } from "../settings/settings.service";
 import { RefundSource } from "../payment/payment.interface";
@@ -125,7 +126,7 @@ const getVendorSubOrderDetail = async (
   // All legs up front: for intercity the vendor assigns the bus driver (leg 2)
   // before leg 1 reaches the station, so the station PIN relay works
   const deliveries = await Delivery.find({ subOrderId: subOrder._id })
-    .select("legNumber legType status fromKind fromName toKind toName riderId")
+    .select("legNumber legType status fromKind fromName toKind toName riderId offerOpenedAt reservedUntil noRiderAlertedAt")
     .populate({ path: "riderId", select: "userId partnerType vehicle", populate: { path: "userId", select: "name avatar" } })
     .sort({ legNumber: 1 })
     .lean();
@@ -248,7 +249,11 @@ const updateSubOrderStatus = async (
 
   await syncOrderStatus(updated.orderId);
 
-  if (newStatus === SubOrderStatus.accepted) Notify.orderAccepted(updated);
+  if (newStatus === SubOrderStatus.accepted) {
+    Notify.orderAccepted(updated);
+    // Open dispatch: nearby riders see the delivery from now on
+    DeliveryDispatch.openLegsSoon(updated._id);
+  }
   if (newStatus === SubOrderStatus.ready_for_pickup) Notify.orderReadyForPickup(updated);
 
   return updated;
@@ -409,14 +414,19 @@ const modifySubOrderItems = async (
     }
   }
 
+  if (subOrder.codAmountToCollect !== undefined) {
+    // The cash follows the products; an extra it carries (older COD orders: the first
+    // store's service fee and tax) is kept
+    const parent = await Order.findById(subOrder.orderId).select("upfrontAmount").lean();
+    const feesOnline = Boolean(parent?.upfrontAmount);
+    const extra = Math.max(0, subOrder.codAmountToCollect - codCashBase(subOrder, feesOnline));
+    subOrder.codAmountToCollect =
+      codCashBase({ subtotal: newSubtotal, total: newTotal, discountShare: subOrder.discountShare }, feesOnline) + extra;
+  }
   subOrder.subtotal = newSubtotal;
   subOrder.commissionAmount = newCommissionAmount;
   subOrder.vendorEarning = newVendorEarning;
   subOrder.total = newTotal;
-  if (subOrder.codAmountToCollect) {
-    // The first store's cash also carries the service fee and tax: keep it
-    subOrder.codAmountToCollect = newTotal + Math.max(0, subOrder.codAmountToCollect - oldTotal);
-  }
 
   // Record modification
   subOrder.modifications.push({
@@ -437,7 +447,7 @@ const modifySubOrderItems = async (
 
   await subOrder.save();
   Notify.orderModified(subOrder, newTotal);
-  // Paid online: the difference goes into a refund request (admin approves)
+  // Paid online: the difference goes into a refund request (admin approves; never for COD)
   if (refundAmount > 0) {
     await RefundServices.requestRefund({
       orderId: subOrder.orderId,

@@ -114,6 +114,8 @@ const orderSchema = new Schema<IOrder>(
     paymentDueAt: {
       type: Date,
     },
+    upfrontAmount: { type: Number, min: 0 },
+    feesPaidAt: { type: Date },
   },
   {
     timestamps: true,

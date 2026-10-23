@@ -1088,6 +1088,39 @@ Errors: 409 already connected / already invited · 403 the inviter tried to answ
 | `POST /deliveries/:id/assign` | Vendor / Admin | assign delivery leg to partner: `{ riderId }`; sends real-time push/socket alert |
 | `GET /deliveries/:id/track` | Customer, store owner, riders of the leg chain, admin | live delivery tracking. The customer and the store may follow every leg of their order. **PIN visibility**: `pickupPin` only to the giver (the vendor on the leg that starts at the store, or the rider arriving at a station), `handoverPin` only to the receiver (the customer on the final leg, or the next rider at a station). Middle station→station legs show no PIN to the customer or the store. The assigned rider never sees its own leg's PINs. On the rider's own leg at bus stations: `incomingHandoverPin` (show it to the rider arriving with the parcel) and `outgoingPickupPin` (show it to the rider taking the parcel next). |
 
+### 7.20n Moto-taxi rides, point A → point B (2026-10-23, client: "structure it as you see fit")
+
+Decisions (to review with the client): price fixed before ordering, nearest riders first and the first to accept takes it, cash to the rider at the end, no commission yet (open question: commission per ride or rider subscription), passenger rates the rider.
+- **Price** (`settings.rides`, dashboard → Settings → Moto-taxi): `fare = max(minFare, baseFare + perKm × road km)`, rounded up to 500 GNF; road km = straight line × 1.3; time at ~22 km/h. Defaults 3 000 + 1 500/km, minimum 5 000 GNF. `rides.enabled` switches it off. Under 0.3 km or over 80 km → 400.
+- **Passenger**: `POST /rides/estimate { pickup {lat,lng}, dropoff }` → `{ distanceKm, durationMin, fare, ridersNearby }`; `POST /rides { pickup {lat,lng,address}, dropoff, note? }` → `searching` (one running ride per passenger, else 409); `GET /rides/my`, `GET /rides/my/current`, `GET /rides/:id` (the rider's name, photo, vehicle, ride rating and live position — never the phone); `POST /rides/:id/cancel { reason? }` until the ride starts; `POST /rides/:id/rate { stars, comment? }` once, after it.
+- **Dispatch**: available = approved moto rider, online, position from the last 15 min, no parcel on board, no other ride. Radius 2 km, 4 km after 1 min, 7 km after 2, 10 km after 4 (push `ride_update` with `data.offer`, socket `ride:offer`). Nobody in 10 min → `expired` (passenger told). Sweep every 15 s (`RIDE_SWEEP_MS`).
+- **Rider**: `GET /rides/rider/offers` (fare, pickupKm, trip), `POST /rides/:id/accept` (first wins, else 409; socket `ride:offer_gone` to the others), `POST /rides/:id/skip`, `POST /rides/:id/arrived` → `/start` → `/complete` (409 out of order), `POST /rides/:id/release { reason? }` before the start → back to searching for the others (not this rider), `GET /rides/rider/current` (with the passenger's phone), `GET /rides/rider/history`. A rider on a ride can't take parcels (and the other way round).
+- Live position: the rider's `PATCH /deliveries/rider/location` is forwarded to the passenger (`ride:location`); every change emits `ride:updated` to both.
+- **Admin**: `GET /rides/admin?status=&search=` (meta.counts, completedFares, completedKm), `GET /rides/admin/:id`, `POST /rides/admin/:id/cancel { reason }` (audit-logged, both told).
+
+### 7.20m Open dispatch, COD fees paid online first, demo payments (2026-10-23, client feedback)
+
+**Open dispatch** — a delivery leg is offered to the riders near its pickup point; the first to accept takes it. The customer never chooses the rider.
+- When a leg opens (`offerOpenedAt`): the first leg once the store accepts the order; a later leg (station → station / customer) once the parcel is picked up on the leg before it (its rider must be at the station handover).
+- Who sees it: approved, online riders of the right type (moto / bus), with a position from the last 30 min, within a radius that grows with time since it opened: 3 km, 5 km after 1 min, 8 km after 2 min, 15 km after 5 min. The store's own riders (active links) see its legs from the start; bus drivers who run the exact route always see it. A store never gets its own order through its own rider account.
+- `GET /deliveries/rider/offers` (rider) → `{ isOnline, offers[] }`, nearest first: `fee` (all theirs), `pickupKm`, `tripKm`, `cashToCollect`, `itemCount`, `fromName` / `fromAddressText` / `fromLocation`, `toName` (stations only) and `toArea` (the customer's city / neighbourhood only — no name, phone or position before accepting), `fromMyStore`, `servesRoute`, `canTake` + `blockedReason` (`too_many`: a moto carries at most 3 at a time; `cash_limit`). Empty while offline.
+- `POST /deliveries/:id/claim` → the leg is the rider's (`accepted`). Atomic: two riders at once → one 200, the other 409 "Another rider has already taken this delivery". 400 when offline, out of reach, over the cash limit or with 3 deliveries running. The store is told ("Rider found"); the offer leaves the other riders' lists (socket `delivery:offer_gone`).
+- `POST /deliveries/:id/skip` → hidden from my list.
+- The store may still choose a rider (`POST /deliveries/:id/assign`): `reservedUntil` = now + 3 min; nobody else sees it meanwhile. No answer in time → back to everyone (that rider isn't offered it again), the store is told. A decline also puts it back to everyone.
+- Nobody took it after 10 min (60 min for a leg leaving a station) → the store and the Kadou24h team (staff / admins, `system_alert` with `orderId`) are told once (`noRiderAlertedAt`).
+- Sweep every 30 s (`DISPATCH_SWEEP_MS` overrides; the e2e uses 1 s): reservations expire, legs that should be open are opened, newly reachable riders are told (push `new_delivery_assigned` with `data.offer: true`, socket `delivery:offer`).
+- Vendor order detail legs now carry `offerOpenedAt`, `reservedUntil`, `noRiderAlertedAt`.
+
+**Cash on delivery: fees paid online first** (client: "so that the platform and the courier are covered").
+- Checkout summary `pricing.payNow` / `pricing.payOnDelivery`: COD = service fee + tax + delivery now, the products (minus the promo share) in cash; online = everything now.
+- A COD order is created like an online one: sub-orders `pending_payment`, `paymentDueAt` (30 min), stock reserved, the stores see nothing; `order.upfrontAmount` = the fees. `POST /payments/initiate { purpose: "order", method: orange_money | mobile_money | card }` asks for `upfrontAmount` (method `cod` → 400; paid twice → 400). Once paid: `order.feesPaidAt`, the stores get it (escrow, delivery legs); `paymentStatus` stays `unpaid` until delivered (cash). Not paid in time → cancelled like an online order.
+- Each part's `codAmountToCollect` = its products − its promo share (no fee in the cash any more); a store removing items lowers it. Cancelling a part → refund request for that store's delivery fee; the whole order → all the fees (service fee + tax the last). Older COD orders (no `upfrontAmount`) keep the old rules.
+- COD still needs each store's cash under the rider cash limit (`cod.allowed`), now counted on the products only.
+
+**Demo payments** — `PAYMENT_MODE` (env, default `demo`): no gateway is connected yet, so `POST /payments/:id/dev-confirm` works in production too and payments carry `demo: true`; the app shows "Demo payment — Simulate: paid / failed" even in release builds. Set `PAYMENT_MODE=live` once Orange Money / MTN / card are connected (then only the gateway webhook confirms).
+
+**Worker photo optional** — submitting a worker profile no longer requires a photo (cards fall back to an icon).
+
 ### 7.20l Promo codes, cancelling one store's part, blocking in chat (2026-10-22, client rules)
 
 **Promo codes** — created only by the Kadou24h team; **Kadou24h pays the discount** (store earnings and commissions don't change); expiry, minimum order (products subtotal), one use per customer, optional total limit.

@@ -15,6 +15,7 @@ import { Delivery } from "./delivery.model";
 import { WalletServices } from "../wallet/wallet.service";
 import { Notify } from "../notification/notification.events";
 import { syncOrderStatus } from "../order/order.utils";
+import { DeliveryDispatch } from "./delivery.dispatch.service";
 
 const MAX_PIN_ATTEMPTS = 5;
 const PIN_LOCK_MINUTES = 15;
@@ -160,6 +161,8 @@ const verifyPickup = async (
   if (subOrder && pickedUp.toKind === EndpointKind.customer) {
     Notify.riderOnTheWay(subOrder.customerId, pickedUp, subOrder.subOrderNumber);
   }
+  // Intercity: the parcel is moving, so the next leg's rider can be found now
+  if (pickedUp.toKind === EndpointKind.station) DeliveryDispatch.openLegsSoon(pickedUp.subOrderId);
 
   return pickedUp;
 };

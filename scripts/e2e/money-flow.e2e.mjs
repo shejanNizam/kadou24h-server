@@ -73,6 +73,8 @@ const server = spawn(process.execPath, ["--import", "tsx", "src/server.ts"], {
     ADMIN_PASSWORD: "E2eAdmin@2026",
     FRONTEND_URL: "*",
     PAYMENT_WEBHOOK_SECRET: SECRET,
+    DISPATCH_SWEEP_MS: "1000",
+    RIDE_SWEEP_MS: "1000",
     REDIS_HOST: "localhost",
     REDIS_PORT: "6379",
     ...redisEnv,
@@ -154,6 +156,16 @@ const signup = async (name, phone) => {
 const webhook = (body, secret = SECRET) =>
   call("POST", "/payments/webhook", body, null, secret ? { "x-webhook-secret": secret } : {});
 const wallet = async (token, mode) => (await call("GET", `/wallets/me?mode=${mode}`, null, token)).body.data;
+// Cash on delivery: the fees (service, tax, delivery) are paid online first (client, 2026-10-23).
+// Pays them like the gateway would, then returns the order as it is now (legs created).
+const payFees = async (placed, token) => {
+  if (!ok(placed) || placed.body.data?.order?.paymentMethod !== "cod") return placed;
+  const orderId = placed.body.data.order._id;
+  const p = await call("POST", "/payments/initiate", { purpose: "order", refId: orderId, method: "orange_money" }, token);
+  await webhook({ paymentId: p.body.data?._id, status: "success", amount: p.body.data?.amount });
+  const d = await call("GET", `/orders/${orderId}`, null, token);
+  return { status: placed.status, body: { ...placed.body, data: { order: d.body.data?.order, subOrders: d.body.data?.subOrders } } };
+};
 // Notifications are sent in the background — give them a moment
 const notificationTypes = async (token, mode) => {
   await sleep(400);
@@ -210,8 +222,8 @@ const run = async () => {
   r = await call("POST", "/addresses", { fullName: "Customer One", phone: `+22462${stamp}3`, city: "Conakry", location: { lat: 9.53, lng: -13.68 } }, C.token);
   const addressId = r.body.data._id;
   const X = await signup("Stranger", `+22462${stamp}4`);
-  const order = (items, extra = {}) =>
-    call("POST", "/orders", { items, addressId, deliveryType: "local", paymentMethod: "cod", ...extra }, C.token);
+  const order = async (items, extra = {}) =>
+    payFees(await call("POST", "/orders", { items, addressId, deliveryType: "local", paymentMethod: "cod", ...extra }, C.token), C.token);
 
   // Runs the whole delivery for one sub-order; returns the delivery id
   const deliver = async (subOrder, label) => {
@@ -456,6 +468,38 @@ const run = async () => {
   r = await call("PATCH", "/settings", { riderCashLimitDefault: settingsNow.riderCashLimitDefault }, admin);
   check("cash limit restored", r.status === 200, brief(r));
 
+  // ═════ 3d. Cash on delivery: the fees are paid online first (client, 2026-10-23) ═════
+  r = await call("POST", "/orders", { items: [{ productId, qty: 1 }], addressId, deliveryType: "local", paymentMethod: "cod" }, C.token);
+  const feeOrder = r.body.data?.order;
+  const feeSub = r.body.data?.subOrders?.[0];
+  check("COD: the order waits for its fees online", ok(r) && feeSub?.status === "pending_payment" && Boolean(feeOrder?.paymentDueAt), brief(r));
+  check(
+    "COD: fees to pay online = service fee + tax + delivery",
+    feeOrder?.upfrontAmount === feeOrder?.platformFee + feeOrder?.taxAmount + feeOrder?.deliveryFee,
+    JSON.stringify([feeOrder?.upfrontAmount, feeOrder?.platformFee, feeOrder?.taxAmount, feeOrder?.deliveryFee]),
+  );
+  check("COD: the rider will collect the products only", feeSub?.codAmountToCollect === feeSub?.subtotal - (feeSub?.discountShare ?? 0), JSON.stringify([feeSub?.codAmountToCollect, feeSub?.subtotal]));
+  r = await call("GET", `/orders/vendor/sub-orders/${feeSub?._id}`, null, V.token);
+  check("COD: the store doesn't see it before the fees are paid", r.status === 404, brief(r));
+  r = await call("POST", "/payments/initiate", { purpose: "order", refId: feeOrder?._id, method: "cod" }, C.token);
+  check("COD: the fees can't be paid in cash", r.status === 400, brief(r));
+  r = await call("POST", "/payments/initiate", { purpose: "order", refId: feeOrder?._id, method: "orange_money" }, C.token);
+  check("COD: the payment asks for the fees only", ok(r) && r.body.data?.amount === feeOrder?.upfrontAmount, brief(r));
+  await webhook({ paymentId: r.body.data?._id, status: "success", amount: feeOrder?.upfrontAmount });
+  r = await call("GET", `/orders/${feeOrder?._id}`, null, C.token);
+  check(
+    "COD: fees paid → the store gets it; the products are still paid in cash",
+    r.body.data?.subOrders?.[0]?.status === "new" && r.body.data?.order?.paymentStatus === "unpaid" && Boolean(r.body.data?.order?.feesPaidAt) && Boolean(r.body.data?.subOrders?.[0]?.currentLegId),
+    JSON.stringify([r.body.data?.subOrders?.[0]?.status, r.body.data?.order?.paymentStatus, r.body.data?.order?.feesPaidAt]),
+  );
+  r = await call("POST", "/payments/initiate", { purpose: "order", refId: feeOrder?._id, method: "orange_money" }, C.token);
+  check("COD: the fees can't be paid twice", r.status === 400, brief(r));
+  r = await call("POST", `/orders/${feeOrder?._id}/cancel`, { reason: "Changed my mind" }, C.token);
+  check("COD: the customer can still cancel", ok(r), brief(r));
+  r = await call("GET", "/payments/admin/refunds?limit=100", null, admin);
+  const feeRefund = (r.body.data ?? []).find((x) => String(x.orderId?._id ?? x.orderId) === feeOrder?._id);
+  check("COD cancelled after paying the fees → all the fees come back (refund request)", feeRefund?.status === "pending" && feeRefund?.amount === feeOrder?.upfrontAmount, JSON.stringify(feeRefund ?? brief(r)));
+
   // ═════ 4. Cancellations: stock and escrow restored exactly once ═════
   let stock = await stockOf(productId);
   r = await order([{ productId, qty: 1 }]);
@@ -492,7 +536,7 @@ const run = async () => {
   const serviceCat = r.body.data?._id;
   await call("PUT", "/professional-profiles/me", { profession: "Électricien", summary: "Court" }, C.token);
   r = await call("POST", "/professional-profiles/me/worker-application/submit", null, C.token);
-  check("worker: incomplete profile cannot be sent (lists what is missing)", r.status === 400 && /idDocument/.test(r.body.message ?? "") && /photo/.test(r.body.message ?? ""), brief(r));
+  check("worker: incomplete profile cannot be sent (lists what is missing)", r.status === 400 && /idDocument/.test(r.body.message ?? "") && !/photo/.test(r.body.message ?? ""), brief(r));
   r = await call("PUT", "/professional-profiles/me", {
     profession: "Électricien", summary: "Électricien avec 6 ans d'expérience, installations et dépannages à Conakry.",
     photo: file("worker-photo"), serviceCategoryId: serviceCat, experienceYears: 6, hourlyRate: 60000, city: "Conakry • Kipé",
@@ -804,7 +848,7 @@ const run = async () => {
   check("promo: the summary never exposes the code's usage counters", r.body.data?.appliedCoupon === undefined);
   r = await call("POST", "/orders", cart({ couponCode: "nope" }), P.token);
   check("promo: placing an order with a bad code is refused", r.status === 400 && /not valid/i.test(r.body.message ?? ""), brief(r));
-  r = await call("POST", "/orders", cart({ couponCode: "kadou10" }), P.token);
+  r = await payFees(await call("POST", "/orders", cart({ couponCode: "kadou10" }), P.token), P.token);
   const promoOrder = r.body.data?.order;
   const [partA, partB] = r.body.data?.subOrders ?? [];
   check("promo order: discount and code saved", ok(r) && promoOrder?.discount === 15000 && promoOrder?.couponCode === "KADOU10" && promoOrder?.total === base.total - 15000, brief(r));
@@ -813,7 +857,12 @@ const run = async () => {
     [partA, partB].every((s) => s && s.vendorEarning === s.subtotal - s.commissionAmount && s.total === s.subtotal + s.deliveryFee - s.discountShare),
     JSON.stringify([partA, partB].map((s) => s && [s.subtotal, s.vendorEarning, s.discountShare, s.total])),
   );
-  check("promo order: the first rider collects its part + the service fee", partA?.codAmountToCollect === partA?.total + promoOrder?.platformFee + promoOrder?.taxAmount, JSON.stringify([partA?.codAmountToCollect, partA?.total]));
+  check(
+    "promo order (COD): fees online first; each rider collects its products minus the promo share",
+    promoOrder?.upfrontAmount === promoOrder?.platformFee + promoOrder?.taxAmount + promoOrder?.deliveryFee &&
+      [partA, partB].every((s) => s && s.codAmountToCollect === s.subtotal - s.discountShare),
+    JSON.stringify([promoOrder?.upfrontAmount, [partA, partB].map((s) => s && [s.codAmountToCollect, s.subtotal, s.discountShare])]),
+  );
   r = await call("POST", "/orders/checkout-summary", cart({ couponCode: "KADOU10" }), P.token);
   check("promo: one use per customer", r.body.data?.coupon?.valid === false && /already used/i.test(r.body.data?.coupon?.message ?? ""), JSON.stringify(r.body.data?.coupon));
   r = await call("GET", "/coupons/admin?status=active", null, admin);
@@ -832,7 +881,10 @@ const run = async () => {
   const afterPart = r.body.data;
   const partBNow = afterPart?.subOrders?.find((s) => s._id === partB?._id);
   check("part cancel: only that store's part is cancelled", ok(r) && afterPart?.subOrder?.status === "cancelled" && partBNow?.status === "new" && afterPart?.order?.status === "active", brief(r));
-  check("part cancel (COD): the service fee moves to the other store's cash", partBNow?.codAmountToCollect === partB?.total + promoOrder?.platformFee + promoOrder?.taxAmount, JSON.stringify([partBNow?.codAmountToCollect, partB?.total]));
+  check("part cancel (COD): the other store's cash doesn't change", partBNow?.codAmountToCollect === partB?.codAmountToCollect, JSON.stringify([partBNow?.codAmountToCollect, partB?.codAmountToCollect]));
+  r = await call("GET", "/payments/admin/refunds?limit=100", null, admin);
+  const partRefund = (r.body.data ?? []).find((x) => String(x.orderId?._id ?? x.orderId) === promoOrder?._id);
+  check("part cancel (COD): that store's delivery fee, paid online, comes back", partRefund?.status === "pending" && partRefund?.amount === partA?.deliveryFee, JSON.stringify(partRefund ?? brief(r)));
   check("part cancel: the store is told", (await notificationTypes(V.token, "vendor")).includes("order_cancelled"));
   await call("PATCH", `/orders/vendor/sub-orders/${partB?._id}/status`, { status: "accepted" }, W.token);
   await call("PATCH", `/orders/vendor/sub-orders/${partB?._id}/status`, { status: "preparing" }, W.token);
@@ -913,7 +965,8 @@ const run = async () => {
   let kicked = false;
   xs.s.on("disconnect", () => (kicked = true));
   await call("POST", "/auth/logout-all", null, X.token);
-  await sleep(800);
+  // The kick goes through the (possibly remote) Redis adapter: allow up to 3 s
+  for (let i = 0; i < 15 && !kicked; i++) await sleep(200);
   check("logout-all disconnects live sockets", kicked);
   const again = await connect(X.token);
   check("revoked token cannot reconnect", !again.ok, again.err);
@@ -1110,6 +1163,191 @@ const run = async () => {
   const wins = race.filter(ok).length;
   check("race: exactly one order wins the last item", wins === 1, race.map((x) => x.status).join(","));
   check("race: losers' stock is rolled back", (await stockOf(plentyId)) === 10 - wins && (await stockOf(scarceId)) === 0, JSON.stringify([await stockOf(plentyId), await stockOf(scarceId)]));
+
+  // ═════ 12. Open dispatch: nearby riders see the delivery, the first to accept takes it ═════
+  const moto = async (name, phone, lat, lng) => {
+    const u = await signup(name, phone);
+    await call("PUT", "/riders/me/application", { partnerType: "moto", vehicle: { type: "motorbike" }, cityArea: "Conakry", nationalIdNumber: `N-${phone.slice(-5)}` }, u.token);
+    const s = await call("POST", "/riders/me/application/submit", null, u.token);
+    await call("PATCH", `/riders/admin/${s.body.data?._id}/review`, { action: "approve" }, admin);
+    await call("PATCH", "/deliveries/rider/online-status", { isOnline: true }, u.token);
+    await call("PATCH", "/deliveries/rider/location", { lat, lng }, u.token);
+    return { ...u, riderId: s.body.data?._id };
+  };
+  const offersOf = async (token) => (await call("GET", "/deliveries/rider/offers", null, token)).body.data?.offers ?? [];
+  const vendorLeg = async (subOrderId, legId) =>
+    (await call("GET", `/orders/vendor/sub-orders/${subOrderId}`, null, V.token)).body.data?.deliveries?.find((l) => String(l._id) === legId);
+  const vendorTitles = async () => {
+    await sleep(400);
+    return JSON.stringify((await call("GET", "/notifications?mode=vendor&limit=100", null, V.token)).body.data ?? []);
+  };
+  const D = await moto("Near Rider", `+22465${stamp}1`, 9.515, -13.715);
+  const Far = await moto("Far Rider", `+22465${stamp}2`, 9.7, -13.55);
+
+  r = await order([{ productId, qty: 1 }]);
+  const dSub = r.body.data?.subOrders?.[0];
+  const dLeg = String(dSub?.currentLegId);
+  check("dispatch: nothing is offered before the store accepts", !(await offersOf(D.token)).some((o) => o._id === dLeg));
+  await call("PATCH", `/orders/vendor/sub-orders/${dSub._id}/status`, { status: "accepted" }, V.token);
+  await sleep(500);
+  const offer = (await offersOf(D.token)).find((o) => o._id === dLeg);
+  check(
+    "dispatch: once accepted, a nearby rider sees it with distance, earnings and cash",
+    offer && offer.pickupKm < 3 && offer.tripKm > 0 && offer.fee === dSub.deliveryFee && offer.cashToCollect === dSub.codAmountToCollect && offer.canTake === true,
+    JSON.stringify(offer),
+  );
+  check(
+    "dispatch: the offer has no phone, no customer name or position (area only)",
+    offer && offer.toName === undefined && offer.toLocation === undefined && !JSON.stringify(offer).includes("+224"),
+    JSON.stringify(offer),
+  );
+  check("dispatch: the nearby rider is told", (await notificationTypes(D.token, "rider")).includes("new_delivery_assigned"));
+  check("dispatch: a rider ~25 km away doesn't see it", !(await offersOf(Far.token)).some((o) => o._id === dLeg));
+  await call("PATCH", "/deliveries/rider/online-status", { isOnline: false }, D.token);
+  r = await call("GET", "/deliveries/rider/offers", null, D.token);
+  check("dispatch: offline → no offers", r.body.data?.isOnline === false && r.body.data?.offers?.length === 0, brief(r));
+  r = await call("POST", `/deliveries/${dLeg}/claim`, null, D.token);
+  check("dispatch: an offline rider can't take it", r.status === 400, brief(r));
+  await call("PATCH", "/deliveries/rider/online-status", { isOnline: true }, D.token);
+  r = await call("POST", `/deliveries/${dLeg}/claim`, null, C.token);
+  check("dispatch: a customer can't take it", r.status === 403, brief(r));
+  r = await call("POST", `/deliveries/${dLeg}/claim`, null, Far.token);
+  check("dispatch: a rider out of reach can't take it", r.status === 400, brief(r));
+  const [c1, c2] = await Promise.all([call("POST", `/deliveries/${dLeg}/claim`, null, D.token), call("POST", `/deliveries/${dLeg}/claim`, null, R.token)]);
+  check(
+    "dispatch: two riders at once → exactly one gets it, the other 409",
+    [c1, c2].filter(ok).length === 1 && [c1, c2].some((x) => x.status === 409),
+    `${brief(c1)} | ${brief(c2)}`,
+  );
+  const [winner, loser] = ok(c1) ? [D, R] : [R, D];
+  check("dispatch: the winner's leg is accepted", (ok(c1) ? c1 : c2).body.data?.status === "accepted", brief(ok(c1) ? c1 : c2));
+  let leg = await vendorLeg(dSub._id, dLeg);
+  check("dispatch: the store sees the rider who took it", leg?.status === "accepted" && Boolean(leg?.riderId), JSON.stringify(leg?.status));
+  check("dispatch: the store is told 'rider found'", (await vendorTitles()).includes("Rider found"));
+  check("dispatch: the offer left the other rider's list", !(await offersOf(loser.token)).some((o) => o._id === dLeg));
+  r = await call("GET", "/deliveries/rider/my-deliveries?type=ongoing", null, winner.token);
+  check("dispatch: the delivery is in the winner's ongoing list", r.body.data?.some((d) => String(d._id) === dLeg), brief(r));
+
+  // The store's own pick: a few minutes to answer, then back to everyone
+  r = await order([{ productId, qty: 1 }]);
+  const eSub = r.body.data?.subOrders?.[0];
+  const eLeg = String(eSub?.currentLegId);
+  await call("PATCH", `/orders/vendor/sub-orders/${eSub._id}/status`, { status: "accepted" }, V.token);
+  r = await call("POST", `/deliveries/${eLeg}/assign`, { riderId: D.riderId }, V.token);
+  const left = (new Date(r.body.data?.reservedUntil).getTime() - Date.now()) / 60_000;
+  check("dispatch: the store's pick has 3 minutes to answer", ok(r) && left > 2.5 && left <= 3, brief(r));
+  check("dispatch: while reserved, other riders don't see it", !(await offersOf(R.token)).some((o) => o._id === eLeg));
+  await mongoose.connect(DATABASE_URL);
+  await mongoose.connection.collection("deliveries").updateOne({ _id: new mongoose.Types.ObjectId(eLeg) }, { $set: { reservedUntil: new Date(Date.now() - 1000) } });
+  await mongoose.disconnect();
+  await sleep(2500);
+  leg = await vendorLeg(eSub._id, eLeg);
+  check("dispatch: no answer in time → back to everyone", leg?.status === "pending_assignment" && !leg?.riderId, JSON.stringify(leg));
+  check("dispatch: the store is told the rider didn't answer", (await vendorTitles()).includes("No answer from the rider"));
+  check("dispatch: the silent rider isn't offered it again", !(await offersOf(D.token)).some((o) => o._id === eLeg));
+  check("dispatch: the other nearby riders see it again", (await offersOf(R.token)).some((o) => o._id === eLeg));
+  r = await call("POST", `/deliveries/${eLeg}/skip`, null, R.token);
+  check("dispatch: 'not for me' hides it from my list", ok(r) && !(await offersOf(R.token)).some((o) => o._id === eLeg), brief(r));
+
+  // Clean up: the store cancels both, which frees the rider who took one
+  const busyBefore = (await call("GET", "/riders/me", null, winner.token)).body.data?.activeDeliveryCount;
+  for (const so of [dSub, eSub]) await call("POST", `/orders/vendor/sub-orders/${so._id}/cancel`, { reason: "End of the e2e run" }, V.token);
+  const busyAfter = (await call("GET", "/riders/me", null, winner.token)).body.data?.activeDeliveryCount;
+  check("dispatch: cancelling frees the rider who took it", busyAfter === busyBefore - 1, JSON.stringify([busyBefore, busyAfter]));
+  // ═════ 13. Moto-taxi: price first, nearest riders, first to accept, cash at the end ═════
+  const T = await moto("Taxi Rider", `+22465${stamp}3`, 9.522, -13.702);
+  const PA = await signup("Passenger", `+22465${stamp}4`);
+  const settingsRides = (await call("GET", "/settings", null, admin)).body.data?.rides;
+  const PICK = { lat: 9.521, lng: -13.701, address: "Kaloum, marché Niger" };
+  const DROP = { lat: 9.56, lng: -13.66, address: "Dixinn, université" };
+  r = await call("POST", "/rides/estimate", { pickup: PICK, dropoff: { lat: 9.5211, lng: -13.7011 } }, PA.token);
+  check("ride: pickup and destination too close → refused", r.status === 400, brief(r));
+  r = await call("POST", "/rides/estimate", { pickup: PICK, dropoff: DROP }, PA.token);
+  const est = r.body.data;
+  const expectedFare = est && Math.max(settingsRides.minFare, Math.ceil((settingsRides.baseFare + settingsRides.perKm * est.distanceKm) / 500) * 500);
+  check(
+    "ride: the price is known before ordering (base + per km, rounded to 500 GNF)",
+    ok(r) && est.fare === expectedFare && est.fare % 500 === 0 && est.durationMin > 0 && est.ridersNearby >= 1,
+    JSON.stringify(est ?? brief(r)),
+  );
+  r = await call("POST", "/rides", { pickup: PICK, dropoff: DROP, note: "Devant la pharmacie" }, PA.token);
+  const ride = r.body.data;
+  check("ride: ordered → searching, same fare as the estimate", r.status === 201 && ride?.status === "searching" && ride?.fare === est.fare, brief(r));
+  r = await call("POST", "/rides", { pickup: PICK, dropoff: DROP }, PA.token);
+  check("ride: one running ride per passenger", r.status === 409, brief(r));
+  const rideOffers = async (token) => (await call("GET", "/rides/rider/offers", null, token)).body.data ?? [];
+  const seen = (await rideOffers(T.token)).find((o) => o._id === ride?._id);
+  check("ride: a nearby rider sees it with the fare and the pickup distance", seen && seen.fare === ride.fare && seen.pickupKm < 2, JSON.stringify(seen));
+  check("ride: a far rider doesn't see it yet", !(await rideOffers(Far.token)).some((o) => o._id === ride?._id));
+  await sleep(400);
+  r = await call("GET", "/notifications?mode=rider&limit=50", null, T.token);
+  check("ride: the nearby rider is told", (r.body.data ?? []).some((n) => n.type === "ride_update"), brief(r));
+  r = await call("POST", `/rides/${ride?._id}/accept`, null, PA.token);
+  check("ride: a passenger can't accept rides", r.status === 403, brief(r));
+  const [a1, a2] = await Promise.all([call("POST", `/rides/${ride?._id}/accept`, null, T.token), call("POST", `/rides/${ride?._id}/accept`, null, D.token)]);
+  check("ride: two riders at once → one gets it, the other 409", [a1, a2].filter(ok).length === 1 && [a1, a2].some((x) => x.status === 409), `${brief(a1)} | ${brief(a2)}`);
+  const [driver, other] = ok(a1) ? [T, D] : [D, T];
+  r = await call("GET", `/rides/${ride?._id}`, null, PA.token);
+  check(
+    "ride: the passenger sees the rider (name, rating) — never the phone",
+    r.body.data?.status === "accepted" && Boolean(r.body.data?.rider?.name) && !JSON.stringify(r.body.data?.rider ?? {}).includes("+224"),
+    JSON.stringify(r.body.data?.rider),
+  );
+  r = await call("GET", `/rides/${ride?._id}`, null, driver.token);
+  check("ride: the rider gets the passenger's phone to find them", r.body.data?.passenger?.phone === `+22465${stamp}4`, JSON.stringify(r.body.data?.passenger));
+  r = await call("GET", `/rides/${ride?._id}`, null, other.token);
+  check("ride: another rider can't open it", r.status === 404, brief(r));
+  check("ride: it left the other rider's list", !(await rideOffers(other.token)).some((o) => o._id === ride?._id));
+  r = await call("POST", `/rides/${ride?._id}/start`, null, driver.token);
+  check("ride: can't start before arriving", r.status === 409, brief(r));
+  r = await call("POST", `/rides/${ride?._id}/arrived`, null, driver.token);
+  check("ride: arrived", ok(r) && r.body.data?.status === "arrived", brief(r));
+  r = await call("POST", `/rides/${ride?._id}/start`, null, driver.token);
+  check("ride: started", ok(r) && r.body.data?.status === "in_progress", brief(r));
+  r = await call("POST", `/rides/${ride?._id}/cancel`, { reason: "Trop tard" }, PA.token);
+  check("ride: the passenger can't cancel once it started", r.status === 400, brief(r));
+  r = await call("POST", `/rides/${ride?._id}/complete`, null, driver.token);
+  check("ride: finished", ok(r) && r.body.data?.status === "completed" && Boolean(r.body.data?.completedAt), brief(r));
+  r = await call("POST", `/rides/${ride?._id}/rate`, { stars: 5, comment: "Très prudent" }, PA.token);
+  check("ride: the passenger rates the rider", ok(r) && r.body.data?.rating?.stars === 5 && r.body.data?.rider?.rating === 5, brief(r));
+  r = await call("POST", `/rides/${ride?._id}/rate`, { stars: 1 }, PA.token);
+  check("ride: rated only once", r.status === 409, brief(r));
+  r = await call("GET", "/rides/my", null, PA.token);
+  check("ride: in the passenger's history", r.body.data?.[0]?._id === ride?._id && r.body.meta?.total === 1, brief(r));
+
+  // A rider drops a ride before it starts → back to the other riders; then the passenger cancels
+  r = await call("POST", "/rides", { pickup: PICK, dropoff: DROP }, PA.token);
+  const ride2 = r.body.data;
+  r = await call("POST", `/rides/${ride2?._id}/accept`, null, T.token);
+  r = await call("POST", `/rides/${ride2?._id}/release`, { reason: "Pneu crevé" }, T.token);
+  check("ride: a rider can drop it before the start", ok(r), brief(r));
+  r = await call("GET", `/rides/${ride2?._id}`, null, PA.token);
+  check("ride: …it is searching again, without a rider", r.body.data?.status === "searching" && !r.body.data?.rider, JSON.stringify(r.body.data?.status));
+  check("ride: …the rider who dropped it isn't offered it again", !(await rideOffers(T.token)).some((o) => o._id === ride2?._id));
+  r = await call("POST", `/rides/${ride2?._id}/cancel`, { reason: "J'ai trouvé autrement" }, PA.token);
+  check("ride: the passenger cancels while searching", ok(r) && r.body.data?.status === "cancelled", brief(r));
+
+  // Nobody accepts in time → expired
+  r = await call("POST", "/rides", { pickup: PICK, dropoff: DROP }, PA.token);
+  const ride3 = r.body.data;
+  await mongoose.connect(DATABASE_URL);
+  await mongoose.connection.collection("rides").updateOne({ _id: new mongoose.Types.ObjectId(ride3?._id) }, { $set: { searchStartedAt: new Date(Date.now() - 11 * 60_000) } });
+  await mongoose.disconnect();
+  await sleep(2500);
+  r = await call("GET", `/rides/${ride3?._id}`, null, PA.token);
+  check("ride: nobody in 10 minutes → expired, the passenger is told", r.body.data?.status === "expired", JSON.stringify(r.body.data?.status));
+
+  // The team
+  r = await call("GET", "/rides/admin?status=completed", null, admin);
+  check("admin rides: list, counts and fares of finished rides", ok(r) && r.body.data?.some((x) => x._id === ride?._id) && r.body.meta?.counts?.completed >= 1 && r.body.meta?.completedFares >= ride.fare, brief(r));
+  r = await call("GET", "/rides/admin", null, PA.token);
+  check("admin rides: not for customers", r.status === 403, brief(r));
+  r = await call("POST", "/rides", { pickup: PICK, dropoff: DROP }, PA.token);
+  const ride4 = r.body.data;
+  r = await call("POST", `/rides/admin/${ride4?._id}/cancel`, {}, admin);
+  check("admin rides: cancelling needs a reason", r.status === 400, brief(r));
+  r = await call("POST", `/rides/admin/${ride4?._id}/cancel`, { reason: "Test du support" }, admin);
+  check("admin rides: the team can cancel a running ride", ok(r) && r.body.data?.status === "cancelled" && r.body.data?.cancellation?.by === "admin", brief(r));
 };
 
 run().then(() => finish(), finish);

@@ -286,8 +286,8 @@ const MIN_DESCRIPTION = 20;
 /** The worker sends the profile for review: everything a customer needs, plus an ID document. */
 const submitWorkerApplication = async (userId: string) => {
   const profile = await getMyProfile(userId);
+  // The photo is optional (client, 2026-10-23): cards fall back to an icon
   const missing = [
-    !profile.photo?.url && "photo",
     (profile.profession?.trim().length ?? 0) < 2 && "profession",
     !profile.serviceCategoryId && "serviceCategoryId",
     profile.experienceYears === undefined && "experienceYears",

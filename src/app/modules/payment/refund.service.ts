@@ -72,7 +72,14 @@ const requestRefund = async (params: {
 }) => {
   try {
     const order = await Order.findById(params.orderId);
-    if (!order || order.paymentMethod === OrderPaymentMethod.cod || !PAID.includes(order.paymentStatus)) return null;
+    if (!order) return null;
+    // Cash on delivery: only the fees were paid online (never the products: a store
+    // removing items changes the cash, not what was paid online)
+    const paidOnline =
+      order.paymentMethod === OrderPaymentMethod.cod
+        ? Boolean(order.feesPaidAt) && params.source !== RefundSource.modification
+        : PAID.includes(order.paymentStatus);
+    if (!paidOnline) return null;
 
     const left = await refundableLeft(order);
     const amount = Math.min(params.amount ?? left, left);

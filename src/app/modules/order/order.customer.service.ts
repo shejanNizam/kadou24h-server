@@ -10,7 +10,7 @@ import { Review } from "../review/review.model";
 import { OrderStatus, SubOrderStatus } from "./order.interface";
 import { Order } from "./order.model";
 import { SubOrder } from "./sub_order.model";
-import { cancelSubOrder, syncOrderStatus } from "./order.utils";
+import { cancelSubOrder, syncOrderStatus, codCashBase } from "./order.utils";
 import { RefundServices } from "../payment/refund.service";
 
 /**
@@ -259,9 +259,10 @@ const cancelStorePart = async (orderId: string, subOrderId: string, customerId: 
     actorUserId: customerId,
   });
 
-  // Cash on delivery: this part's cash also carried the service fee and tax → move them to
-  // another part whose rider hasn't collected yet, so the order still pays them once
-  const extra = Math.max(0, (part.codAmountToCollect ?? 0) - part.total);
+  // Older cash-on-delivery orders: this part's cash also carried the service fee and tax →
+  // move them to another part whose rider hasn't collected yet, so the order still pays them
+  // once. (Newer COD orders paid their fees online: nothing to move.)
+  const extra = Math.max(0, (part.codAmountToCollect ?? 0) - codCashBase(part, Boolean(order.upfrontAmount)));
   if (extra > 0) {
     await SubOrder.findOneAndUpdate(
       { orderId: order._id, _id: { $ne: part._id }, status: { $in: BEFORE_PICKUP }, codAmountToCollect: { $exists: true } },

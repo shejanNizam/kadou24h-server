@@ -13,7 +13,7 @@ import { WalletServices } from "../wallet/wallet.service";
 import { CouponServices } from "../coupon/coupon.service";
 import { RefundSource } from "../payment/payment.interface";
 import { RefundServices } from "../payment/refund.service";
-import { ISubOrder, OrderStatus, SettlementStatus, SubOrderStatus } from "./order.interface";
+import { ISubOrder, OrderStatus, PaymentMethod, SettlementStatus, SubOrderStatus } from "./order.interface";
 import { Order } from "./order.model";
 import { SubOrder } from "./sub_order.model";
 
@@ -56,6 +56,15 @@ const ACTIVE_RIDER_LEGS = [
   DeliveryStatus.picked_up,
   DeliveryStatus.in_transit,
 ];
+
+/**
+ * The products cash of one COD part, before any extra it carries. Orders whose fees
+ * were paid online first: products − promo share. Older COD orders: the whole part.
+ */
+const codCashBase = (
+  part: Pick<ISubOrder, "subtotal" | "total"> & { discountShare?: number },
+  feesPaidOnline: boolean,
+) => (feesPaidOnline ? Math.max(0, part.subtotal - (part.discountShare ?? 0)) : part.total);
 
 /**
  * Cancels one sub-order — the single path used by customer, vendor and admin.
@@ -120,11 +129,14 @@ const cancelSubOrder = async (opts: {
     await WalletServices.reverseEscrowForSubOrder(String(previous._id), opts.actorUserId);
   }
 
-  // Paid online? The customer's money for this store goes into a refund request (admin approves)
+  // Paid online? The customer's money for this store goes into a refund request (admin approves).
+  // Cash on delivery with the fees paid online: this store's delivery fee comes back.
+  const parent = await Order.findById(previous.orderId).select("paymentMethod upfrontAmount").lean();
+  const feesOnly = parent?.paymentMethod === PaymentMethod.cod;
   await RefundServices.requestRefund({
     orderId: previous.orderId,
     subOrderId: previous._id,
-    amount: previous.total,
+    amount: feesOnly ? previous.deliveryFee : previous.total,
     source: RefundSource.cancellation,
     reason: `${previous.subOrderNumber} cancelled by ${opts.by}: ${opts.reason}`,
   });
@@ -163,6 +175,7 @@ const cancelSubOrder = async (opts: {
 };
 
 export {
+  codCashBase,
   deriveOrderStatus,
   syncOrderStatus,
   cancelSubOrder,

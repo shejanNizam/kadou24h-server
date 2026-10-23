@@ -15,6 +15,7 @@ import {
   verifyPickup,
   verifyHandover,
 } from "./delivery.handover.service";
+import { DeliveryDispatch } from "./delivery.dispatch.service";
 import {
   trackDelivery,
   updateRiderLocation,
@@ -35,4 +36,7 @@ export const DeliveryServices = {
   updateRiderLocation,
   toggleRiderOnline,
   getMyDeliveries,
+  getOffers: DeliveryDispatch.getOffers,
+  claimOffer: DeliveryDispatch.claimOffer,
+  skipOffer: DeliveryDispatch.skipOffer,
 };

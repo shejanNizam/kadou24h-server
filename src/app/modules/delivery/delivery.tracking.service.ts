@@ -16,6 +16,7 @@ import { VendorProfile } from "../vendor_profile/vendor_profile.model";
 import { DeliveryStatus, EndpointKind, LegType } from "./delivery.interface";
 import { Delivery } from "./delivery.model";
 import { withoutPins } from "./delivery.utils";
+import { RideServices } from "../ride/ride.service";
 
 /**
  * Riders see the customer's address (name, phone, landmark, gate photo) only
@@ -184,6 +185,8 @@ const updateRiderLocation = async (
         heading,
       });
     }
+    // Moto-taxi: the passenger follows the rider live
+    await RideServices.forwardLocation(rider._id as Types.ObjectId, lat, lng, heading);
   }
 
   return { lat, lng, heading };

@@ -46,6 +46,13 @@ const settingsSchema = new Schema<ISettings>(
       spontaneousApplicationFee: { type: Number, default: 5000 },
     },
 
+    rides: {
+      enabled: { type: Boolean, default: true },
+      baseFare: { type: Number, default: 3000 },
+      perKm: { type: Number, default: 1500 },
+      minFare: { type: Number, default: 5000 },
+    },
+
     moderation: {
       restrictAfter: { type: Number, default: 3 },
       suspendAfter: { type: Number, default: 5 },

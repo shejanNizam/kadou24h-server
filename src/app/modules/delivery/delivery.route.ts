@@ -103,6 +103,65 @@ router.get(
   DeliveryControllers.getMyDeliveries,
 );
 
+// --- Open dispatch: deliveries offered near the rider, first to accept takes it ---
+
+/**
+ * @swagger
+ * /deliveries/rider/offers:
+ *   get:
+ *     tags: [Delivery]
+ *     summary: Open deliveries I can take now, nearest first (Rider)
+ *     description: Distance to the pickup, trip length, earnings, cash to collect. Returns { isOnline, offers } (offers empty while offline).
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Offers
+ */
+router.get("/rider/offers", checkAuth(...riderRoles), DeliveryControllers.getOffers);
+
+/**
+ * @swagger
+ * /deliveries/{id}/claim:
+ *   post:
+ *     tags: [Delivery]
+ *     summary: Take an open delivery (Rider) — the first to accept gets it, else 409
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Delivery taken (status accepted)
+ *       409:
+ *         description: Another rider took it first
+ */
+router.post("/:id/claim", checkAuth(...riderRoles), DeliveryControllers.claimOffer);
+
+/**
+ * @swagger
+ * /deliveries/{id}/skip:
+ *   post:
+ *     tags: [Delivery]
+ *     summary: Hide an open delivery from my list (Rider)
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Hidden
+ */
+router.post("/:id/skip", checkAuth(...riderRoles), DeliveryControllers.skipOffer);
+
 // --- Vendor Assignment ---
 
 /**

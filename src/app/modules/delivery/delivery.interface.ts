@@ -56,6 +56,13 @@ export interface IDeliveryInitial {
   collectsCash: boolean;
   proofPhoto?: IFileRef;
   declineReason?: string;
+  // Open dispatch (client, 2026-10-23): nearby riders see the leg, the first to accept takes it
+  offerOpenedAt?: Date; // visible to riders since
+  offerRadiusKm?: number; // how far the offer has reached so far
+  offerNotified?: Types.ObjectId[]; // riders already told (RiderProfile ids)
+  offerSkippedBy?: Types.ObjectId[]; // riders who passed or declined: not shown again
+  noRiderAlertedAt?: Date; // store + Kadou24h told that nobody took it
+  reservedUntil?: Date; // a rider picked by the store must accept before this
   assignedAt?: Date;
   acceptedAt?: Date;
   pickedUpAt?: Date;

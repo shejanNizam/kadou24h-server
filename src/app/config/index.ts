@@ -35,6 +35,9 @@ const envSchema = z.object({
   // Shared secret the payment gateway sends in the x-webhook-secret header.
   // No default: without it the webhook is disabled (and production refuses to start).
   PAYMENT_WEBHOOK_SECRET: z.string().min(32, "PAYMENT_WEBHOOK_SECRET must be at least 32 characters").optional(),
+  // demo: no gateway is connected yet — the app finishes its own payments ("Demo payment").
+  // Set to live once Orange Money / MTN / card are connected.
+  PAYMENT_MODE: z.enum(["demo", "live"]).default("demo"),
 
   // Firebase service-account JSON, base64-encoded. Empty = push notifications off.
   FIREBASE_SERVICE_ACCOUNT_BASE64: z.string().optional(),
@@ -110,6 +113,7 @@ export const configs = {
 
   frontend_url: env.FRONTEND_URL === "*" ? "*" : splitList(env.FRONTEND_URL),
   payment_webhook_secret: env.PAYMENT_WEBHOOK_SECRET,
+  payment_mode: env.PAYMENT_MODE,
   firebase_service_account_base64: env.FIREBASE_SERVICE_ACCOUNT_BASE64,
   stripe_secret_key: env.STRIPE_SECRET_KEY,
   stripe_webhook_secret: env.STRIPE_WEBHOOK_SECRET,

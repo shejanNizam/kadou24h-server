@@ -9,6 +9,8 @@ import { logger } from "./app/utils/logger";
 import { initSocket } from "./socket/socket";
 import { OrderPaymentServices } from "./app/modules/order/order.payment.service";
 import { BookingServices } from "./app/modules/booking/booking.service";
+import { DeliveryDispatch } from "./app/modules/delivery/delivery.dispatch.service";
+import { RideServices } from "./app/modules/ride/ride.service";
 import { ProfessionalProfileServices } from "./app/modules/professional_profile/professional_profile.service";
 
 let server: Server;
@@ -35,6 +37,10 @@ async function main() {
     OrderPaymentServices.startPaymentExpirySweep();
     // Worker bookings: unanswered requests expire, unconfirmed jobs complete, visibility notices
     BookingServices.startBookingSweep();
+    // Open dispatch: offers reach farther riders, unanswered store picks expire, nobody-took-it alerts
+    DeliveryDispatch.startDispatchSweep();
+    // Moto-taxi: requests reach farther riders, unanswered ones expire
+    RideServices.startRideSweep();
   } catch (error) {
     logger.error("Startup failed", { error });
     process.exit(1);

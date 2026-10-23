@@ -49,6 +49,12 @@ const riderProfileSchema = new Schema<IRiderProfile>(
       completed: { type: Number, default: 0 },
       cancelled: { type: Number, default: 0 },
     },
+    // Moto-taxi rides (passengers rate the rider)
+    rideStats: {
+      completed: { type: Number, default: 0 },
+      ratingAvg: { type: Number, default: 0 },
+      ratingCount: { type: Number, default: 0 },
+    },
     ...reviewFields,
   },
   {

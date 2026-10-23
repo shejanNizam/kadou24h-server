@@ -1,5 +1,7 @@
 /**
  * Online-paid orders (Orange Money, Mobile Money, card) reach the store only once paid.
+ * Cash-on-delivery orders too, once their fees (service, tax, delivery) are paid online
+ * (client, 2026-10-23); their products are then paid in cash to the riders.
  *
  * At checkout the order's sub-orders are created as `pending_payment`: the stock is
  * reserved, but the store sees nothing, no escrow is held and no delivery is planned.
@@ -18,16 +20,19 @@ import { PaymentPurpose, PaymentStatus as PaymentRecordStatus, RefundSource } fr
 import { Payment } from "../payment/payment.model";
 import { RefundServices } from "../payment/refund.service";
 import { holdEscrow, PAYMENT_WINDOW_MINUTES } from "./order.checkout.service";
-import { ISubOrderItem, OrderStatus, PaymentStatus, SubOrderStatus } from "./order.interface";
+import { ISubOrderItem, OrderStatus, PaymentMethod, PaymentStatus, SubOrderStatus } from "./order.interface";
 import { Order } from "./order.model";
 import { cancelSubOrder, syncOrderStatus } from "./order.utils";
 import { SubOrder } from "./sub_order.model";
 
 /** The order's payment succeeded (gateway webhook or the dev simulator). Safe to call twice. */
 const confirmOrderPaid = async (orderId: Types.ObjectId | string) => {
+  const current = await Order.findById(orderId).select("paymentMethod");
+  if (!current) return;
+  // Cash on delivery: only the fees were paid online; the products are paid at the door
   const order = await Order.findByIdAndUpdate(
     orderId,
-    { paymentStatus: PaymentStatus.paid },
+    current.paymentMethod === PaymentMethod.cod ? { feesPaidAt: new Date() } : { paymentStatus: PaymentStatus.paid },
     { returnDocument: "after" },
   );
   if (!order) return;
@@ -43,7 +48,10 @@ const confirmOrderPaid = async (orderId: Types.ObjectId | string) => {
         $push: {
           timeline: {
             status: "payment_received",
-            note: "Online payment received — order sent to the store",
+            note:
+              order.paymentMethod === PaymentMethod.cod
+                ? "Fees paid online — order sent to the store (products paid in cash at delivery)"
+                : "Online payment received — order sent to the store",
             byUserId: order.customerId,
             at: now,
           },
@@ -91,6 +99,8 @@ const expireUnpaidOrders = async (now = new Date()) => {
   const due = await Order.find({
     paymentDueAt: { $lte: now },
     paymentStatus: PaymentStatus.unpaid,
+    // COD orders stay "unpaid" until delivered: only those whose fees never came expire
+    feesPaidAt: { $exists: false },
     status: OrderStatus.active,
   })
     .select("_id orderNumber customerId")

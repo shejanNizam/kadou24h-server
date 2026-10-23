@@ -156,6 +156,14 @@ export interface IOrderInitial {
   placedAt: Date;
   /** Online orders: pay before this, or the order is cancelled and the stock released. */
   paymentDueAt?: Date;
+  /**
+   * Cash on delivery (client, 2026-10-23): the service fee, tax and delivery fees are paid
+   * online first, so Kadou24h and the riders are covered; the riders collect only the
+   * products in cash. Absent on older COD orders (everything was paid in cash).
+   */
+  upfrontAmount?: number;
+  /** COD: when those fees were paid (the order then reached the stores) */
+  feesPaidAt?: Date;
 }
 
 export type IOrder = IOrderInitial & Document;

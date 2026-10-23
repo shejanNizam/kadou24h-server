@@ -21,6 +21,7 @@ import { Delivery } from "./delivery.model";
 import { WalletMode } from "../wallet/wallet.interface";
 import { WalletServices } from "../wallet/wallet.service";
 import { Notify } from "../notification/notification.events";
+import { DISPATCH, DeliveryDispatch } from "./delivery.dispatch.service";
 
 /**
  * Lists available online delivery partners for a delivery leg.
@@ -118,7 +119,9 @@ const getAvailableRiders = async (
 };
 
 /**
- * Assigns a delivery leg to a rider.
+ * Sends a delivery leg to one rider (the store's choice). Open dispatch: the
+ * rider has DISPATCH.reserveMinutes to accept, then the leg goes back to the
+ * nearby riders (see delivery.dispatch.service).
  */
 const assignRider = async (
   actorUserId: string,
@@ -180,17 +183,31 @@ const assignRider = async (
     );
   }
 
-  delivery.riderId = rider._id as Types.ObjectId;
-  delivery.assignedBy = new Types.ObjectId(actorUserId);
-  delivery.assignedAt = new Date();
-  delivery.status = DeliveryStatus.assigned;
-  await delivery.save();
+  // Atomic: a nearby rider may have taken the open offer meanwhile
+  const now = new Date();
+  const reserved = await Delivery.findOneAndUpdate(
+    { _id: delivery._id, status: { $in: [DeliveryStatus.pending_assignment, DeliveryStatus.declined] } },
+    {
+      $set: {
+        riderId: rider._id,
+        assignedBy: new Types.ObjectId(actorUserId),
+        assignedAt: now,
+        reservedUntil: new Date(now.getTime() + DISPATCH.reserveMinutes * 60_000),
+        status: DeliveryStatus.assigned,
+      },
+    },
+    { returnDocument: "after" },
+  );
+  if (!reserved) {
+    throw new AppError(httpStatus.CONFLICT, "A rider has just taken this delivery. Please refresh.");
+  }
+  Object.assign(delivery, reserved.toObject());
 
   // Update sub-order current rider
   await SubOrder.findByIdAndUpdate(delivery.subOrderId, {
     currentRiderId: rider._id,
   });
-  Notify.deliveryAssigned(rider.userId, delivery, subOrder.codAmountToCollect);
+  Notify.deliveryAssigned(rider.userId, delivery, subOrder.codAmountToCollect, DISPATCH.reserveMinutes);
 
   // Real-time notifications
   emitToUser(String(rider.userId), "delivery:assigned", {
@@ -201,6 +218,7 @@ const assignRider = async (
     fromName: delivery.fromName,
     toName: delivery.toName,
     collectsCash: delivery.collectsCash,
+    reservedUntil: delivery.reservedUntil,
   });
 
   emitToDelivery(String(delivery._id), "delivery:status_changed", {
@@ -250,7 +268,7 @@ const acceptDelivery = async (riderUserId: string, deliveryId: string) => {
   // Atomic: the leg may have been cancelled or re-assigned meanwhile
   const accepted = await Delivery.findOneAndUpdate(
     { _id: delivery._id, riderId: rider._id, status: DeliveryStatus.assigned },
-    { $set: { status: DeliveryStatus.accepted, acceptedAt: new Date() } },
+    { $set: { status: DeliveryStatus.accepted, acceptedAt: new Date() }, $unset: { reservedUntil: 1 } },
     { returnDocument: "after" },
   );
   if (!accepted) {
@@ -280,7 +298,8 @@ const acceptDelivery = async (riderUserId: string, deliveryId: string) => {
 };
 
 /**
- * Rider declines assigned job; reverts leg to pending_assignment.
+ * Rider declines assigned job; reverts leg to pending_assignment and offers it
+ * to the nearby riders again (not to this one).
  */
 const declineDelivery = async (
   riderUserId: string,
@@ -295,7 +314,8 @@ const declineDelivery = async (
     { _id: deliveryId, riderId: rider._id, status: DeliveryStatus.assigned },
     {
       $set: { status: DeliveryStatus.pending_assignment, declineReason: reason },
-      $unset: { riderId: 1 },
+      $unset: { riderId: 1, reservedUntil: 1 },
+      $addToSet: { offerSkippedBy: rider._id },
     },
     { returnDocument: "after" },
   );
@@ -321,6 +341,7 @@ const declineDelivery = async (
   emitToDelivery(String(delivery._id), "delivery:status_changed", {
     status: DeliveryStatus.pending_assignment,
   });
+  DeliveryDispatch.openLegsSoon(delivery.subOrderId);
 
   return delivery;
 };

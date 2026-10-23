@@ -43,6 +43,15 @@ export const updateSettingsZodSchema = z
       })
       .partial(),
 
+    rides: z
+      .object({
+        enabled: z.boolean(),
+        baseFare: gnf("rides.baseFare"),
+        perKm: gnf("rides.perKm"),
+        minFare: gnf("rides.minFare"),
+      })
+      .partial(),
+
     moderation: z
       .object({
         restrictAfter: z.number().int().min(1),

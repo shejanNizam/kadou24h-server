@@ -80,8 +80,16 @@ const initiatePayment = async (
     if (order.paymentStatus === OrderPaymentStatus.paid) {
       throw new AppError(httpStatus.BAD_REQUEST, "Order is already paid");
     }
-    if (order.paymentMethod === "cod") {
+    const isCod = order.paymentMethod === "cod";
+    // Older COD orders: everything is paid in cash
+    if (isCod && !order.upfrontAmount) {
       throw new AppError(httpStatus.BAD_REQUEST, "Cash on delivery orders are paid to the rider");
+    }
+    if (isCod && order.feesPaidAt) {
+      throw new AppError(httpStatus.BAD_REQUEST, "The fees of this order are already paid");
+    }
+    if (isCod && payload.method === PaymentMethod.cod) {
+      throw new AppError(httpStatus.BAD_REQUEST, "Pay the fees online (Orange Money, Mobile Money or card)");
     }
     if (order.status === "cancelled") {
       throw new AppError(httpStatus.BAD_REQUEST, "This order was cancelled");
@@ -90,7 +98,8 @@ const initiatePayment = async (
       throw new AppError(httpStatus.BAD_REQUEST, "The time to pay for this order is over. It will be cancelled and the items put back in your cart.");
     }
 
-    amount = order.total;
+    // COD: the service fee, tax and delivery now; the products in cash to the riders
+    amount = isCod ? order.upfrontAmount! : order.total;
   } else if (payload.purpose === PaymentPurpose.job_publish) {
     amount = settings.pricing?.jobPublishFee ?? 5000;
   } else if (payload.purpose === PaymentPurpose.cv_unlock) {
@@ -435,8 +444,9 @@ const getMyPayment = async (payerId: string, paymentId: string) => {
 };
 
 /**
- * Development only: no gateway is connected yet, so the app can finish its own
- * pending payment the way the gateway webhook would. Disabled in production.
+ * Demo payments: no gateway is connected yet, so the app can finish its own
+ * pending payment the way the gateway webhook would. Allowed in development,
+ * and in production while PAYMENT_MODE=demo.
  */
 const devConfirmPayment = async (
   payerId: string,

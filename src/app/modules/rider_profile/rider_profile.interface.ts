@@ -62,6 +62,7 @@ export interface IRiderProfileInitial extends Omit<IReviewable, "_id"> {
   activeDeliveryCount: number;
   cashLimit?: number; // GNF; empty = settings.riderCashLimitDefault
   stats: IRiderStats;
+  rideStats?: { completed: number; ratingAvg: number; ratingCount: number };
 }
 
 export type IRiderProfile = IRiderProfileInitial & Document;

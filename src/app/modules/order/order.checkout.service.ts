@@ -9,6 +9,7 @@ import { Notify } from "../notification/notification.events";
 import { Cart } from "../cart/cart.model";
 import { CounterServices } from "../counter/counter.service";
 import { CouponServices, normalizeCode } from "../coupon/coupon.service";
+import { codCashBase } from "./order.utils";
 import { DeliveryRateType, DeliveryVehicleType } from "../delivery_rate/delivery_rate.interface";
 import { DeliveryRateServices } from "../delivery_rate/delivery_rate.service";
 import { Product } from "../product/product.model";
@@ -415,14 +416,14 @@ const calculateCheckout = async (
   const taxAmount = Math.round(overallSubtotal * (taxRate / 100));
   const total = overallSubtotal + overallDeliveryFee + taxAmount + platformFee - discount;
 
-  // Cash on delivery: each store's rider collects its part (the first also takes the service
-  // fee and tax). A rider may carry at most riderCashLimitDefault, so above it no rider could
-  // accept the delivery — those orders must be paid online.
+  // Cash on delivery (client, 2026-10-23): the service fee, tax and delivery fees are paid
+  // online first, so Kadou24h and the riders are covered; each store's rider then collects
+  // only its products (minus the promo share). A rider may carry at most
+  // riderCashLimitDefault, so above it no rider could accept — those orders are paid online.
   const codLimit = settings.riderCashLimitDefault || 1_000_000;
-  const codLargestStoreAmount = Math.max(
-    0,
-    ...vendorSplits.map((split, i) => split.total + (i === 0 ? platformFee + taxAmount : 0)),
-  );
+  const codLargestStoreAmount = Math.max(0, ...vendorSplits.map((split) => codCashBase(split, true)));
+  const isCod = payload.paymentMethod === PaymentMethod.cod;
+  const upfront = platformFee + taxAmount + overallDeliveryFee;
 
   return {
     addressSnapshot,
@@ -441,6 +442,10 @@ const calculateCheckout = async (
       platformFee,
       discount,
       total,
+      /** Paid online at checkout: everything, or (COD) the service fee, tax and delivery */
+      payNow: isCod ? upfront : total,
+      /** COD: the products, in cash to the riders */
+      payOnDelivery: isCod ? total - upfront : 0,
     },
     /** The promo code typed: valid (with the discount) or why it can't be used */
     coupon,
@@ -558,8 +563,10 @@ const createOrderRecords = async (
 
   // Generate order number
   const orderNumber = await CounterServices.nextCode("order");
-  // Online: the store sees nothing until the payment is confirmed; the stock above stays reserved
-  const payOnline = calculation.paymentMethod !== PaymentMethod.cod;
+  // The store sees nothing until the online payment is confirmed (everything, or the COD
+  // fees); the stock above stays reserved meanwhile
+  const isCod = calculation.paymentMethod === PaymentMethod.cod;
+  const payOnline = true;
   const placedAt = new Date();
 
   // Create parent order
@@ -584,6 +591,7 @@ const createOrderRecords = async (
     status: OrderStatus.active,
     placedAt,
     ...(payOnline && { paymentDueAt: new Date(placedAt.getTime() + PAYMENT_WINDOW_MINUTES * 60_000) }),
+    ...(isCod && { upfrontAmount: calculation.pricing.payNow }),
   });
   done.orderId = order._id as Types.ObjectId;
 
@@ -605,15 +613,8 @@ const createOrderRecords = async (
     const subOrderNumber = `${orderNumber}-${index}`;
     index += 1;
 
-    // COD cash amount to collect
-    let codAmountToCollect: number | undefined;
-    if (calculation.paymentMethod === PaymentMethod.cod) {
-      codAmountToCollect =
-        split.total +
-        (index === 2
-          ? calculation.pricing.platformFee + calculation.pricing.taxAmount
-          : 0);
-    }
+    // COD: the rider collects the products only (the fees are paid online first)
+    const codAmountToCollect = isCod ? codCashBase(split, true) : undefined;
 
     const subOrder = await SubOrder.create({
       orderId: order._id,
@@ -624,7 +625,9 @@ const createOrderRecords = async (
       timeline: [
         {
           status: "order_placed",
-          note: payOnline ? "Order placed by customer — waiting for the online payment" : "Order placed by customer",
+          note: isCod
+            ? "Order placed by customer — waiting for the fees to be paid online"
+            : "Order placed by customer — waiting for the online payment",
           byUserId: new Types.ObjectId(customerId),
           at: placedAt,
         },

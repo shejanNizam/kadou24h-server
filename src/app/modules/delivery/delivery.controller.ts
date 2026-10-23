@@ -31,6 +31,36 @@ const assignRider = catchAsync(async (req: Request, res: Response) => {
   });
 });
 
+const getOffers = catchAsync(async (req: Request, res: Response) => {
+  const result = await DeliveryServices.getOffers(req.user._id);
+  sendResponse(res, {
+    statusCode: httpStatus.OK,
+    success: true,
+    message: "Open deliveries near you retrieved successfully",
+    data: result,
+  });
+});
+
+const claimOffer = catchAsync(async (req: Request, res: Response) => {
+  const result = await DeliveryServices.claimOffer(req.user._id, req.params.id as string);
+  sendResponse(res, {
+    statusCode: httpStatus.OK,
+    success: true,
+    message: "Delivery taken: it is yours",
+    data: result,
+  });
+});
+
+const skipOffer = catchAsync(async (req: Request, res: Response) => {
+  const result = await DeliveryServices.skipOffer(req.user._id, req.params.id as string);
+  sendResponse(res, {
+    statusCode: httpStatus.OK,
+    success: true,
+    message: "Offer hidden",
+    data: result,
+  });
+});
+
 const acceptDelivery = catchAsync(async (req: Request, res: Response) => {
   const result = await DeliveryServices.acceptDelivery(
     req.user._id,
@@ -159,6 +189,9 @@ const getMyDeliveries = catchAsync(async (req: Request, res: Response) => {
 export const DeliveryControllers = {
   getAvailableRiders,
   assignRider,
+  getOffers,
+  claimOffer,
+  skipOffer,
   acceptDelivery,
   declineDelivery,
   goingToPickup,
