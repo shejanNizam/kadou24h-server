@@ -17,7 +17,7 @@ import {
 } from "./chat.interface";
 import { Conversation } from "./conversation.model";
 import { Message } from "./message.model";
-import { assertReachable, resolveConversation, type StartConversationInput } from "./chat.start.service";
+import { assertReachable, resolveConversation, voiceAllowedFor, type StartConversationInput } from "./chat.start.service";
 import { inspectContent } from "./moderation.util";
 import { VendorProfile } from "../vendor_profile/vendor_profile.model";
 import { ModerationViolation } from "./moderation_violation.model";
@@ -40,7 +40,7 @@ type LeanParticipant = { userId: { _id: Types.ObjectId; name?: string; avatar?: 
  * Adds `peer` (the other person: display name, avatar, mode) and `myUnread`
  * for the viewer. Store participants are shown with the store name and logo.
  */
-const presentConversations = async <T extends { participants: LeanParticipant[] }>(
+const presentConversations = async <T extends { type: string; participants: LeanParticipant[] }>(
   conversations: T[],
   viewerId: string,
 ) => {
@@ -65,6 +65,8 @@ const presentConversations = async <T extends { participants: LeanParticipant[] 
     const store = other?.mode === AppMode.vendor ? storeByUser.get(idOf(other)) : undefined;
     return {
       ...c,
+      // The current rule, also for chats created under the old one
+      allowVoice: voiceAllowedFor(c.type),
       myMode: mine?.mode,
       myUnread: mine?.unreadCount ?? 0,
       blockedByMe: other ? blocked.has(idOf(other)) : false,
@@ -288,11 +290,8 @@ const sendMessage = async (
 
   // 3. Voice note policy check
   if (payload.type === MessageType.voice) {
-    if (!conversation.allowVoice) {
-      throw new AppError(
-        400,
-        "Voice notes are only permitted between customer and delivery partner.",
-      );
+    if (!voiceAllowedFor(conversation.type)) {
+      throw new AppError(400, "Voice notes are not available in this chat.");
     }
   }
 

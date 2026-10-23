@@ -43,9 +43,16 @@ export interface ResolvedConversation {
     workerProfileId?: Types.ObjectId;
     applicationId?: Types.ObjectId;
   };
-  /** Client rule: voice notes only between the buyer and the rider */
+  /** See voiceAllowedFor */
   allowVoice: boolean;
 }
+
+/**
+ * Voice notes (client, 2026-10-23): allowed in store, order (customer / store /
+ * rider) and worker chats. Not in job-application chats: a recruiter pays to
+ * unlock a candidate's contact, and voice can't be checked for phone numbers.
+ */
+export const voiceAllowedFor = (type: ConversationType | string) => type !== ConversationType.job_application;
 
 const oid = (id: unknown) => new Types.ObjectId(String(id));
 const notFound = (what: string) => new AppError(httpStatus.NOT_FOUND, `${what} not found`);
@@ -67,7 +74,7 @@ export const resolveConversation = async (
       me: { userId: me, mode: AppMode.customer },
       other: { userId: vendor.userId, mode: AppMode.vendor },
       context: {},
-      allowVoice: false,
+      allowVoice: voiceAllowedFor(input.type),
     };
   }
 
@@ -85,7 +92,7 @@ export const resolveConversation = async (
       me: { userId: me, mode: AppMode.customer },
       other: { userId: other, mode: AppMode.customer },
       context: { workerProfileId: booking.workerProfileId },
-      allowVoice: false,
+      allowVoice: voiceAllowedFor(input.type),
     };
   }
 
@@ -102,7 +109,7 @@ export const resolveConversation = async (
       me: { userId: me, mode: AppMode.customer },
       other: { userId: profile.userId, mode: AppMode.customer },
       context: { workerProfileId: profile._id as Types.ObjectId },
-      allowVoice: false,
+      allowVoice: voiceAllowedFor(input.type),
     };
   }
 
@@ -148,13 +155,12 @@ export const resolveConversation = async (
     if (!myMode || String(other.userId) === userId) {
       throw new AppError(httpStatus.BAD_REQUEST, "You cannot start a conversation with yourself");
     }
-    const pair = new Set([myMode, other.mode]);
     return {
       type: input.type,
       me: { userId: me, mode: myMode },
       other,
       context: { orderId: subOrder.orderId, subOrderId: subOrder._id as Types.ObjectId },
-      allowVoice: pair.has(AppMode.customer) && pair.has(AppMode.rider),
+      allowVoice: voiceAllowedFor(input.type),
     };
   }
 
@@ -180,7 +186,7 @@ export const resolveConversation = async (
     me: iAmApplicant ? applicant : poster,
     other: iAmApplicant ? poster : applicant,
     context: { applicationId: application._id as Types.ObjectId },
-    allowVoice: false,
+    allowVoice: voiceAllowedFor(ConversationType.job_application),
   };
 };
 

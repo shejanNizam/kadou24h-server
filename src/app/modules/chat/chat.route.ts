@@ -42,7 +42,7 @@ router.post(
  *       content:
  *         application/json:
  *           schema:
- *             description: "Say what the chat is about; the server finds the other person and the modes. One of: { type: buyer_seller, vendorId } · { type: worker, workerProfileId } · { type: order, subOrderId, with: vendor|rider|customer } · { type: job_application, applicationId }. Voice notes are allowed only between the buyer and the rider of that order."
+ *             description: "Say what the chat is about; the server finds the other person and the modes. One of: { type: buyer_seller, vendorId } · { type: worker, workerProfileId } · { type: order, subOrderId, with: vendor|rider|customer } · { type: job_application, applicationId }. Voice notes are allowed in every chat except job applications."
  *             type: object
  *             required: [type]
  *             properties:

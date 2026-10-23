@@ -5,6 +5,7 @@ import {
   MessageType,
   ModerationAction,
 } from "../app/modules/chat/chat.interface";
+import { voiceAllowedFor } from "../app/modules/chat/chat.start.service";
 import { ChatValidations } from "../app/modules/chat/chat.validation";
 import { inspectContent } from "../app/modules/chat/moderation.util";
 import { ReportStatus, ReportTargetType } from "../app/modules/report/report.interface";
@@ -80,25 +81,15 @@ describe("Chat, Trust & Moderation Module (Step 8)", () => {
   });
 
   describe("Voice Note Policy Logic", () => {
-    // Client rule: allow_voice = true ONLY for customer <-> rider
-    const checkVoiceAllowed = (myMode: AppMode, recipientMode: AppMode): boolean => {
-      return (
-        (myMode === AppMode.customer && recipientMode === AppMode.rider) ||
-        (myMode === AppMode.rider && recipientMode === AppMode.customer)
-      );
-    };
-
-    it("allows voice notes strictly between customer and rider", () => {
-      expect(checkVoiceAllowed(AppMode.customer, AppMode.rider)).toBe(true);
-      expect(checkVoiceAllowed(AppMode.rider, AppMode.customer)).toBe(true);
+    // Client rule (2026-10-23): voice in store, order and worker chats, not job applications
+    it("allows voice notes in store, order and worker chats", () => {
+      expect(voiceAllowedFor(ConversationType.buyer_seller)).toBe(true);
+      expect(voiceAllowedFor(ConversationType.order)).toBe(true);
+      expect(voiceAllowedFor(ConversationType.worker)).toBe(true);
     });
 
-    it("strictly disallows voice notes for buyer_seller, vendor_rider, and worker chats", () => {
-      expect(checkVoiceAllowed(AppMode.customer, AppMode.vendor)).toBe(false);
-      expect(checkVoiceAllowed(AppMode.vendor, AppMode.customer)).toBe(false);
-      expect(checkVoiceAllowed(AppMode.vendor, AppMode.rider)).toBe(false);
-      expect(checkVoiceAllowed(AppMode.rider, AppMode.vendor)).toBe(false);
-      expect(checkVoiceAllowed(AppMode.customer, AppMode.customer)).toBe(false);
+    it("disallows voice notes in job-application chats (contact unlock is paid)", () => {
+      expect(voiceAllowedFor(ConversationType.job_application)).toBe(false);
     });
   });
 
