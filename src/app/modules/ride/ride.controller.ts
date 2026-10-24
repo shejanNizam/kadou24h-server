@@ -27,6 +27,7 @@ const rateRide = catchAsync(async (req, res) => ok(res, "Thank you for your rati
 // Rider
 const getRideOffers = catchAsync(async (req, res) => ok(res, "Rides near you", await RideServices.getRideOffers(req.user._id)));
 const getRiderCurrentRide = catchAsync(async (req, res) => ok(res, "Current ride", await RideServices.getRiderCurrentRide(req.user._id)));
+const getRiderAccess = catchAsync(async (req, res) => ok(res, "Moto-taxi subscription", await RideServices.getRiderAccess(req.user._id)));
 const getRiderRides = catchAsync(async (req, res) => page(res, "Rides retrieved", await RideServices.getRiderRides(req.user._id, req.query as never)));
 const acceptRide = catchAsync(async (req, res) => ok(res, "Ride accepted: go to the pickup point", await RideServices.acceptRide(req.user._id, id(req))));
 const skipRide = catchAsync(async (req, res) => ok(res, "Ride hidden", await RideServices.skipRide(req.user._id, id(req))));
@@ -50,6 +51,7 @@ export const RideControllers = {
   rateRide,
   getRideOffers,
   getRiderCurrentRide,
+  getRiderAccess,
   getRiderRides,
   acceptRide,
   skipRide,

@@ -1088,6 +1088,13 @@ Errors: 409 already connected / already invited · 403 the inviter tried to answ
 | `POST /deliveries/:id/assign` | Vendor / Admin | assign delivery leg to partner: `{ riderId }`; sends real-time push/socket alert |
 | `GET /deliveries/:id/track` | Customer, store owner, riders of the leg chain, admin | live delivery tracking. The customer and the store may follow every leg of their order. **PIN visibility**: `pickupPin` only to the giver (the vendor on the leg that starts at the store, or the rider arriving at a station), `handoverPin` only to the receiver (the customer on the final leg, or the next rider at a station). Middle station→station legs show no PIN to the customer or the store. The assigned rider never sees its own leg's PINs. On the rider's own leg at bus stations: `incomingHandoverPin` (show it to the rider arriving with the parcel) and `outgoingPickupPin` (show it to the rider taking the parcel next). |
 
+### 7.20o Moto-taxi rider subscription and payment gateways (2026-10-24)
+
+- **Rider subscription** (client: free first, later monthly, never a commission). `settings.rides.subscriptionRequired` (default false) + `trialDays` (default 30). While on, a moto rider gets ride offers / can accept only with `rideAccessUntil` in the future; each rider gets the free days once (started on first `GET /rides/rider/offers`, `/rides/rider/access` or accept). Deliveries are never blocked. Plans: audience `moto_driver` (only approved moto riders may subscribe); paying adds the plan days after what is left.
+- `GET /rides/rider/access` → `{ required, allowed, until, trialAvailable, trialDays, justStartedTrial }`. Accept while not allowed → 400 "Your moto-taxi subscription has ended…".
+- **Gateways** (`modules/payment/gateway`): `PAYMENT_MODE=demo` → demo gateway (providerRef `DEMO_…`, no page; the app simulates). `live` → `PAYMENT_PROVIDER` must name a registered gateway, else initiate → 503. A gateway implements `createCheckout` (providerRef + `checkoutUrl`, saved on the payment; the app opens it), `parseWebhook` (checks the aggregator signature on the raw body) and optional `fetchStatus` (used at most every 15 s while the app polls `GET /payments/:id` on a pending payment).
+- `POST /payments/webhook/:provider` — the aggregator's own notification (404 in demo mode or for another provider). The generic `POST /payments/webhook` with `x-webhook-secret` stays.
+
 ### 7.20n Moto-taxi rides, point A → point B (2026-10-23, client: "structure it as you see fit")
 
 Decisions (to review with the client): price fixed before ordering, nearest riders first and the first to accept takes it, cash to the rider at the end, no commission yet (open question: commission per ride or rider subscription), passenger rates the rider.

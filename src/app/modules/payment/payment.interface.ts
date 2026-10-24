@@ -33,6 +33,7 @@ export interface IPayment extends Document {
   amount: number;
   status: PaymentStatus;
   providerRef?: string;
+  checkoutUrl?: string;
   idempotencyKey?: string;
   paidAt?: Date;
   raw?: Record<string, unknown>;

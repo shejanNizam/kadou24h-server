@@ -13,6 +13,10 @@ import {
 import { SubscriptionPlan } from "./subscription_plan.model";
 import { UserSubscription } from "./user_subscription.model";
 import { extendWorkerListing } from "../professional_profile/worker_listing";
+import { ApprovalStatus } from "../profile_common/profile.common";
+import { extendRideAccess } from "../rider_profile/ride_access";
+import { PartnerType } from "../rider_profile/rider_profile.interface";
+import { RiderProfile } from "../rider_profile/rider_profile.model";
 
 const createPlan = async (
   adminUserId: string,
@@ -65,6 +69,12 @@ const subscribe = async (
     throw new AppError(httpStatus.NOT_FOUND, "Active subscription plan not found");
   }
 
+  // A moto-driver plan only makes sense for an approved moto rider
+  if (plan.audience === PlanAudience.moto_driver) {
+    const rider = await RiderProfile.exists({ userId, partnerType: PartnerType.moto, approvalStatus: ApprovalStatus.approved });
+    if (!rider) throw new AppError(httpStatus.BAD_REQUEST, "Only approved moto riders can take a moto-taxi plan");
+  }
+
   // 1. Process subscription payment
   const payment = await PaymentServices.initiatePayment(userId, {
     purpose: PaymentPurpose.subscription,
@@ -103,6 +113,9 @@ const subscribe = async (
   // A service-provider plan keeps the worker visible to customers
   if (isPaid && plan.audience === PlanAudience.service_provider) {
     await extendWorkerListing(userId, plan.durationDays);
+  }
+  if (isPaid && plan.audience === PlanAudience.moto_driver) {
+    await extendRideAccess(userId, plan.durationDays);
   }
 
   return { subscription, payment };

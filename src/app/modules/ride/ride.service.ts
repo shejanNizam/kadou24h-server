@@ -27,6 +27,7 @@ import { ApprovalStatus } from "../profile_common/profile.common";
 import { PartnerType } from "../rider_profile/rider_profile.interface";
 import { RiderProfile } from "../rider_profile/rider_profile.model";
 import { SettingsServices } from "../settings/settings.service";
+import { rideAccessFilter, rideAccessState, startRideTrialIfFirst } from "../rider_profile/ride_access";
 import { User } from "../user/user.model";
 import { IRide, RideStatus } from "./ride.interface";
 import { Ride } from "./ride.model";
@@ -97,12 +98,17 @@ interface RiderLite {
   isOnline?: boolean;
   partnerType?: PartnerType;
   approvalStatus?: ApprovalStatus;
+  rideAccessUntil?: Date;
+  rideTrialUsedAt?: Date;
 }
 
-const RIDER_FIELDS = "userId lastLocation lastLocationAt activeDeliveryCount isOnline partnerType approvalStatus";
+const RIDER_FIELDS = "userId lastLocation lastLocationAt activeDeliveryCount isOnline partnerType approvalStatus rideAccessUntil rideTrialUsedAt";
+
+const rideSettings = async () => (await SettingsServices.getSettings()).rides;
 
 /** Online moto riders with a recent position, no parcel and no ride; with their distance to a point */
 const availableRiders = async (point: [number, number], now = Date.now()) => {
+  const rides = await rideSettings();
   const [riders, busy] = await Promise.all([
     RiderProfile.find({
       approvalStatus: ApprovalStatus.approved,
@@ -110,6 +116,8 @@ const availableRiders = async (point: [number, number], now = Date.now()) => {
       isOnline: true,
       activeDeliveryCount: { $lte: 0 },
       lastLocationAt: { $gte: new Date(now - RIDE.locationFreshMinutes * MINUTE) },
+      // Subscription on: only riders paid up or still in their free period
+      ...rideAccessFilter(rides, new Date(now)),
     })
       .select(RIDER_FIELDS)
       .lean<RiderLite[]>(),
@@ -125,6 +133,9 @@ const availableRiders = async (point: [number, number], now = Date.now()) => {
 const riderBlocker = async (rider: RiderLite) => {
   if (rider.approvalStatus !== ApprovalStatus.approved || rider.partnerType !== PartnerType.moto) {
     return "Only approved moto riders can take rides";
+  }
+  if (!rideAccessState(rider, await rideSettings()).allowed) {
+    return "Your moto-taxi subscription has ended. Choose a plan to receive passengers again";
   }
   if (!rider.isOnline) return "Go online to take rides";
   if ((rider.activeDeliveryCount ?? 0) > 0) return "Finish your deliveries before taking a passenger";
@@ -330,6 +341,7 @@ const myRiderProfile = async (riderUserId: string) => {
 /** Ride requests I can take now, nearest first (fare, pickup distance, trip) */
 const getRideOffers = async (riderUserId: string) => {
   const rider = await myRiderProfile(riderUserId);
+  await startRideTrialIfFirst(rider._id, await rideSettings());
   if ((await riderBlocker(rider)) || !rider.lastLocation?.coordinates) return [];
   const fresh = rider.lastLocationAt && Date.now() - rider.lastLocationAt.getTime() <= RIDE.locationFreshMinutes * MINUTE;
   if (!fresh) return [];
@@ -360,6 +372,7 @@ const getRideOffers = async (riderUserId: string) => {
 /** The first rider to accept takes the ride (atomic) */
 const acceptRide = async (riderUserId: string, id: string) => {
   const rider = await myRiderProfile(riderUserId);
+  await startRideTrialIfFirst(rider._id, await rideSettings());
   const blocker = await riderBlocker(rider);
   if (blocker) throw new AppError(httpStatus.BAD_REQUEST, blocker);
   const ride = Types.ObjectId.isValid(id) ? await Ride.findById(id).select("+offerSkippedBy") : null;
@@ -382,6 +395,15 @@ const acceptRide = async (riderUserId: string, id: string) => {
   RideNotify.changed(taken, [taken.passengerId, riderUserId]);
   await offerGone(taken._id, rider._id);
   return getRide(riderUserId, String(taken._id));
+};
+
+/** My moto-taxi subscription: required or not, until when (starts the free period the first time) */
+const getRiderAccess = async (riderUserId: string) => {
+  const rider = await myRiderProfile(riderUserId);
+  const rides = await rideSettings();
+  const started = await startRideTrialIfFirst(rider._id, rides);
+  const state = rideAccessState(started ? { rideAccessUntil: started, rideTrialUsedAt: new Date() } : rider, rides);
+  return { ...state, trialDays: rides?.trialDays ?? 30, justStartedTrial: Boolean(started) };
 };
 
 const skipRide = async (riderUserId: string, id: string) => {
@@ -604,6 +626,7 @@ export const RideServices = {
   riderStep,
   releaseByRider,
   getRiderCurrentRide,
+  getRiderAccess,
   getRiderRides,
   sweep,
   startRideSweep,

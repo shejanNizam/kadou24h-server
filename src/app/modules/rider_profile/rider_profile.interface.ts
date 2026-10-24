@@ -63,6 +63,9 @@ export interface IRiderProfileInitial extends Omit<IReviewable, "_id"> {
   cashLimit?: number; // GNF; empty = settings.riderCashLimitDefault
   stats: IRiderStats;
   rideStats?: { completed: number; ratingAvg: number; ratingCount: number };
+  // Moto-taxi subscription (only checked while settings.rides.subscriptionRequired is on)
+  rideAccessUntil?: Date;
+  rideTrialUsedAt?: Date;
 }
 
 export type IRiderProfile = IRiderProfileInitial & Document;

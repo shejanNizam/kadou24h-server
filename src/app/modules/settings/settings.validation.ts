@@ -49,6 +49,8 @@ export const updateSettingsZodSchema = z
         baseFare: gnf("rides.baseFare"),
         perKm: gnf("rides.perKm"),
         minFare: gnf("rides.minFare"),
+        subscriptionRequired: z.boolean(),
+        trialDays: z.number().int().min(0).max(365),
       })
       .partial(),
 

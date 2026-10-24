@@ -159,6 +159,7 @@ describe("Jobs, Worker Profiles & CV Module (Step 7)", () => {
       expect(Object.values(PlanAudience)).toEqual([
         "job_seeker",
         "service_provider",
+        "moto_driver",
       ]);
       expect(Object.values(SubscriptionStatus)).toEqual([
         "pending",

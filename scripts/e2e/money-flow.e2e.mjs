@@ -1348,6 +1348,47 @@ const run = async () => {
   check("admin rides: cancelling needs a reason", r.status === 400, brief(r));
   r = await call("POST", `/rides/admin/${ride4?._id}/cancel`, { reason: "Test du support" }, admin);
   check("admin rides: the team can cancel a running ride", ok(r) && r.body.data?.status === "cancelled" && r.body.data?.cancellation?.by === "admin", brief(r));
+
+  // ═════ 14. Moto-taxi subscription (client: free at first, later monthly, never a commission) ═════
+  r = await call("GET", "/rides/rider/access", null, T.token);
+  check("ride plan: off by default — riders take passengers for free", ok(r) && r.body.data?.required === false && r.body.data?.allowed === true, brief(r));
+  r = await call("PATCH", "/settings", { rides: { subscriptionRequired: true, trialDays: 30 } }, admin);
+  check("ride plan: the team switches it on", ok(r) && r.body.data?.rides?.subscriptionRequired === true && r.body.data?.rides?.baseFare === settingsRides.baseFare, brief(r));
+  r = await call("GET", "/rides/rider/access", null, T.token);
+  const rideTrialDays = r.body.data?.until && Math.round((new Date(r.body.data.until).getTime() - Date.now()) / 86_400_000);
+  check("ride plan: each rider first gets the free days, once", ok(r) && r.body.data?.allowed === true && r.body.data?.justStartedTrial === true && rideTrialDays === 30, brief(r));
+  r = await call("GET", "/rides/rider/access", null, T.token);
+  check("ride plan: …not twice", r.body.data?.justStartedTrial === false && r.body.data?.allowed === true, brief(r));
+  await db((c) => c.collection("riderprofiles").updateOne({ _id: oid(T.riderId) }, { $set: { rideAccessUntil: new Date(Date.now() - 1000) } }));
+  r = await call("GET", "/rides/rider/access", null, T.token);
+  check("ride plan: free days over → no more passengers", r.body.data?.required === true && r.body.data?.allowed === false, brief(r));
+  r = await call("POST", "/rides", { pickup: PICK, dropoff: DROP }, PA.token);
+  const ride5 = r.body.data;
+  check("ride plan: …the ride isn't offered to that rider", ok(r) && !(await rideOffers(T.token)).some((o) => o._id === ride5?._id));
+  r = await call("POST", `/rides/${ride5?._id}/accept`, null, T.token);
+  check("ride plan: …nor can they take it", r.status === 400 && /subscription has ended/i.test(r.body.message ?? ""), brief(r));
+  r = await call("POST", "/subscriptions/admin/plans", { name: "Moto-taxi 30 jours", audience: "moto_driver", price: 15000, durationDays: 30, features: [], highlights: [] }, admin);
+  const motoPlan = r.body.data?._id;
+  check("ride plan: the team creates a moto-taxi rider plan", ok(r) && r.body.data?.audience === "moto_driver", brief(r));
+  r = await call("POST", "/subscriptions/subscribe", { planId: motoPlan, paymentMethod: "orange_money" }, PA.token);
+  check("ride plan: only approved moto riders can buy it", r.status === 400, brief(r));
+  r = await call("POST", "/subscriptions/subscribe", { planId: motoPlan, paymentMethod: "orange_money" }, T.token);
+  const planPayment = r.body.data?.payment;
+  check(
+    "ride plan: paid online through the gateway (demo now: no payment page)",
+    ok(r) && planPayment?.amount === 15000 && planPayment?.provider === "demo" && /^DEMO_/.test(planPayment?.providerRef ?? "") && !planPayment?.checkoutUrl,
+    brief(r),
+  );
+  await webhook({ paymentId: planPayment?._id, status: "success", amount: 15000 });
+  r = await call("GET", "/rides/rider/access", null, T.token);
+  const paidRideDays = r.body.data?.until && Math.round((new Date(r.body.data.until).getTime() - Date.now()) / 86_400_000);
+  check("ride plan: paid → passengers again for the plan's 30 days", r.body.data?.allowed === true && paidRideDays === 30, brief(r));
+  check("ride plan: …the waiting ride is offered again", (await rideOffers(T.token)).some((o) => o._id === ride5?._id));
+  r = await call("POST", "/payments/webhook/demo", { anything: true });
+  check("gateway webhook: no aggregator webhook in demo mode", r.status === 404, brief(r));
+  await call("POST", `/rides/${ride5?._id}/cancel`, { reason: "Fin du test" }, PA.token);
+  r = await call("PATCH", "/settings", { rides: { subscriptionRequired: false } }, admin);
+  check("ride plan: switched off again → free for everyone", ok(r) && r.body.data?.rides?.subscriptionRequired === false, brief(r));
 };
 
 run().then(() => finish(), finish);

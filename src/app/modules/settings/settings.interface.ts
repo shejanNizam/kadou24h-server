@@ -41,6 +41,9 @@ export interface ISettingsInitial {
     baseFare: number; // GNF at pickup
     perKm: number; // GNF per road km
     minFare: number; // GNF, shortest rides
+    // Client 2026-10-23: free at first, later a monthly subscription for moto riders (never a commission)
+    subscriptionRequired: boolean;
+    trialDays: number; // free days each rider gets once the subscription is required
   };
 
   moderation: {

@@ -3,6 +3,7 @@ import { Document, Types } from "mongoose";
 export enum PlanAudience {
   job_seeker = "job_seeker",
   service_provider = "service_provider",
+  moto_driver = "moto_driver",
 }
 
 // Machine keys the backend acts on (e.g. cv_visibility puts the worker first in

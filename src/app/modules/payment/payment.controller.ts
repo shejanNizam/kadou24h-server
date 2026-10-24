@@ -59,6 +59,16 @@ const handleWebhook = catchAsync(async (req: Request, res: Response) => {
   });
 });
 
+/** An aggregator's webhook (its own format and signature) */
+const handleGatewayWebhook = catchAsync(async (req: Request, res: Response) => {
+  const result = await PaymentServices.handleGatewayWebhook(String(req.params.provider), {
+    headers: req.headers,
+    body: req.body,
+    rawBody: (req as Request & { rawBody?: Buffer }).rawBody,
+  });
+  sendResponse(res, { statusCode: httpStatus.OK, success: true, message: "Webhook received", data: result });
+});
+
 const getMyPayments = catchAsync(async (req: Request, res: Response) => {
   const result = await PaymentServices.getMyPayments(req.user._id, {
     page: Number(req.query.page),
@@ -207,6 +217,7 @@ const devConfirmPayment = catchAsync(async (req: Request, res: Response) => {
 export const PaymentControllers = {
   initiatePayment,
   handleWebhook,
+  handleGatewayWebhook,
   getMyPayments,
   getMyPayment,
   devConfirmPayment,

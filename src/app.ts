@@ -34,7 +34,14 @@ app.set("trust proxy", 1);
 app.use(globalLimiter);
 
 // Body parsers
-app.use(express.json());
+// Payment webhooks keep the exact bytes: aggregators sign them
+app.use(
+  express.json({
+    verify: (req, _res, buf) => {
+      if ((req as { url?: string }).url?.includes("/payments/webhook/")) (req as { rawBody?: Buffer }).rawBody = Buffer.from(buf);
+    },
+  }),
+);
 app.use(express.urlencoded({ extended: true }));
 
 // Input sanitization — runs after body is parsed

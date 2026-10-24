@@ -52,6 +52,9 @@ router.post(
   PaymentControllers.handleWebhook,
 );
 
+// Each aggregator posts its own format here; its gateway checks the signature
+router.post("/webhook/:provider", PaymentControllers.handleGatewayWebhook);
+
 router.get("/me", checkAuth(...APP_ROLES), PaymentControllers.getMyPayments);
 
 // Customer Disputes

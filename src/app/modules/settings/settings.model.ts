@@ -51,6 +51,8 @@ const settingsSchema = new Schema<ISettings>(
       baseFare: { type: Number, default: 3000 },
       perKm: { type: Number, default: 1500 },
       minFare: { type: Number, default: 5000 },
+      subscriptionRequired: { type: Boolean, default: false },
+      trialDays: { type: Number, default: 30, min: 0 },
     },
 
     moderation: {

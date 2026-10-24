@@ -15,6 +15,7 @@ import { SubscriptionPlan } from "../subscription/subscription_plan.model";
 import { UserSubscription } from "../subscription/user_subscription.model";
 import { PlanAudience, SubscriptionStatus } from "../subscription/subscription.interface";
 import { extendWorkerListing } from "../professional_profile/worker_listing";
+import { extendRideAccess } from "../rider_profile/ride_access";
 import { ProfessionalProfile } from "../professional_profile/professional_profile.model";
 import { Job } from "../job/job.model";
 import { ApplicationStatus, JobStatus } from "../job/job.interface";
@@ -29,6 +30,9 @@ import {
 import { Payment } from "./payment.model";
 import { Refund } from "./refund.model";
 import { Dispute } from "./dispute.model";
+import { gatewayForWebhook, isDemoPayments, paymentGateway } from "./gateway";
+import type { WebhookRequest } from "./gateway/gateway.interface";
+import { User } from "../user/user.model";
 
 /**
  * Initiates a payment.
@@ -117,8 +121,8 @@ const initiatePayment = async (
     amount = 1000;
   }
 
-  // Generate provider reference
-  const providerRef = `${payload.method.toUpperCase()}_${Date.now()}_${Math.floor(1000 + Math.random() * 9000)}`;
+  // Fails early (503) when live payments have no gateway configured
+  const gateway = paymentGateway();
 
   // Create payment record in PENDING status (no fake immediate success)
   const payment = await Payment.create({
@@ -127,12 +131,32 @@ const initiatePayment = async (
     refId: payload.refId,
     contextId: payload.contextId,
     method: payload.method,
-    provider: payload.provider || payload.method,
+    provider: gateway.name,
     amount,
     status: PaymentStatus.pending,
-    providerRef,
     idempotencyKey: payload.idempotencyKey,
   });
+
+  // The aggregator's transaction + the page the app opens to pay
+  try {
+    const payer = await User.findById(payerId).select("name phone email").lean();
+    const checkout = await gateway.createCheckout({
+      paymentId: String(payment._id),
+      amount,
+      currency: "GNF",
+      method: payload.method,
+      description: `Kadou24h ${payload.purpose.replace(/_/g, " ")}`,
+      payer: { name: payer?.name, phone: payer?.phone, email: payer?.email },
+    });
+    payment.providerRef = checkout.providerRef;
+    payment.checkoutUrl = checkout.checkoutUrl;
+    await payment.save();
+  } catch (err) {
+    payment.status = PaymentStatus.failed;
+    payment.raw = { rejectedReason: "checkout_failed", message: err instanceof Error ? err.message : String(err) };
+    await payment.save();
+    throw new AppError(httpStatus.BAD_GATEWAY, "Online payment is not available right now. Please try again later");
+  }
 
   return payment;
 };
@@ -248,6 +272,10 @@ const handleWebhook = async (payload: {
       // A service-provider plan keeps the worker visible to customers (client, 2026-10-22)
       if (sub && plan?.audience === PlanAudience.service_provider) {
         await extendWorkerListing(payment.payerId, plan.durationDays);
+      }
+      // A moto-driver plan keeps the rider receiving passengers (client, 2026-10-23)
+      if (sub && plan?.audience === PlanAudience.moto_driver) {
+        await extendRideAccess(payment.payerId, plan.durationDays);
       }
     }
 
@@ -440,7 +468,50 @@ const getMyPayment = async (payerId: string, paymentId: string) => {
   }
   const payment = await Payment.findOne({ _id: paymentId, payerId }).select("-raw");
   if (!payment) throw new AppError(httpStatus.NOT_FOUND, "Payment record not found");
+  if (payment.status === PaymentStatus.pending && (await syncFromGateway(payment))) {
+    return (await Payment.findById(payment._id).select("-raw")) ?? payment;
+  }
   return payment;
+};
+
+// A webhook can get lost: while the app polls a pending payment, ask the aggregator (at most every 15 s)
+const STATUS_CHECK_MS = 15_000;
+const lastStatusCheck = new Map<string, number>();
+const syncFromGateway = async (payment: { _id: unknown; providerRef?: string; provider?: string }) => {
+  if (isDemoPayments()) return false;
+  const id = String(payment._id);
+  const last = lastStatusCheck.get(id) ?? 0;
+  if (Date.now() - last < STATUS_CHECK_MS) return false;
+  lastStatusCheck.set(id, Date.now());
+  if (lastStatusCheck.size > 5000) lastStatusCheck.clear();
+  let gateway;
+  try {
+    gateway = paymentGateway();
+  } catch {
+    return false;
+  }
+  if (!gateway.fetchStatus || gateway.name !== payment.provider) return false;
+  const event = await gateway.fetchStatus({ paymentId: id, providerRef: payment.providerRef }).catch(() => null);
+  if (!event || event.status === "pending") return false;
+  await handleWebhook({ paymentId: id, status: event.status, amount: event.amount, raw: event.raw }).catch(() => undefined);
+  return true;
+};
+
+/** POST /payments/webhook/:provider — the aggregator's own notification, signature checked by its gateway */
+const handleGatewayWebhook = async (provider: string, request: WebhookRequest) => {
+  const gateway = gatewayForWebhook(provider);
+  if (!gateway) throw new AppError(httpStatus.NOT_FOUND, "Route not found");
+  const event = await gateway.parseWebhook(request);
+  if (!event || event.status === "pending") return { received: true };
+  // Look the payment up by the aggregator's id, and only one of ours
+  const payment = event.providerRef
+    ? await Payment.findOne({ providerRef: event.providerRef, provider: gateway.name }).select("_id")
+    : event.paymentId && Types.ObjectId.isValid(event.paymentId)
+      ? await Payment.findOne({ _id: event.paymentId, provider: gateway.name }).select("_id")
+      : null;
+  if (!payment) throw new AppError(httpStatus.NOT_FOUND, "Payment record not found");
+  await handleWebhook({ paymentId: String(payment._id), status: event.status, amount: event.amount, raw: event.raw });
+  return { received: true };
 };
 
 /**
@@ -575,6 +646,7 @@ const getAllDisputesAdmin = async (query: {
 };
 
 export const PaymentServices = {
+  handleGatewayWebhook,
   initiatePayment,
   handleWebhook,
   issueRefund,

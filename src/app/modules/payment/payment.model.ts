@@ -30,6 +30,8 @@ const paymentSchema = new Schema<IPayment>(
       required: true,
     },
     providerRef: { type: String, trim: true },
+    // Hosted payment page of the aggregator (none in demo mode)
+    checkoutUrl: { type: String },
     idempotencyKey: { type: String, trim: true, sparse: true, unique: true },
     paidAt: { type: Date },
     raw: { type: Schema.Types.Mixed },

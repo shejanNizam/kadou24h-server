@@ -38,6 +38,8 @@ const envSchema = z.object({
   // demo: no gateway is connected yet — the app finishes its own payments ("Demo payment").
   // Set to live once Orange Money / MTN / card are connected.
   PAYMENT_MODE: z.enum(["demo", "live"]).default("demo"),
+  // live: the aggregator in use (a gateway registered in modules/payment/gateway/index.ts)
+  PAYMENT_PROVIDER: z.string().optional(),
 
   // Firebase service-account JSON, base64-encoded. Empty = push notifications off.
   FIREBASE_SERVICE_ACCOUNT_BASE64: z.string().optional(),
@@ -114,6 +116,7 @@ export const configs = {
   frontend_url: env.FRONTEND_URL === "*" ? "*" : splitList(env.FRONTEND_URL),
   payment_webhook_secret: env.PAYMENT_WEBHOOK_SECRET,
   payment_mode: env.PAYMENT_MODE,
+  payment_provider: env.PAYMENT_PROVIDER,
   firebase_service_account_base64: env.FIREBASE_SERVICE_ACCOUNT_BASE64,
   stripe_secret_key: env.STRIPE_SECRET_KEY,
   stripe_webhook_secret: env.STRIPE_WEBHOOK_SECRET,

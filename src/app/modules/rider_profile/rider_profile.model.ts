@@ -55,6 +55,8 @@ const riderProfileSchema = new Schema<IRiderProfile>(
       ratingAvg: { type: Number, default: 0 },
       ratingCount: { type: Number, default: 0 },
     },
+    rideAccessUntil: { type: Date },
+    rideTrialUsedAt: { type: Date },
     ...reviewFields,
   },
   {

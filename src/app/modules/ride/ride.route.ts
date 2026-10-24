@@ -123,6 +123,7 @@ router.get("/my/current", app, RideControllers.getMyCurrentRide);
 
 router.get("/rider/offers", rider, RideControllers.getRideOffers);
 router.get("/rider/current", rider, RideControllers.getRiderCurrentRide);
+router.get("/rider/access", rider, RideControllers.getRiderAccess);
 router.get("/rider/history", rider, RideControllers.getRiderRides);
 
 router.get("/admin", staff, RideControllers.getRidesForAdmin);
