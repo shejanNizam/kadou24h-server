@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { multerUpload } from "../../config/multer.config";
 import { checkAuth } from "../../middlewares/checkAuth";
+import { uploadLimiter } from "../../middlewares/rateLimiter";
 import { UserRole } from "../user/user.interface";
 import { UploadControllers } from "./upload.controller";
 
@@ -47,6 +48,7 @@ const allRoles = Object.values(UserRole) as string[];
 router.post(
   "/",
   checkAuth(...allRoles),
+  uploadLimiter,
   multerUpload.array("files", 10),
   UploadControllers.uploadFiles,
 );

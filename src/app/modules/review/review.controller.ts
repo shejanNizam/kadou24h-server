@@ -56,7 +56,7 @@ const getMyReviews = catchAsync(async (req: Request, res: Response) => {
 
 const reportReview = catchAsync(async (req: Request, res: Response) => {
   const id = req.params.id as string;
-  const result = await ReviewServices.reportReview(id);
+  const result = await ReviewServices.reportReview(id, req.user._id);
 
   sendResponse(res, {
     statusCode: 200,

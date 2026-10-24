@@ -90,15 +90,21 @@ export const initSocket = async (httpServer: HTTPServer): Promise<Server> => {
     });
 
     // Relay typing indicators to the other participant(s) in the conversation
+    // Relays only into a conversation room this socket joined (participants only)
+    const inConversation = (conversationId: unknown) => socket.rooms.has(`conv:${String(conversationId)}`);
+
     socket.on("typing", ({ conversationId }: { conversationId: string }) => {
+      if (!inConversation(conversationId)) return;
       socket.to(`conv:${conversationId}`).emit("typing", { conversationId, userId });
     });
 
     socket.on("stop_typing", ({ conversationId }: { conversationId: string }) => {
+      if (!inConversation(conversationId)) return;
       socket.to(`conv:${conversationId}`).emit("stop_typing", { conversationId, userId });
     });
 
     socket.on("message_read", ({ conversationId }: { conversationId: string }) => {
+      if (!inConversation(conversationId)) return;
       socket
         .to(`conv:${conversationId}`)
         .emit("message_read", { conversationId, userId, readAt: new Date() });
@@ -139,7 +145,7 @@ export const initSocket = async (httpServer: HTTPServer): Promise<Server> => {
           if (!(await isAssignedRider(String(userId), id).catch(() => false))) return;
           riderDeliveries.add(id);
         }
-        if (typeof lat !== "number" || typeof lng !== "number") return;
+        if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) return;
         socket.to(`delivery:${id}`).emit("rider:location_updated", { deliveryId: id, lat, lng, heading });
       },
     );

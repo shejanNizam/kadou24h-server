@@ -1,7 +1,8 @@
 import { IDeviceToken } from "./device_token.interface";
 import { DeviceToken } from "./device_token.model";
 
-const upsertToken = async (payload: Partial<IDeviceToken>) => {
+const upsertToken = async (payload: Pick<IDeviceToken, "token" | "platform" | "userId">) => {
+  // The same phone signing in with another account moves its token to that account
   return DeviceToken.findOneAndUpdate(
     { token: payload.token },
     { ...payload, lastActiveAt: new Date() },

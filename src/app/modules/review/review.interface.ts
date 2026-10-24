@@ -15,6 +15,7 @@ export interface IReviewInitial {
   comment?: string;
   status: ReviewStatus;
   reportCount: number;
+  reportedBy?: Types.ObjectId[];
   createdAt?: Date;
   updatedAt?: Date;
 }

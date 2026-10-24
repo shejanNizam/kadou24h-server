@@ -1,5 +1,6 @@
 import crypto from "crypto";
 import httpStatus from "http-status";
+import { configs } from "../../config/index";
 import { redisClient } from "../../config/redis.config";
 import AppError from "../../errorHelpers/AppError";
 import { logger } from "../../utils/logger";
@@ -14,6 +15,11 @@ const OTP_RESEND_COOLDOWN = 60; // matches the 60s resend timer in the app
 const OTP_MAX_ATTEMPTS = 5;
 const OTP_LOCKOUT_WINDOW = 10 * 60;
 const OTP_DAILY_LIMIT = 10; // per target — caps SMS cost
+// SMS cost guard ("SMS pumping": scripts asking codes for many numbers, often abroad)
+const HOME_PREFIX = "+224";
+const OTP_DAILY_LIMIT_ABROAD = 3; // per non-Guinean number
+const SMS_DAILY_BUDGET = Number(process.env.OTP_SMS_DAILY_CAP) || 3000; // all SMS codes in a day
+const SMS_DAILY_BUDGET_ABROAD = Number(process.env.OTP_SMS_DAILY_CAP_ABROAD) || 100;
 
 const keys = (purpose: OtpPurpose, target: string) => ({
   code: `otp:${purpose}:${target}`,
@@ -22,8 +28,12 @@ const keys = (purpose: OtpPurpose, target: string) => ({
   daily: `otp:daily:${target}`,
 });
 
+const today = () => new Date().toISOString().slice(0, 10);
+const budgetKey = (abroad: boolean) => `otp:sms-budget:${abroad ? "abroad" : "all"}:${today()}`;
+
+// Keyed hash: a copy of Redis alone is not enough to test codes offline
 const hashOtp = (otp: string) =>
-  crypto.createHash("sha256").update(otp).digest("hex");
+  crypto.createHmac("sha256", configs.jwt_reset_secret).update(otp).digest("hex");
 
 const generateOtp = () =>
   String(crypto.randomInt(10 ** (OTP_LENGTH - 1), 10 ** OTP_LENGTH));
@@ -61,12 +71,38 @@ const issueOtp = async (
     );
   }
 
+  const abroad = Boolean(recipient.phone && !recipient.phone.startsWith(HOME_PREFIX));
   const sentToday = Number(await redisClient.get(k.daily));
-  if (sentToday >= OTP_DAILY_LIMIT) {
+  if (sentToday >= (abroad ? OTP_DAILY_LIMIT_ABROAD : OTP_DAILY_LIMIT)) {
     throw new AppError(
       httpStatus.TOO_MANY_REQUESTS,
       "Daily code limit reached. Please try again tomorrow or contact support.",
     );
+  }
+
+  // Daily SMS budget: once spent, codes go by email only (or wait until tomorrow)
+  let smsAllowed = Boolean(recipient.phone);
+  if (smsAllowed) {
+    const [all, abroadCount] = await Promise.all([
+      redisClient.get(budgetKey(false)),
+      abroad ? redisClient.get(budgetKey(true)) : Promise.resolve("0"),
+    ]);
+    if (Number(all) >= SMS_DAILY_BUDGET || (abroad && Number(abroadCount) >= SMS_DAILY_BUDGET_ABROAD)) {
+      smsAllowed = false;
+      logger.error("OTP SMS daily budget reached", { abroad, all, abroadCount });
+    }
+  }
+  if (!smsAllowed && !recipient.email) {
+    throw new AppError(httpStatus.SERVICE_UNAVAILABLE, "Codes are temporarily unavailable. Please try again later or contact support.");
+  }
+
+  // Atomic: two requests at the same moment can't both pass the cooldown
+  const slot = await redisClient.set(k.cooldown, "1", {
+    condition: "NX",
+    expiration: { type: "EX", value: OTP_RESEND_COOLDOWN },
+  });
+  if (slot === null) {
+    throw new AppError(httpStatus.TOO_MANY_REQUESTS, `Please wait ${OTP_RESEND_COOLDOWN}s before requesting a new code.`);
   }
 
   const otp = generateOtp();
@@ -75,14 +111,11 @@ const issueOtp = async (
     redisClient.set(k.code, hashOtp(otp), {
       expiration: { type: "EX", value: OTP_EXPIRATION },
     }),
-    redisClient.set(k.cooldown, "1", {
-      expiration: { type: "EX", value: OTP_RESEND_COOLDOWN },
-    }),
     redisClient.del([k.attempts]),
   ]);
 
   const deliveries: Promise<unknown>[] = [];
-  if (recipient.phone) {
+  if (recipient.phone && smsAllowed) {
     deliveries.push(
       sendSms({ to: recipient.phone, message: smsText(otp, recipient.language) }),
     );
@@ -119,6 +152,11 @@ const issueOtp = async (
 
   const count = await redisClient.incr(k.daily);
   if (count === 1) await redisClient.expire(k.daily, 24 * 60 * 60);
+  if (recipient.phone && smsAllowed) {
+    for (const key of abroad ? [budgetKey(false), budgetKey(true)] : [budgetKey(false)]) {
+      if ((await redisClient.incr(key)) === 1) await redisClient.expire(key, 26 * 60 * 60);
+    }
+  }
 
   return { expiresIn: OTP_EXPIRATION, resendIn: OTP_RESEND_COOLDOWN };
 };

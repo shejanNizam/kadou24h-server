@@ -30,7 +30,7 @@ app.use(
     stream: { write: (msg) => logger.http(msg.trim()) },
   }),
 );
-app.set("trust proxy", 1);
+app.set("trust proxy", configs.trust_proxy);
 app.use(globalLimiter);
 
 // Body parsers

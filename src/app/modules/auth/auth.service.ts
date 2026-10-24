@@ -4,6 +4,7 @@ import { disconnectUser } from "../../../socket/socket";
 import { JwtPayload } from "jsonwebtoken";
 import { configs } from "../../config/index";
 import AppError from "../../errorHelpers/AppError";
+import { redisClient } from "../../config/redis.config";
 import { generateToken } from "../../utils/jwt";
 import {
   createNewAccessTokenWithRefreshToken,
@@ -154,9 +155,20 @@ const resendOtp = async (identifier: string, purpose: OtpPurpose) => {
 // Sign in
 // ──────────────────────────────
 
+// Guessing one account's password from many phones/IPs: lock that account for a while
+const LOGIN_MAX_FAILS = 10;
+const LOGIN_LOCK_SECONDS = 15 * 60;
+const loginFailKey = (userId: unknown) => `login:fail:${String(userId)}`;
+
 const login = async (identifier: string, password: string) => {
   const user = await User.findOne(identifierFilter(identifier)).select("+password");
   if (!user) throw new AppError(httpStatus.UNAUTHORIZED, "Invalid phone/email or password");
+
+  const fails = Number(await redisClient.get(loginFailKey(user._id)));
+  if (fails >= LOGIN_MAX_FAILS) {
+    const wait = Math.max(1, Math.ceil((await redisClient.ttl(loginFailKey(user._id))) / 60));
+    throw new AppError(httpStatus.TOO_MANY_REQUESTS, `Too many wrong passwords. Try again in ${wait} min or reset your password.`);
+  }
 
   if (!user.password) {
     throw new AppError(
@@ -167,8 +179,11 @@ const login = async (identifier: string, password: string) => {
 
   const isPasswordMatch = await bcrypt.compare(password, user.password);
   if (!isPasswordMatch) {
+    const count = await redisClient.incr(loginFailKey(user._id));
+    if (count === 1) await redisClient.expire(loginFailKey(user._id), LOGIN_LOCK_SECONDS);
     throw new AppError(httpStatus.UNAUTHORIZED, "Invalid phone/email or password");
   }
+  await redisClient.del([loginFailKey(user._id)]);
 
   assertCanSignIn(user);
 
@@ -354,6 +369,8 @@ const resetPassword = async (decodedToken: JwtPayload, newPassword: string) => {
   await user.save();
   disconnectUser(String(user._id), "password_reset");
   await ensureLocalIdentity(user);
+  // The owner proved it is them: a lock from wrong passwords ends here
+  await redisClient.del([loginFailKey(user._id)]);
 };
 
 export const AuthServices = {

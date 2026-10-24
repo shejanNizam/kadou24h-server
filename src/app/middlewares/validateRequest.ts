@@ -1,5 +1,7 @@
 import { NextFunction, Request, Response } from "express";
+import httpStatus from "http-status";
 import { z, ZodTypeAny } from "zod";
+import AppError from "../errorHelpers/AppError";
 
 /**
  * Validates the request with a Zod schema. Two schema styles are supported:
@@ -19,7 +21,11 @@ const validateRequest = (schema: ZodTypeAny) => {
   return async (req: Request, _res: Response, next: NextFunction) => {
     try {
       if (req.body?.data) {
-        req.body = JSON.parse(req.body.data as string);
+        try {
+          req.body = JSON.parse(req.body.data as string);
+        } catch {
+          throw new AppError(httpStatus.BAD_REQUEST, "Invalid JSON in the data field");
+        }
       }
 
       // Express 5 leaves req.body undefined when a request has no body

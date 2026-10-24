@@ -225,12 +225,15 @@ const getMyReviews = async (
   };
 };
 
-const reportReview = async (reviewId: string) => {
-  const review = await Review.findByIdAndUpdate(
-    reviewId,
-    { $inc: { reportCount: 1 } },
-    { returnDocument: "after" },
-  );
+const reportReview = async (reviewId: string, userId: string) => {
+  if (!Types.ObjectId.isValid(reviewId)) throw new AppError(404, "Review not found");
+  // Counted once per person
+  const review =
+    (await Review.findOneAndUpdate(
+      { _id: reviewId, reportedBy: { $ne: new Types.ObjectId(userId) } },
+      { $inc: { reportCount: 1 }, $addToSet: { reportedBy: new Types.ObjectId(userId) } },
+      { returnDocument: "after" },
+    )) ?? (await Review.findById(reviewId));
 
   if (!review) {
     throw new AppError(404, "Review not found");

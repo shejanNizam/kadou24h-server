@@ -30,6 +30,10 @@ const envSchema = z.object({
 
   FRONTEND_URL: z.string().default("*"),
 
+  // How many proxies (nginx, Cloudflare…) sit in front of the server. The real client IP
+  // (rate limits) is read that many hops back in X-Forwarded-For. 0 = directly exposed.
+  TRUST_PROXY: z.coerce.number().int().min(0).max(5).default(1),
+
   STRIPE_SECRET_KEY: z.string().optional(),
   STRIPE_WEBHOOK_SECRET: z.string().optional(),
   // Shared secret the payment gateway sends in the x-webhook-secret header.
@@ -70,6 +74,16 @@ if (!parsed.success) {
 }
 
 const env = parsed.data;
+
+// Production: say loudly what is weak (the server still starts)
+if (env.NODE_ENV === "production") {
+  const weak: string[] = (["JWT_ACCESS_SECRET", "JWT_REFRESH_SECRET", "JWT_RESET_SECRET"] as const).filter((k) => env[k].length < 32);
+  if (new Set([env.JWT_ACCESS_SECRET, env.JWT_REFRESH_SECRET, env.JWT_RESET_SECRET]).size < 3) weak.push("the three JWT secrets must differ");
+  // eslint-disable-next-line no-console
+  if (weak.length) console.warn(`\n⚠️  Weak secrets: ${weak.join(", ")} — use 32+ random characters each\n`);
+  // eslint-disable-next-line no-console
+  if (env.FRONTEND_URL === "*") console.warn("\n⚠️  FRONTEND_URL=* lets any website call the API from a browser — set the dashboard URL(s)\n");
+}
 
 if (env.NODE_ENV === "production" && !env.PAYMENT_WEBHOOK_SECRET) {
   // eslint-disable-next-line no-console
@@ -116,6 +130,7 @@ export const configs = {
   frontend_url: env.FRONTEND_URL === "*" ? "*" : splitList(env.FRONTEND_URL),
   payment_webhook_secret: env.PAYMENT_WEBHOOK_SECRET,
   payment_mode: env.PAYMENT_MODE,
+  trust_proxy: env.TRUST_PROXY,
   payment_provider: env.PAYMENT_PROVIDER,
   firebase_service_account_base64: env.FIREBASE_SERVICE_ACCOUNT_BASE64,
   stripe_secret_key: env.STRIPE_SECRET_KEY,

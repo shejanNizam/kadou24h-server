@@ -1389,6 +1389,41 @@ const run = async () => {
   await call("POST", `/rides/${ride5?._id}/cancel`, { reason: "Fin du test" }, PA.token);
   r = await call("PATCH", "/settings", { rides: { subscriptionRequired: false } }, admin);
   check("ride plan: switched off again → free for everyone", ok(r) && r.body.data?.rides?.subscriptionRequired === false, brief(r));
+
+  // ═════ 15. Security hardening ═════
+  r = await call("POST", "/device-token", { platform: "android" }, PA.token);
+  check("security: a device token without a token is refused (can't grab another phone's)", r.status === 400, brief(r));
+  r = await call("POST", "/device-token", { token: "ExponentPushToken[e2e-device-0000000001]", platform: "android" }, PA.token);
+  check("security: a real device token is saved", ok(r), brief(r));
+
+  const upload = async (name, type, content) => {
+    const form = new FormData();
+    form.append("files", new Blob([content], { type }), name);
+    const res = await fetch(`${BASE}/upload`, { method: "POST", headers: { Authorization: `Bearer ${PA.token}`, "X-Forwarded-For": ipFor(PA.token) }, body: form });
+    return { status: res.status, body: await res.json().catch(() => ({})) };
+  };
+  r = await upload("page.html", "text/html", "<script>alert(1)</script>");
+  check("security: uploading a web page is refused", r.status === 415, brief(r));
+  r = await upload("photo.html", "image/jpeg", "<html></html>");
+  check("security: a page disguised as a photo is refused", r.status === 415, brief(r));
+
+  r = await call("GET", "/vendors?limit=100000");
+  check("security: public lists are capped (100 per page)", ok(r) && r.body.meta?.limit === 100, JSON.stringify(r.body.meta ?? brief(r)));
+
+  const broken = await fetch(`${BASE}/auth/login`, { method: "POST", headers: { "Content-Type": "application/json", "X-Forwarded-For": "10.202.0.1" }, body: "{not json" });
+  check("security: a broken JSON body is a 400, not a server error", broken.status === 400, String(broken.status));
+
+  // Someone guesses one account's password from many phones (many IPs): the account locks
+  const victimPhone = `+22466${stamp}9`;
+  const victim = await signup("Victim", victimPhone);
+  let locked = null;
+  for (let i = 0; i < 11; i++) {
+    locked = await call("POST", "/auth/login", { identifier: victimPhone, password: `wrong${i}pass` }, null, { "X-Forwarded-For": `10.200.${i}.7` });
+  }
+  check("security: 10 wrong passwords from different IPs lock the account", locked.status === 429 && /too many wrong passwords/i.test(locked.body.message ?? ""), brief(locked));
+  r = await call("POST", "/auth/login", { identifier: victimPhone, password: "kadou2026" }, null, { "X-Forwarded-For": "10.201.0.1" });
+  check("security: …even the right password waits until the lock ends", r.status === 429, brief(r));
+  check("security: …the owner's existing session keeps working", ok(await call("GET", "/user/me", null, victim.token)));
 };
 
 run().then(() => finish(), finish);

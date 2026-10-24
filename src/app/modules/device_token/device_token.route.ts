@@ -1,5 +1,7 @@
 import { Router } from "express";
 import { checkAuth } from "../../middlewares/checkAuth";
+import validateRequest from "../../middlewares/validateRequest";
+import { removeDeviceTokenZodSchema, upsertDeviceTokenZodSchema } from "./device_token.validation";
 import { UserRole } from "../user/user.interface";
 import { DeviceTokenControllers } from "./device_token.controller";
 
@@ -40,7 +42,7 @@ const allRoles = Object.values(UserRole) as string[];
  *       401:
  *         description: Unauthorized
  */
-router.post("/", checkAuth(...allRoles), DeviceTokenControllers.upsertToken);
-router.delete("/", checkAuth(...allRoles), DeviceTokenControllers.removeToken);
+router.post("/", checkAuth(...allRoles), validateRequest(upsertDeviceTokenZodSchema), DeviceTokenControllers.upsertToken);
+router.delete("/", checkAuth(...allRoles), validateRequest(removeDeviceTokenZodSchema), DeviceTokenControllers.removeToken);
 
 export const DeviceTokenRoutes = router;

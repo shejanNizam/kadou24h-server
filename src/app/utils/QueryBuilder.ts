@@ -41,14 +41,18 @@ export class QueryBuilder<T> {
   }
 
   fields(): this {
-    const fields = this.query.fields?.split(",").join(" ") || "";
+    // Only plain field names: "+password" style would add hidden fields
+    const fields = (this.query.fields ?? "")
+      .split(",")
+      .map((f) => f.trim())
+      .filter((f) => /^-?[A-Za-z][\w.]*$/.test(f))
+      .join(" ");
     this.modelQuery = this.modelQuery.select(fields);
     return this;
   }
 
   paginate(): this {
-    const page = Number(this.query.page) || 1;
-    const limit = Number(this.query.limit) || 10;
+    const { page, limit } = this.pageAndLimit();
     const skip = (page - 1) * limit;
     this.modelQuery = this.modelQuery.skip(skip).limit(limit);
     return this;
@@ -70,8 +74,7 @@ export class QueryBuilder<T> {
     const totalDocuments = await this.modelQuery.model.countDocuments(
       this.modelQuery.getFilter(),
     );
-    const page = Number(this.query.page) || 1;
-    const limit = Number(this.query.limit) || 10;
+    const { page, limit } = this.pageAndLimit();
     const totalPage = Math.ceil(totalDocuments / limit);
     return { page, limit, total: totalDocuments, totalPage };
   }

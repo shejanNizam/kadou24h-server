@@ -49,6 +49,7 @@ export const reviewSchema = new Schema<IReview>(
       default: 0,
       min: 0,
     },
+    reportedBy: { type: [Schema.Types.ObjectId], ref: "User", default: [], select: false },
   },
   {
     timestamps: true,

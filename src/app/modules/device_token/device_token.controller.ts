@@ -7,7 +7,7 @@ import { DeviceTokenServices } from "./device_token.service";
 
 const upsertToken = catchAsync(async (req: Request, res: Response) => {
   const { _id: userId } = req.user as JwtPayload;
-  const token = await DeviceTokenServices.upsertToken({ ...req.body, userId });
+  const token = await DeviceTokenServices.upsertToken({ token: req.body.token, platform: req.body.platform, userId });
   sendResponse(res, {
     statusCode: httpStatus.OK,
     success: true,
