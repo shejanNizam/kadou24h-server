@@ -50,6 +50,8 @@ export interface IRideInitial {
   cancellation?: { by: RideCancelledBy; reason?: string; at: Date };
   /** The passenger's rating of the rider */
   rating?: { stars: number; comment?: string; at: Date };
+  /** "Share my trip": a close one follows the ride from this link; it closes when the ride ends */
+  shareToken?: string;
 }
 
 export type IRide = IRideInitial & Document;

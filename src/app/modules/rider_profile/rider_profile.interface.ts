@@ -20,6 +20,21 @@ export const VEHICLES_BY_PARTNER: Record<PartnerType, VehicleType[]> = {
   [PartnerType.transit]: [VehicleType.bus, VehicleType.minibus, VehicleType.car],
 };
 
+/**
+ * What a customer or passenger checks before handing over a parcel or getting on:
+ * a motorised moto partner needs a plate; a moto-taxi (motorbike) also its vest number.
+ */
+export const missingSafetyIds = (p: { partnerType?: PartnerType; vehicle?: IVehicle; vestNumber?: string }) => {
+  const moto = p.partnerType === PartnerType.moto;
+  const type = p.vehicle?.type;
+  const needsPlate = moto && (type === VehicleType.motorbike || type === VehicleType.car);
+  const needsVest = moto && type === VehicleType.motorbike;
+  return [
+    needsPlate && !p.vehicle?.plateNumber?.trim() && "vehicle.plateNumber",
+    needsVest && !p.vestNumber?.trim() && "vestNumber",
+  ].filter(Boolean) as string[];
+};
+
 export enum RiderDocumentType {
   driver_license = "driver_license",
   national_id = "national_id",

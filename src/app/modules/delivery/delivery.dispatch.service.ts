@@ -39,7 +39,7 @@ export const DISPATCH = {
   // The e2e run speeds it up (DISPATCH_SWEEP_MS)
   sweepEveryMs: Number(process.env.DISPATCH_SWEEP_MS) || 30_000,
   /** A rider chosen by the store has this long to accept */
-  reserveMinutes: 3,
+  reserveMinutes: 10,
   /** [minutes since the offer opened, radius in km] */
   radiusSteps: [
     [0, 3],

@@ -23,6 +23,7 @@ import { WalletServices, walletSummary } from "../wallet/wallet.service";
 import {
   IRiderProfile,
   IVehicle,
+  missingSafetyIds,
   PartnerType,
   VEHICLES_BY_PARTNER,
 } from "./rider_profile.interface";
@@ -135,6 +136,7 @@ const submitApplication = async (userId: string) => {
     profile.partnerType === PartnerType.transit &&
       profile.transitRoutes.length === 0 &&
       "transitRoutes (at least one route)",
+    ...missingSafetyIds(profile),
   ].filter(Boolean);
 
   if (missing.length) {
@@ -155,6 +157,11 @@ const updateMyRiderProfile = async (userId: string, payload: RiderInput) => {
     throw new AppError(httpStatus.BAD_REQUEST, "Only bus drivers have transit routes");
   }
   await applyRiderInput(profile, payload);
+  // Can't be cleared once approved (riders approved before the rule fill them in here)
+  const missing = missingSafetyIds(profile);
+  if (missing.length) {
+    throw new AppError(httpStatus.BAD_REQUEST, `Please complete: ${missing.join(", ")}`);
+  }
   await profile.save();
   return present(profile);
 };

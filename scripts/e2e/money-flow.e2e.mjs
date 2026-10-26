@@ -212,8 +212,14 @@ const run = async () => {
   const R = await signup("Moto Rider", `+22462${stamp}2`);
   await call("PUT", "/riders/me/application", { partnerType: "moto", vehicle: { type: "motorbike" }, cityArea: "Kaloum", nationalIdNumber: "1234-5" }, R.token);
   r = await call("POST", "/riders/me/application/submit", null, R.token);
+  check("moto-taxi: can't apply without plate and vest", r.status === 400 && /plateNumber/.test(r.body.message) && /vestNumber/.test(r.body.message), brief(r));
+  await call("PUT", "/riders/me/application", { vehicle: { plateNumber: "rc-1234-a" }, vestNumber: "V-77" }, R.token);
+  r = await call("POST", "/riders/me/application/submit", null, R.token);
+  check("moto-taxi: applies with plate and vest", ok(r) && r.body.data?.vehicle?.plateNumber === "RC-1234-A", brief(r));
   const riderId = r.body.data._id;
   await call("PATCH", `/riders/admin/${riderId}/review`, { action: "approve" }, admin);
+  r = await call("PATCH", "/riders/me", { vestNumber: "" }, R.token);
+  check("moto-taxi: the vest number can't be removed once approved", r.status === 400 && /vestNumber/.test(r.body.message), brief(r));
   r = await call("PATCH", "/deliveries/rider/online-status", { isOnline: true }, R.token);
   check("rider goes online (plain body)", r.status === 200, brief(r));
   await call("PATCH", "/deliveries/rider/location", { lat: 9.512, lng: -13.712 }, R.token);
@@ -1208,7 +1214,7 @@ const run = async () => {
   // ═════ 12. Open dispatch: nearby riders see the delivery, the first to accept takes it ═════
   const moto = async (name, phone, lat, lng) => {
     const u = await signup(name, phone);
-    await call("PUT", "/riders/me/application", { partnerType: "moto", vehicle: { type: "motorbike" }, cityArea: "Conakry", nationalIdNumber: `N-${phone.slice(-5)}` }, u.token);
+    await call("PUT", "/riders/me/application", { partnerType: "moto", vehicle: { type: "motorbike", plateNumber: `RC-${phone.slice(-4)}` }, vestNumber: `V-${phone.slice(-3)}`, cityArea: "Conakry", nationalIdNumber: `N-${phone.slice(-5)}` }, u.token);
     const s = await call("POST", "/riders/me/application/submit", null, u.token);
     await call("PATCH", `/riders/admin/${s.body.data?._id}/review`, { action: "approve" }, admin);
     await call("PATCH", "/deliveries/rider/online-status", { isOnline: true }, u.token);
@@ -1276,7 +1282,7 @@ const run = async () => {
   await call("PATCH", `/orders/vendor/sub-orders/${eSub._id}/status`, { status: "accepted" }, V.token);
   r = await call("POST", `/deliveries/${eLeg}/assign`, { riderId: D.riderId }, V.token);
   const left = (new Date(r.body.data?.reservedUntil).getTime() - Date.now()) / 60_000;
-  check("dispatch: the store's pick has 3 minutes to answer", ok(r) && left > 2.5 && left <= 3, brief(r));
+  check("dispatch: the store's pick has 10 minutes to answer", ok(r) && left > 9.5 && left <= 10, brief(r));
   check("dispatch: while reserved, other riders don't see it", !(await offersOf(R.token)).some((o) => o._id === eLeg));
   await mongoose.connect(DATABASE_URL);
   await mongoose.connection.collection("deliveries").updateOne({ _id: new mongoose.Types.ObjectId(eLeg) }, { $set: { reservedUntil: new Date(Date.now() - 1000) } });
@@ -1320,6 +1326,17 @@ const run = async () => {
   const seen = (await rideOffers(T.token)).find((o) => o._id === ride?._id);
   check("ride: a nearby rider sees it with the fare and the pickup distance", seen && seen.fare === ride.fare && seen.pickupKm < 2, JSON.stringify(seen));
   check("ride: a far rider doesn't see it yet", !(await rideOffers(Far.token)).some((o) => o._id === ride?._id));
+  // A moto-taxi approved before plate + vest were required: no passengers until filled in
+  const setVest = async (vestNumber) => {
+    await mongoose.connect(DATABASE_URL);
+    await mongoose.connection.collection("riderprofiles").updateOne({ _id: new mongoose.Types.ObjectId(T.riderId) }, vestNumber ? { $set: { vestNumber } } : { $unset: { vestNumber: 1 } });
+    await mongoose.disconnect();
+  };
+  await setVest(null);
+  check("ride: a moto-taxi without a vest number gets no passengers", (await rideOffers(T.token)).length === 0);
+  r = await call("POST", `/rides/${ride?._id}/accept`, null, T.token);
+  check("ride: …and can't accept one (told to add it)", r.status === 400 && /vest/i.test(r.body.message), brief(r));
+  await setVest(`V-${stamp}`);
   await sleep(400);
   r = await call("GET", "/notifications?mode=rider&limit=50", null, T.token);
   check("ride: the nearby rider is told", (r.body.data ?? []).some((n) => n.type === "ride_update"), brief(r));
@@ -1334,10 +1351,33 @@ const run = async () => {
     r.body.data?.status === "accepted" && Boolean(r.body.data?.rider?.name) && !JSON.stringify(r.body.data?.rider ?? {}).includes("+224"),
     JSON.stringify(r.body.data?.rider),
   );
+  check("ride: the passenger sees the plate and vest to check them", Boolean(r.body.data?.rider?.vehicle?.plateNumber) && Boolean(r.body.data?.rider?.vestNumber), JSON.stringify(r.body.data?.rider));
   r = await call("GET", `/rides/${ride?._id}`, null, driver.token);
   check("ride: the rider gets the passenger's phone to find them", r.body.data?.passenger?.phone === `+22465${stamp}4`, JSON.stringify(r.body.data?.passenger));
   r = await call("GET", `/rides/${ride?._id}`, null, other.token);
   check("ride: another rider can't open it", r.status === 404, brief(r));
+
+  // "Share my trip": a close one follows the ride from a link, no account
+  r = await call("POST", `/rides/${ride?._id}/share`, null, driver.token);
+  check("share: only the passenger can share the ride", r.status === 404, brief(r));
+  r = await call("POST", `/rides/${ride?._id}/share`, null, PA.token);
+  const share = r.body.data;
+  check("share: the passenger gets a link to the page", ok(r) && share?.url === `${HOST}/r/${share?.token}`, brief(r));
+  r = await call("POST", `/rides/${ride?._id}/share`, null, PA.token);
+  check("share: asking again gives the same link", r.body.data?.token === share?.token, brief(r));
+  r = await call("GET", `/rides/shared/${share?.token}`);
+  const seenShared = r.body.data;
+  check(
+    "share: the link shows the driver, plate, vest and live position — no phone",
+    ok(r) && seenShared?.status === "accepted" && Boolean(seenShared?.rider?.name) && Boolean(seenShared?.rider?.vehicle?.plateNumber) && Boolean(seenShared?.rider?.vestNumber) && seenShared?.rider?.location?.lat != null && !JSON.stringify(seenShared).includes("+224"),
+    JSON.stringify(seenShared),
+  );
+  check("share: only the passenger's first name", seenShared?.passenger === "Passenger", JSON.stringify(seenShared?.passenger));
+  const pageRes = await fetch(`${HOST}/r/${share?.token}`);
+  const pageHtml = await pageRes.text();
+  check("share: the page opens in a browser (HTML, strict CSP)", pageRes.status === 200 && pageHtml.includes(`/api/v1/rides/shared/${share?.token}`) && /script-src 'nonce-/.test(pageRes.headers.get("content-security-policy") ?? ""), String(pageRes.status));
+  r = await call("GET", "/rides/shared/AAAAAAAAAAAAAAAAAAAAAA");
+  check("share: an unknown link → 404", r.status === 404, brief(r));
   check("ride: it left the other rider's list", !(await rideOffers(other.token)).some((o) => o._id === ride?._id));
   r = await call("POST", `/rides/${ride?._id}/start`, null, driver.token);
   check("ride: can't start before arriving", r.status === 409, brief(r));
@@ -1349,6 +1389,10 @@ const run = async () => {
   check("ride: the passenger can't cancel once it started", r.status === 400, brief(r));
   r = await call("POST", `/rides/${ride?._id}/complete`, null, driver.token);
   check("ride: finished", ok(r) && r.body.data?.status === "completed" && Boolean(r.body.data?.completedAt), brief(r));
+  r = await call("GET", `/rides/shared/${share?.token}`);
+  check("share: once finished the link only says so (no position, driver or addresses)", ok(r) && r.body.data?.ended === true && !r.body.data?.rider && !r.body.data?.pickup, JSON.stringify(r.body.data));
+  r = await call("POST", `/rides/${ride?._id}/share`, null, PA.token);
+  check("share: a finished ride can't be shared", r.status === 400, brief(r));
   r = await call("POST", `/rides/${ride?._id}/rate`, { stars: 5, comment: "Très prudent" }, PA.token);
   check("ride: the passenger rates the rider", ok(r) && r.body.data?.rating?.stars === 5 && r.body.data?.rider?.rating === 5, brief(r));
   r = await call("POST", `/rides/${ride?._id}/rate`, { stars: 1 }, PA.token);

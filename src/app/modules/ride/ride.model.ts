@@ -40,6 +40,7 @@ const rideSchema = new Schema<IRide>(
       comment: { type: String, trim: true, maxlength: 500 },
       at: { type: Date },
     },
+    shareToken: { type: String, select: false },
   },
   { timestamps: true, versionKey: false },
 );
@@ -47,5 +48,6 @@ const rideSchema = new Schema<IRide>(
 rideSchema.index({ status: 1, createdAt: 1 });
 rideSchema.index({ passengerId: 1, createdAt: -1 });
 rideSchema.index({ riderId: 1, status: 1 });
+rideSchema.index({ shareToken: 1 }, { unique: true, sparse: true });
 
 export const Ride = model<IRide>("rides", rideSchema);

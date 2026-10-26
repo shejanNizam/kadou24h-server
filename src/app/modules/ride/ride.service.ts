@@ -24,7 +24,7 @@ import { AuditLogServices } from "../audit_log/audit_log.service";
 import { CounterServices } from "../counter/counter.service";
 import { calculateDistanceKm } from "../delivery_rate/delivery_rate.service";
 import { ApprovalStatus } from "../profile_common/profile.common";
-import { PartnerType } from "../rider_profile/rider_profile.interface";
+import { IVehicle, missingSafetyIds, PartnerType } from "../rider_profile/rider_profile.interface";
 import { RiderProfile } from "../rider_profile/rider_profile.model";
 import { SettingsServices } from "../settings/settings.service";
 import { rideAccessFilter, rideAccessState, startRideTrialIfFirst } from "../rider_profile/ride_access";
@@ -100,9 +100,12 @@ interface RiderLite {
   approvalStatus?: ApprovalStatus;
   rideAccessUntil?: Date;
   rideTrialUsedAt?: Date;
+  vehicle?: IVehicle;
+  vestNumber?: string;
 }
 
-const RIDER_FIELDS = "userId lastLocation lastLocationAt activeDeliveryCount isOnline partnerType approvalStatus rideAccessUntil rideTrialUsedAt";
+const RIDER_FIELDS =
+  "userId lastLocation lastLocationAt activeDeliveryCount isOnline partnerType approvalStatus rideAccessUntil rideTrialUsedAt vehicle vestNumber";
 
 const rideSettings = async () => (await SettingsServices.getSettings()).rides;
 
@@ -124,8 +127,9 @@ const availableRiders = async (point: [number, number], now = Date.now()) => {
     Ride.distinct("riderId", { status: { $in: WITH_RIDER } }),
   ]);
   const onRide = new Set(busy.map(String));
+  // A passenger must be able to check the plate and vest
   return riders
-    .filter((r) => r.lastLocation?.coordinates && !onRide.has(String(r._id)))
+    .filter((r) => r.lastLocation?.coordinates && !onRide.has(String(r._id)) && missingSafetyIds(r).length === 0)
     .map((r) => ({ rider: r, km: round1(calculateDistanceKm(point, r.lastLocation!.coordinates)) }));
 };
 
@@ -133,6 +137,9 @@ const availableRiders = async (point: [number, number], now = Date.now()) => {
 const riderBlocker = async (rider: RiderLite) => {
   if (rider.approvalStatus !== ApprovalStatus.approved || rider.partnerType !== PartnerType.moto) {
     return "Only approved moto riders can take rides";
+  }
+  if (missingSafetyIds(rider).length) {
+    return "Add your plate and vest number (Profile → My vehicle) to take passengers";
   }
   if (!rideAccessState(rider, await rideSettings()).allowed) {
     return "Your moto-taxi subscription has ended. Choose a plan to receive passengers again";
@@ -152,6 +159,7 @@ type Populated = Omit<IRide, "riderId" | "passengerId"> & {
     _id: Types.ObjectId;
     userId?: { _id: Types.ObjectId; name?: string; avatar?: { url?: string } };
     vehicle?: { type?: string; brand?: string; model?: string; color?: string; plateNumber?: string };
+    vestNumber?: string;
     rideStats?: { ratingAvg?: number; ratingCount?: number; completed?: number };
     lastLocation?: { coordinates: [number, number] };
     lastLocationAt?: Date;
@@ -162,7 +170,7 @@ const POPULATE = [
   { path: "passengerId", select: "name avatar phone" },
   {
     path: "riderId",
-    select: "userId vehicle rideStats lastLocation lastLocationAt",
+    select: "userId vehicle vestNumber rideStats lastLocation lastLocationAt",
     populate: { path: "userId", select: "name avatar" },
   },
 ];
@@ -209,6 +217,8 @@ const present = (ride: Populated, as: "passenger" | "rider" | "admin") => {
           name: rider.userId?.name,
           avatar: rider.userId?.avatar,
           vehicle: rider.vehicle,
+          // The passenger checks plate + vest before getting on
+          vestNumber: rider.vestNumber,
           rating: rider.rideStats?.ratingAvg ?? 0,
           ratingCount: rider.rideStats?.ratingCount ?? 0,
           rides: rider.rideStats?.completed ?? 0,

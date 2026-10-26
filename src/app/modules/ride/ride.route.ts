@@ -130,6 +130,10 @@ router.get("/admin", staff, RideControllers.getRidesForAdmin);
 router.get("/admin/:id", staff, RideControllers.getRideForAdmin);
 router.post("/admin/:id/cancel", staff, validateRequest(adminCancelRideZodSchema), RideControllers.cancelByAdmin);
 
+// "Share my trip": the passenger gets a link; the page at /r/:token reads /shared/:token (public)
+router.get("/shared/:token", RideControllers.getSharedRide);
+router.post("/:id/share", app, RideControllers.shareRide);
+
 router.get("/:id", app, RideControllers.getRide);
 router.post("/:id/cancel", app, validateRequest(cancelRideZodSchema), RideControllers.cancelRide);
 router.post("/:id/rate", app, validateRequest(rateRideZodSchema), RideControllers.rateRide);

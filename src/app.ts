@@ -14,6 +14,7 @@ import notFound from "./app/middlewares/notFound";
 import { globalLimiter } from "./app/middlewares/rateLimiter";
 import { requestId } from "./app/middlewares/requestId";
 import { HealthRoutes } from "./app/modules/health/health.route";
+import { rideSharePage } from "./app/modules/ride/ride.share";
 import router from "./app/routes/index";
 import { logger } from "./app/utils/logger";
 
@@ -82,6 +83,9 @@ if (configs.node_env !== "production") {
 }
 
 app.use("/api/v1", router);
+
+// "Share my trip" page: a close one follows a moto-taxi ride in the browser
+app.get("/r/:token", rideSharePage);
 
 app.get("/", (_req: Request, res: Response) => {
   res.send(" Kadou24h Server is running");

@@ -857,8 +857,8 @@ My rider profile (bus routes come with station `name` / `city`). 404 = no applic
 | Field | Type | Notes |
 |---|---|---|
 | `partnerType` | `moto` \| `transit` | |
-| `vehicle` | `{ type?, color?, brand?, plateNumber? }` | type must match the partner type; plate is upper-cased |
-| `vestNumber` | string | |
+| `vehicle` | `{ type?, color?, brand?, plateNumber? }` | type must match the partner type; plate is upper-cased. **Required** on submit for moto + motorbike / car |
+| `vestNumber` | string | **Required** on submit for moto + motorbike (moto-taxi) |
 | `cityArea` | string | |
 | `nationalIdNumber` | string | never shown to vendors |
 | `transitRoutes` | `[{ fromStationId, toStationId }]` | bus drivers; two different stations |
@@ -868,7 +868,7 @@ My rider profile (bus routes come with station `name` / `city`). 404 = no applic
 **200** `pending` · **400** missing fields listed.
 
 #### `PATCH /riders/me` — Rider
-After approval: `vehicle` (color / brand / plate), `vestNumber`, `cityArea`, `transitRoutes` (bus drivers). Partner type, vehicle type, national id and documents are locked.
+After approval: `vehicle` (color / brand / plate), `vestNumber`, `cityArea`, `transitRoutes` (bus drivers). Partner type, vehicle type, national id and documents are locked. The plate / vest above can't be emptied (400). A moto-taxi approved before the rule, without them, gets no ride offers and `POST /rides/:id/accept` answers 400 until both are filled in (deliveries keep coming).
 
 #### `GET /riders/search` — Vendor
 Find riders to invite. Query: `searchTerm` (name, or **exact** phone), `cityArea`, `partnerType` (default `moto`), `page`, `limit` (max 50).
@@ -1098,6 +1098,11 @@ Errors: 409 already connected / already invited · 403 the inviter tried to answ
 - `GET /conversations/admin/moderation-violations/:id/context?around=5` and `GET /conversations/admin/messages/:messageId/context?around=5` (staff/admin; around 1–20). Returns `{ conversation: { type, subOrderNumber, participants: [{ userId, name, phone, status, violationCount, mode }] }, focusId, messages: [{ …message, violation?: { rule, snippet, action }, reportCount, hiddenFromRecipient }], hasMoreBefore, hasMoreAfter }`. Voice notes and photos keep their `mediaUrl`. Each opening is audit-logged (`chat.view_context`).
 - Violations now store `messageId`; older ones are matched to the masked message sent within a minute.
 
+### 7.20r Moto-taxi safety: plate + vest, "Share my trip" (2026-10-26, client)
+
+- **Plate + vest required**: a moto partner on a motorbike needs `vehicle.plateNumber` and `vestNumber` to submit (on a car: the plate); 400 names the missing ones. Once approved they can't be emptied (`PATCH /riders/me` → 400). A moto-taxi approved before the rule without them gets no ride offers and `POST /rides/:id/accept` → 400 "Add your plate and vest number…" (deliveries keep coming; the app shows a banner on Near me). The passenger now also gets `rider.vestNumber` in `GET /rides/:id`.
+- **Share my trip**: `POST /rides/:id/share` (the passenger, ride not over; else 404 / 400) → `{ token, url }` — the same link if asked again. `url` = `<this API>/r/<token>`: a browser page (map, steps, driver name/photo, vehicle, plate, vest, live position), no app or account; it polls `GET /rides/shared/:token` (public) every 10 s. Shows the passenger's first name only, never a phone. Once the ride is completed / cancelled / expired the link only returns `{ status, rideNumber, ended: true, endedAt }`. Unknown token → 404. The page has its own strict CSP (nonce scripts, Leaflet 1.9.4 from unpkg with SRI, OpenStreetMap tiles) and `noindex`.
+
 ### 7.20o Moto-taxi rider subscription and payment gateways (2026-10-24)
 
 - **Rider subscription** (client: free first, later monthly, never a commission). `settings.rides.subscriptionRequired` (default false) + `trialDays` (default 30). While on, a moto rider gets ride offers / can accept only with `rideAccessUntil` in the future; each rider gets the free days once (started on first `GET /rides/rider/offers`, `/rides/rider/access` or accept). Deliveries are never blocked. Plans: audience `moto_driver` (only approved moto riders may subscribe); paying adds the plan days after what is left.
@@ -1123,7 +1128,7 @@ Decisions (to review with the client): price fixed before ordering, nearest ride
 - `GET /deliveries/rider/offers` (rider) → `{ isOnline, offers[] }`, nearest first: `fee` (all theirs), `pickupKm`, `tripKm`, `cashToCollect`, `itemCount`, `fromName` / `fromAddressText` / `fromLocation`, `toName` (stations only) and `toArea` (the customer's city / neighbourhood only — no name, phone or position before accepting), `fromMyStore`, `servesRoute`, `canTake` + `blockedReason` (`too_many`: a moto carries at most 3 at a time; `cash_limit`). Empty while offline.
 - `POST /deliveries/:id/claim` → the leg is the rider's (`accepted`). Atomic: two riders at once → one 200, the other 409 "Another rider has already taken this delivery". 400 when offline, out of reach, over the cash limit or with 3 deliveries running. The store is told ("Rider found"); the offer leaves the other riders' lists (socket `delivery:offer_gone`).
 - `POST /deliveries/:id/skip` → hidden from my list.
-- The store may still choose a rider (`POST /deliveries/:id/assign`): `reservedUntil` = now + 3 min; nobody else sees it meanwhile. No answer in time → back to everyone (that rider isn't offered it again), the store is told. A decline also puts it back to everyone.
+- The store may still choose a rider (`POST /deliveries/:id/assign`): `reservedUntil` = now + 10 min; nobody else sees it meanwhile. No answer in time → back to everyone (that rider isn't offered it again), the store is told. A decline also puts it back to everyone.
 - Nobody took it after 10 min (60 min for a leg leaving a station) → the store and the Kadou24h team (staff / admins, `system_alert` with `orderId`) are told once (`noRiderAlertedAt`).
 - Sweep every 30 s (`DISPATCH_SWEEP_MS` overrides; the e2e uses 1 s): reservations expire, legs that should be open are opened, newly reachable riders are told (push `new_delivery_assigned` with `data.offer: true`, socket `delivery:offer`).
 - Vendor order detail legs now carry `offerOpenedAt`, `reservedUntil`, `noRiderAlertedAt`.

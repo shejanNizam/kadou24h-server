@@ -4,6 +4,7 @@ import catchAsync from "../../utils/catchAsync";
 import sendResponse from "../../utils/sendResponse";
 import { ADMIN_ROLES } from "../user/user.interface";
 import { RideServices } from "./ride.service";
+import { RideShareServices } from "./ride.share";
 
 const ok = (res: Response, message: string, data: unknown, statusCode: number = httpStatus.OK) =>
   sendResponse(res, { statusCode, success: true, message, data });
@@ -23,6 +24,12 @@ const getMyCurrentRide = catchAsync(async (req, res) => ok(res, "Current ride", 
 const getRide = catchAsync(async (req, res) => ok(res, "Ride retrieved", await RideServices.getRide(req.user._id, id(req), isStaff(req))));
 const cancelRide = catchAsync(async (req, res) => ok(res, "Ride cancelled", await RideServices.cancelByPassenger(req.user._id, id(req), req.body.reason)));
 const rateRide = catchAsync(async (req, res) => ok(res, "Thank you for your rating", await RideServices.rateRide(req.user._id, id(req), req.body)));
+// The link points at this API (it serves the page): https behind the proxy (trust proxy)
+const shareRide = catchAsync(async (req, res) =>
+  ok(res, "Share this link with a close one", await RideShareServices.createShareLink(req.user._id, id(req), `${req.protocol}://${req.get("host")}`)),
+);
+// Public: whoever has the link
+const getSharedRide = catchAsync(async (req, res) => ok(res, "Shared ride", await RideShareServices.getSharedRide(String(req.params.token))));
 
 // Rider
 const getRideOffers = catchAsync(async (req, res) => ok(res, "Rides near you", await RideServices.getRideOffers(req.user._id)));
@@ -44,6 +51,8 @@ const cancelByAdmin = catchAsync(async (req, res) => ok(res, "Ride cancelled", a
 export const RideControllers = {
   estimate,
   requestRide,
+  shareRide,
+  getSharedRide,
   getMyRides,
   getMyCurrentRide,
   getRide,
