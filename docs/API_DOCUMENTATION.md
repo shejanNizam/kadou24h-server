@@ -1088,6 +1088,16 @@ Errors: 409 already connected / already invited · 403 the inviter tried to answ
 | `POST /deliveries/:id/assign` | Vendor / Admin | assign delivery leg to partner: `{ riderId }`; sends real-time push/socket alert |
 | `GET /deliveries/:id/track` | Customer, store owner, riders of the leg chain, admin | live delivery tracking. The customer and the store may follow every leg of their order. **PIN visibility**: `pickupPin` only to the giver (the vendor on the leg that starts at the store, or the rider arriving at a station), `handoverPin` only to the receiver (the customer on the final leg, or the next rider at a station). Middle station→station legs show no PIN to the customer or the store. The assigned rider never sees its own leg's PINs. On the rider's own leg at bus stations: `incomingHandoverPin` (show it to the rider arriving with the parcel) and `outgoingPickupPin` (show it to the rider taking the parcel next). |
 
+### 7.20q Kadou24h Team messages (2026-10-26)
+
+- `POST /notifications/admin/team-message { userId, title, message }` (staff/admin): a `team_message` notification to one user, always pushed, no mode (so it shows in every role's list), audit-logged (`notification.team_message`). One way: the user answers through support or WhatsApp. `GET /notifications/admin/team-messages/:userId` lists what was sent.
+- Notification lists, unread counts and "read all" for a mode now include account-wide notifications (no mode): chat warnings, suspension, team messages. Before, those never showed in the app list.
+
+### 7.20p Flagged / reported message in its conversation (2026-10-26)
+
+- `GET /conversations/admin/moderation-violations/:id/context?around=5` and `GET /conversations/admin/messages/:messageId/context?around=5` (staff/admin; around 1–20). Returns `{ conversation: { type, subOrderNumber, participants: [{ userId, name, phone, status, violationCount, mode }] }, focusId, messages: [{ …message, violation?: { rule, snippet, action }, reportCount, hiddenFromRecipient }], hasMoreBefore, hasMoreAfter }`. Voice notes and photos keep their `mediaUrl`. Each opening is audit-logged (`chat.view_context`).
+- Violations now store `messageId`; older ones are matched to the masked message sent within a minute.
+
 ### 7.20o Moto-taxi rider subscription and payment gateways (2026-10-24)
 
 - **Rider subscription** (client: free first, later monthly, never a commission). `settings.rides.subscriptionRequired` (default false) + `trialDays` (default 30). While on, a moto rider gets ride offers / can accept only with `rideAccessUntil` in the future; each rider gets the free days once (started on first `GET /rides/rider/offers`, `/rides/rider/access` or accept). Deliveries are never blocked. Plans: audience `moto_driver` (only approved moto riders may subscribe); paying adds the plan days after what is left.

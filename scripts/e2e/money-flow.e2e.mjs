@@ -937,6 +937,47 @@ const run = async () => {
   await call("POST", `/conversations/${shopChat}/messages`, { text: "Re-bonjour" }, P.token);
   r = await call("GET", `/conversations/${shopChat}/messages`, null, W.token);
   check("unblocked: messages arrive again (the hidden one stays hidden)", r.body.data?.some((m) => m.text === "Re-bonjour") && !r.body.data?.some((m) => m.text === "Vous êtes là ?"), brief(r));
+
+  // The team opens a flagged message with the messages around it
+  r = await call("POST", `/conversations/${shopChat}/messages`, { text: "Appelle moi au 622 12 34 56 pour payer" }, P.token);
+  const flaggedId = r.body.data?._id;
+  check("flagged: a phone number is masked", r.body.data?.moderationStatus === "masked", brief(r));
+  await call("POST", `/conversations/${shopChat}/messages`, { text: "Merci, je vous réponds ici" }, W.token);
+  r = await call("GET", `/conversations/admin/moderation-violations?userId=${P.id}`, null, admin);
+  const flag = r.body.data?.find((v) => v.messageId === flaggedId);
+  check("flagged: the violation points to its message", Boolean(flag), JSON.stringify(r.body.data?.map((v) => v.messageId)));
+  r = await call("GET", `/conversations/admin/moderation-violations/${flag?._id}/context?around=3`, null, admin);
+  const ctx = r.body.data;
+  const focusMsg = ctx?.messages?.find((m) => m._id === ctx?.focusId);
+  check(
+    "flagged: the team sees the message, what was caught, and the messages before and after",
+    ok(r) && ctx.focusId === flaggedId && /622/.test(focusMsg?.violation?.snippet ?? "") &&
+      ctx.messages.some((m) => m.text === "Re-bonjour") && ctx.messages.some((m) => m.text === "Merci, je vous réponds ici") && ctx.messages.length <= 7,
+    brief(r),
+  );
+  check("flagged: both people with their role", ctx?.participants === undefined && ctx?.conversation?.participants?.length === 2 && ctx.conversation.participants.every((p) => p.name && p.mode));
+  r = await call("GET", `/conversations/admin/moderation-violations/${flag?._id}/context?around=10`, null, admin);
+  check("flagged: a message the blocker never got is marked", r.body.data?.messages?.some((m) => m.text === "Vous êtes là ?" && m.hiddenFromRecipient === true), brief(r));
+  r = await call("POST", "/reports", { targetType: "message", targetId: flaggedId, conversationId: shopChat, reason: "Numéro de téléphone" }, W.token);
+  r = await call("GET", `/conversations/admin/messages/${flaggedId}/context`, null, admin);
+  check("reported: opened from the report, with its report count", ok(r) && r.body.data?.focusId === flaggedId && r.body.data?.messages?.find((m) => m._id === flaggedId)?.reportCount === 1, brief(r));
+  r = await call("GET", `/conversations/admin/messages/${flaggedId}/context`, null, W.token);
+  check("reported: only the team can open it", r.status === 403, brief(r));
+  r = await call("GET", "/notifications?mode=customer&limit=50", null, P.token);
+  check("flagged: the chat warning is in the user's notification list (account-wide)", (r.body.data ?? []).some((n) => n.type === "moderation_warning"), brief(r));
+
+  // The Kadou24h team writes to one user
+  r = await call("POST", "/notifications/admin/team-message", { userId: P.id, title: "Équipe Kadou24h", message: "" }, admin);
+  check("team message: a message is required", r.status === 400, brief(r));
+  r = await call("POST", "/notifications/admin/team-message", { userId: P.id, title: "Rappel", message: "Merci de garder les échanges dans l'application." }, W.token);
+  check("team message: only the team can send", r.status === 403, brief(r));
+  r = await call("POST", "/notifications/admin/team-message", { userId: P.id, title: "Rappel", message: "Merci de garder les échanges dans l'application." }, admin);
+  check("team message: sent", r.status === 201 && r.body.data?.type === "team_message", brief(r));
+  await sleep(300);
+  r = await call("GET", "/notifications?mode=customer&limit=50", null, P.token);
+  check("team message: the user sees it, marked as from the team", (r.body.data ?? []).some((n) => n.type === "team_message" && n.body?.fr?.includes("garder les échanges")), brief(r));
+  r = await call("GET", `/notifications/admin/team-messages/${P.id}`, null, admin);
+  check("team message: the team sees what was sent to that user", ok(r) && r.body.data?.[0]?.title?.fr === "Rappel", brief(r));
   // ═════ 6. Access control ═════
   r = await call("GET", `/deliveries/${legId}/track`, null, X.token);
   check("stranger cannot track a delivery", r.status === 403, brief(r));

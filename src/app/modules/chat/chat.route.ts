@@ -13,6 +13,9 @@ router.get(
   checkAuth(...ADMIN_ROLES),
   ChatControllers.getModerationViolationsAdmin,
 );
+// The flagged / reported message in its conversation (audit-logged)
+router.get("/admin/moderation-violations/:id/context", checkAuth(...ADMIN_ROLES), ChatControllers.getViolationContextAdmin);
+router.get("/admin/messages/:messageId/context", checkAuth(...ADMIN_ROLES), ChatControllers.getMessageContextAdmin);
 router.post(
   "/admin/users/:userId/lift-restriction",
   checkAuth(...ADMIN_ROLES),

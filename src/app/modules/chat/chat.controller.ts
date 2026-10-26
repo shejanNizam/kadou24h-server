@@ -4,6 +4,7 @@ import catchAsync from "../../utils/catchAsync";
 import sendResponse from "../../utils/sendResponse";
 import { AppMode } from "../user/user.interface";
 import { ChatBlockServices } from "./chat.block.service";
+import { ChatAdminServices } from "./chat.admin.service";
 import { ChatServices } from "./chat.service";
 
 const startOrGetConversation = catchAsync(async (req: Request, res: Response) => {
@@ -129,6 +130,17 @@ const getModerationViolationsAdmin = catchAsync(async (req: Request, res: Respon
   });
 });
 
+/** A flagged / reported message with the messages around it */
+const getMessageContextAdmin = catchAsync(async (req: Request, res: Response) => {
+  const result = await ChatAdminServices.getMessageContext(req.user._id, String(req.params.messageId), req.query.around);
+  sendResponse(res, { statusCode: 200, success: true, message: "Message context", data: result });
+});
+
+const getViolationContextAdmin = catchAsync(async (req: Request, res: Response) => {
+  const result = await ChatAdminServices.getViolationContext(req.user._id, String(req.params.id), req.query.around);
+  sendResponse(res, { statusCode: 200, success: true, message: "Message context", data: result });
+});
+
 const liftUserChatRestrictionAdmin = catchAsync(async (req: Request, res: Response) => {
   const userId = req.params.userId as string;
   const result = await ChatServices.liftUserChatRestrictionAdmin(userId);
@@ -154,5 +166,7 @@ export const ChatControllers = {
   sendMessage,
   markConversationAsRead,
   getModerationViolationsAdmin,
+  getMessageContextAdmin,
+  getViolationContextAdmin,
   liftUserChatRestrictionAdmin,
 };

@@ -22,6 +22,8 @@ export enum NotificationType {
   moderation_warning = "moderation_warning",
   account_suspended = "account_suspended",
   system_alert = "system_alert",
+  // Written by the Kadou24h team to one user (dashboard), shown with a "Kadou24h Team" badge
+  team_message = "team_message",
 }
 
 export interface ILocalizedMessage {

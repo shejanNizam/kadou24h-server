@@ -1,0 +1,8 @@
+import { z } from "zod";
+
+export const sendTeamMessageZodSchema = z.object({
+  userId: z.string().regex(/^[a-f\d]{24}$/i, "Invalid user"),
+  title: z.string().trim().min(2, "Title is required").max(80),
+  // Not "body": validateRequest reads a "body" key as a request envelope
+  message: z.string().trim().min(2, "Message is required").max(1000),
+});

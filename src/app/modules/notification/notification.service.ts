@@ -7,6 +7,11 @@ import { logger } from "../../utils/logger";
 import { sendPushToUser } from "../../utils/pushNotification";
 import { INotificationPrefs, Language } from "../user/user.interface";
 import { User } from "../user/user.model";
+import httpStatus from "http-status";
+import { AuditLogServices } from "../audit_log/audit_log.service";
+
+// A role's list also shows the account-wide notifications (no mode: warnings, suspension, team messages)
+const modeFilter = (mode: string) => ({ $or: [{ mode }, { mode: { $exists: false } }, { mode: null }] });
 
 export interface ICreateNotificationPayload {
   userId: string | Types.ObjectId;
@@ -64,10 +69,11 @@ const PREF_BY_TYPE: Record<NotificationType, keyof INotificationPrefs> = {
   [NotificationType.moderation_warning]: "accountAlerts",
   [NotificationType.account_suspended]: "accountAlerts",
   [NotificationType.system_alert]: "accountAlerts",
+  [NotificationType.team_message]: "accountAlerts",
 };
 
 // Safety-critical types are always pushed, whatever the preference
-const ALWAYS_PUSH = new Set([NotificationType.account_suspended, NotificationType.moderation_warning]);
+const ALWAYS_PUSH = new Set([NotificationType.account_suspended, NotificationType.moderation_warning, NotificationType.team_message]);
 
 const sendPhonePush = async (payload: ICreateNotificationPayload) => {
   try {
@@ -108,9 +114,7 @@ const getMyNotifications = async (
     userId: new Types.ObjectId(userId),
   };
 
-  if (query.mode) {
-    filter.mode = query.mode;
-  }
+  if (query.mode) Object.assign(filter, modeFilter(query.mode));
 
   if (query.isRead !== undefined) {
     filter.isRead = String(query.isRead) === "true";
@@ -121,7 +125,7 @@ const getMyNotifications = async (
     Notification.countDocuments(filter),
     Notification.countDocuments({
       userId: new Types.ObjectId(userId),
-      ...(query.mode ? { mode: query.mode } : {}),
+      ...(query.mode ? modeFilter(query.mode) : {}),
       isRead: false,
     }),
   ]);
@@ -159,9 +163,7 @@ const markAllAsRead = async (userId: string, mode?: string) => {
     userId: new Types.ObjectId(userId),
     isRead: false,
   };
-  if (mode) {
-    filter.mode = mode;
-  }
+  if (mode) Object.assign(filter, modeFilter(mode));
 
   const result = await Notification.updateMany(filter, { $set: { isRead: true } });
   return { modifiedCount: result.modifiedCount };
@@ -172,15 +174,51 @@ const getUnreadCount = async (userId: string, mode?: string) => {
     userId: new Types.ObjectId(userId),
     isRead: false,
   };
-  if (mode) {
-    filter.mode = mode;
-  }
+  if (mode) Object.assign(filter, modeFilter(mode));
 
   const count = await Notification.countDocuments(filter);
   return { unreadCount: count };
 };
 
+/**
+ * The Kadou24h team writes to one user (one way: they answer through support or WhatsApp).
+ * No mode, so it shows in every role's list; always pushed; audit-logged.
+ */
+const sendTeamMessage = async (adminId: string, payload: { userId: string; title: string; body: string }) => {
+  if (!Types.ObjectId.isValid(payload.userId)) throw new AppError(httpStatus.NOT_FOUND, "User not found");
+  const user = await User.findOne({ _id: payload.userId, isDeleted: { $ne: true } }).select("_id").lean();
+  if (!user) throw new AppError(httpStatus.NOT_FOUND, "User not found");
+  const notification = await createNotification({
+    userId: user._id,
+    type: NotificationType.team_message,
+    // The team writes once; the same words show in both languages
+    title: { fr: payload.title, en: payload.title },
+    body: { fr: payload.body, en: payload.body },
+    data: { kind: "team" },
+  });
+  await AuditLogServices.record({
+    actorId: adminId,
+    action: "notification.team_message",
+    targetType: "user",
+    targetId: String(user._id),
+    after: { title: payload.title, body: payload.body },
+  });
+  return notification;
+};
+
+/** Team messages already sent to a user (newest first) */
+const getTeamMessages = async (userId: string) => {
+  if (!Types.ObjectId.isValid(userId)) throw new AppError(httpStatus.NOT_FOUND, "User not found");
+  return Notification.find({ userId: new Types.ObjectId(userId), type: NotificationType.team_message })
+    .select("title body isRead createdAt")
+    .sort({ createdAt: -1 })
+    .limit(50)
+    .lean();
+};
+
 export const NotificationServices = {
+  sendTeamMessage,
+  getTeamMessages,
   createNotification,
   getMyNotifications,
   markAsRead,

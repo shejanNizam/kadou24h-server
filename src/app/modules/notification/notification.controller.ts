@@ -3,6 +3,16 @@ import catchAsync from "../../utils/catchAsync";
 import sendResponse from "../../utils/sendResponse";
 import { NotificationServices } from "./notification.service";
 
+const sendTeamMessage = catchAsync(async (req: Request, res: Response) => {
+  const result = await NotificationServices.sendTeamMessage(req.user._id, { userId: req.body.userId, title: req.body.title, body: req.body.message });
+  sendResponse(res, { statusCode: 201, success: true, message: "Message sent", data: result });
+});
+
+const getTeamMessages = catchAsync(async (req: Request, res: Response) => {
+  const result = await NotificationServices.getTeamMessages(String(req.params.userId));
+  sendResponse(res, { statusCode: 200, success: true, message: "Team messages", data: result });
+});
+
 const getMyNotifications = catchAsync(async (req: Request, res: Response) => {
   const userId = req.user._id;
   const result = await NotificationServices.getMyNotifications(userId, req.query);
@@ -56,6 +66,8 @@ const getUnreadCount = catchAsync(async (req: Request, res: Response) => {
 });
 
 export const NotificationControllers = {
+  sendTeamMessage,
+  getTeamMessages,
   getMyNotifications,
   markAsRead,
   markAllAsRead,

@@ -1,9 +1,15 @@
 import { Router } from "express";
 import { checkAuth } from "../../middlewares/checkAuth";
-import { ALL_ROLES } from "../user/user.interface";
+import validateRequest from "../../middlewares/validateRequest";
+import { ADMIN_ROLES, ALL_ROLES } from "../user/user.interface";
+import { sendTeamMessageZodSchema } from "./notification.validation";
 import { NotificationControllers } from "./notification.controller";
 
 const router = Router();
+
+// The Kadou24h team writes to one user (shown with a "Kadou24h Team" badge, audit-logged)
+router.post("/admin/team-message", checkAuth(...ADMIN_ROLES), validateRequest(sendTeamMessageZodSchema), NotificationControllers.sendTeamMessage);
+router.get("/admin/team-messages/:userId", checkAuth(...ADMIN_ROLES), NotificationControllers.getTeamMessages);
 
 /**
  * @swagger

@@ -7,7 +7,6 @@ import { Settings } from "../settings/settings.model";
 import { AppMode, UserStatus } from "../user/user.interface";
 import { User } from "../user/user.model";
 import {
-  ConversationType,
   IConversation,
   IMessage,
   MessageType,
@@ -299,6 +298,7 @@ const sendMessage = async (
   let textToSave = payload.text;
   let moderationStatus = ModerationStatus.clean;
   let moderationRules: string[] = [];
+  let violationId: Types.ObjectId | null = null;
 
   if (payload.text) {
     const moderationResult = inspectContent(payload.text);
@@ -374,8 +374,8 @@ const sendMessage = async (
 
       await sender.save();
 
-      // Record violation
-      await ModerationViolation.create({
+      // Record violation (its message id is added once the message exists)
+      const violation = await ModerationViolation.create({
         userId: sender._id,
         conversationId: conversation._id,
         rule: (moderationRules[0] as ModerationRule) || ModerationRule.phone,
@@ -383,6 +383,7 @@ const sendMessage = async (
         action,
         actionBy: "system",
       });
+      violationId = violation._id as Types.ObjectId;
     }
   }
 
@@ -400,6 +401,8 @@ const sendMessage = async (
     moderationStatus,
     moderationRules,
   });
+  // The team can open the flagged message in its conversation
+  if (violationId) await ModerationViolation.updateOne({ _id: violationId }, { $set: { messageId: created._id } });
   // What the sender (and the sockets) see: never the hidden list
   const message = created.toObject() as unknown as IMessage;
   Reflect.deleteProperty(message, "hiddenFor");
