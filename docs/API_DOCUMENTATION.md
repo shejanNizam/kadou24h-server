@@ -1098,6 +1098,12 @@ Errors: 409 already connected / already invited · 403 the inviter tried to answ
 - `GET /conversations/admin/moderation-violations/:id/context?around=5` and `GET /conversations/admin/messages/:messageId/context?around=5` (staff/admin; around 1–20). Returns `{ conversation: { type, subOrderNumber, participants: [{ userId, name, phone, status, violationCount, mode }] }, focusId, messages: [{ …message, violation?: { rule, snippet, action }, reportCount, hiddenFromRecipient }], hasMoreBefore, hasMoreAfter }`. Voice notes and photos keep their `mediaUrl`. Each opening is audit-logged (`chat.view_context`).
 - Violations now store `messageId`; older ones are matched to the masked message sent within a minute.
 
+### 7.20s Client feedback fixes: "&", ride history, app crash reports (2026-10-29)
+
+- **"&" kept as typed**: the input sanitizer still strips HTML tags but no longer stores `&` as `&amp;` (`<` / `>` stay escaped). Passwords (`password`, `oldPassword`, `newPassword`) keep the old encoding so existing logins still match. Repair of data saved before: `npm run fix:ampersands` (dry run, counts) then `npm run fix:ampersands -- --apply` on the `.env` database.
+- **Passenger ride history**: `GET /rides/my` leaves out requests no rider took (cancelled while searching, or expired). Rides a rider took stay, whatever their end.
+- **App crash reports**: `POST /app-errors { message, stack?, fatal, screen?, platform?, osVersion?, device?, appVersion?, updateId? }` — public (a bearer token links the user), 20 per 15 min per account / IP, kept 30 days. The app sends one when a JavaScript error is about to close it (`fatal: true`) or a screen fails to draw. Team: `GET /app-errors?fatal=true&page=&limit=` (newest first, `userId` → name, phone).
+
 ### 7.20r Moto-taxi safety: plate + vest, "Share my trip" (2026-10-26, client)
 
 - **Plate + vest required**: a moto partner on a motorbike needs `vehicle.plateNumber` and `vestNumber` to submit (on a car: the plate); 400 names the missing ones. Once approved they can't be emptied (`PATCH /riders/me` → 400). A moto-taxi approved before the rule without them gets no ride offers and `POST /rides/:id/accept` → 400 "Add your plate and vest number…" (deliveries keep coming; the app shows a banner on Near me). The passenger now also gets `rider.vestNumber` in `GET /rides/:id`.

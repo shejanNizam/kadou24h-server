@@ -275,7 +275,11 @@ const getRide = async (userId: string, id: string, isStaff = false) => {
 const getMyRides = async (passengerId: string, query: { page?: string; limit?: string }) => {
   const page = Math.max(1, Number(query.page) || 1);
   const limit = Math.max(1, Math.min(50, Number(query.limit) || 20));
-  const filter = { passengerId: new Types.ObjectId(passengerId) };
+  // A request nobody took (cancelled while searching, or expired) is not a trip: keep it out of the history
+  const filter = {
+    passengerId: new Types.ObjectId(passengerId),
+    $nor: [{ riderId: null, status: { $in: [RideStatus.cancelled, RideStatus.expired] } }],
+  };
   const [rows, total] = await Promise.all([
     Ride.find(filter).populate(POPULATE).sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit).lean<Populated[]>(),
     Ride.countDocuments(filter),

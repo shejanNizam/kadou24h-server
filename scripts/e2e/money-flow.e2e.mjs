@@ -1317,8 +1317,9 @@ const run = async () => {
     ok(r) && est.fare === expectedFare && est.fare % 500 === 0 && est.durationMin > 0 && est.ridersNearby >= 1,
     JSON.stringify(est ?? brief(r)),
   );
-  r = await call("POST", "/rides", { pickup: PICK, dropoff: DROP, note: "Devant la pharmacie" }, PA.token);
+  r = await call("POST", "/rides", { pickup: PICK, dropoff: DROP, note: "Devant la pharmacie & le marché" }, PA.token);
   const ride = r.body.data;
+  check("input: "&" is stored as typed, not as &amp;", ride?.note === "Devant la pharmacie & le marché", JSON.stringify(ride?.note));
   check("ride: ordered → searching, same fare as the estimate", r.status === 201 && ride?.status === "searching" && ride?.fare === est.fare, brief(r));
   r = await call("POST", "/rides", { pickup: PICK, dropoff: DROP }, PA.token);
   check("ride: one running ride per passenger", r.status === 409, brief(r));
@@ -1421,6 +1422,8 @@ const run = async () => {
   await sleep(2500);
   r = await call("GET", `/rides/${ride3?._id}`, null, PA.token);
   check("ride: nobody in 10 minutes → expired, the passenger is told", r.body.data?.status === "expired", JSON.stringify(r.body.data?.status));
+  r = await call("GET", "/rides/my", null, PA.token);
+  check("ride history: requests nobody took (cancelled, expired) are left out", r.body.meta?.total === 1 && r.body.data?.[0]?._id === ride?._id, brief(r));
 
   // The team
   r = await call("GET", "/rides/admin?status=completed", null, admin);
@@ -1433,6 +1436,16 @@ const run = async () => {
   check("admin rides: cancelling needs a reason", r.status === 400, brief(r));
   r = await call("POST", `/rides/admin/${ride4?._id}/cancel`, { reason: "Test du support" }, admin);
   check("admin rides: the team can cancel a running ride", ok(r) && r.body.data?.status === "cancelled" && r.body.data?.cancellation?.by === "admin", brief(r));
+
+  // App crash reports (the app sends them before an error closes it)
+  r = await call("POST", "/app-errors", { message: "TypeError: x is undefined", stack: "at RideScreen", fatal: true, screen: "/ride/[id]", platform: "android" });
+  check("app errors: a phone can report one without signing in", r.status === 201, brief(r));
+  r = await call("POST", "/app-errors", { fatal: true }, PA.token);
+  check("app errors: a report needs a message", r.status === 400, brief(r));
+  r = await call("GET", "/app-errors?fatal=true", null, admin);
+  check("app errors: the team sees the crash with its screen", ok(r) && r.body.data?.[0]?.screen === "/ride/[id]" && r.body.data?.[0]?.fatal === true, brief(r));
+  r = await call("GET", "/app-errors", null, PA.token);
+  check("app errors: not for customers", r.status === 403, brief(r));
 
   // ═════ 14. Moto-taxi subscription (client: free at first, later monthly, never a commission) ═════
   r = await call("GET", "/rides/rider/access", null, T.token);

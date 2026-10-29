@@ -32,6 +32,7 @@ import { ReviewRoutes } from "../modules/review/review.route";
 import { BookingRoutes } from "../modules/booking/booking.route";
 import { CouponRoutes } from "../modules/coupon/coupon.route";
 import { RideRoutes } from "../modules/ride/ride.route";
+import { AppErrorRoutes } from "../modules/app_error/app_error.route";
 
 const router = Router();
 
@@ -69,6 +70,7 @@ const moduleRoutes = [
   { path: "/bookings", route: BookingRoutes },
   { path: "/coupons", route: CouponRoutes },
   { path: "/rides", route: RideRoutes },
+  { path: "/app-errors", route: AppErrorRoutes },
 ];
 
 moduleRoutes.forEach((route) => {

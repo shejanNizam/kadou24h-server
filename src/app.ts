@@ -3,13 +3,13 @@ import cookieParser from "cookie-parser";
 import cors from "cors";
 import express, { Application, Request, Response } from "express";
 import mongoSanitize from "express-mongo-sanitize";
-import { xss } from "express-xss-sanitizer";
 import helmet from "helmet";
 import morgan from "morgan";
 import swaggerUi from "swagger-ui-express";
 import { configs } from "./app/config/index";
 import { swaggerSpec } from "./app/config/swagger.config";
 import { globalErrorHandler } from "./app/middlewares/globalErrorHandler";
+import { sanitizeInput } from "./app/middlewares/sanitizeInput";
 import notFound from "./app/middlewares/notFound";
 import { globalLimiter } from "./app/middlewares/rateLimiter";
 import { requestId } from "./app/middlewares/requestId";
@@ -60,7 +60,7 @@ app.use((req, _res, next) => {
   }
   next();
 });
-app.use(xss());
+app.use(sanitizeInput);
 
 app.use(cookieParser());
 app.use(

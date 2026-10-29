@@ -1,3 +1,5 @@
+import type { Request, Response } from "express";
+import { sanitizeInput } from "../app/middlewares/sanitizeInput";
 import { uploadKind } from "../app/config/multer.config";
 
 describe("Security: uploads", () => {
@@ -24,5 +26,30 @@ describe("Security: uploads", () => {
     // Declared as a photo but named like a page
     expect(uploadKind(file("photo.html", "image/jpeg"))).toBeNull();
     expect(uploadKind(file("cv.pdf.js", "application/pdf"))).toBeNull();
+  });
+});
+
+describe("Security: input sanitizing", () => {
+  const run = (body: Record<string, unknown>, query: Record<string, string> = {}) => {
+    const req = { body, params: {}, headers: {}, query } as unknown as Request;
+    sanitizeInput(req, {} as Response, jest.fn());
+    return req;
+  };
+
+  it("keeps & as typed instead of storing &amp;", () => {
+    const req = run({ name: "Riz & Co", items: [{ label: "A & B" }] }, { searchTerm: "Riz & Co" });
+    expect(req.body).toEqual({ name: "Riz & Co", items: [{ label: "A & B" }] });
+    expect(req.query).toEqual({ searchTerm: "Riz & Co" });
+  });
+
+  it("still strips scripts and keeps < > escaped", () => {
+    const req = run({ name: "<script>alert(1)</script>Shop", bio: "&lt;img src=x onerror=alert(1)&gt;" });
+    expect(req.body.name).toBe("Shop");
+    expect(req.body.bio).toBe("&lt;img src=x onerror=alert(1)&gt;");
+  });
+
+  it("leaves passwords encoded as before, so existing logins still match", () => {
+    const req = run({ password: "p&ss", oldPassword: "a&b", newPassword: "c&d" });
+    expect(req.body).toEqual({ password: "p&amp;ss", oldPassword: "a&amp;b", newPassword: "c&amp;d" });
   });
 });

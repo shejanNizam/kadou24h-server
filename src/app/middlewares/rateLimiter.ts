@@ -99,3 +99,15 @@ export const uploadLimiter = rateLimit({
   },
   message: { success: false, message: "Too many uploads, please try again later." },
 });
+
+/** Crash reports from the app: a phone stuck in a crash loop must not flood the database */
+export const appErrorLimiter = rateLimit({
+  ...common,
+  windowMs: WINDOW_15_MIN,
+  limit: 20,
+  keyGenerator: (req: Request) => {
+    const account = accountOf(req);
+    return account ? `err:${account}` : `err-ip:${ipKey(req)}`;
+  },
+  message: { success: false, message: "Too many reports" },
+});
