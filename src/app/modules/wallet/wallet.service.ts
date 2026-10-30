@@ -836,13 +836,20 @@ const getMyTransactions = async (
     WalletTransaction.find(filter)
       .sort({ createdAt: -1 })
       .skip(skip)
-      .limit(limit),
+      .limit(limit)
+      .populate<{ subOrderId?: { _id: Types.ObjectId; subOrderNumber?: string } }>("subOrderId", "subOrderNumber")
+      .lean(),
     WalletTransaction.countDocuments(filter),
   ]);
 
   return {
     meta: { page, limit, total, totalPage: Math.ceil(total / limit) },
-    data: transactions,
+    // The order number lets the app describe each line in the user's language
+    data: transactions.map((tx) => ({
+      ...tx,
+      subOrderId: tx.subOrderId?._id,
+      subOrderNumber: tx.subOrderId?.subOrderNumber,
+    })),
   };
 };
 

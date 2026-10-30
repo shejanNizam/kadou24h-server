@@ -1144,6 +1144,12 @@ const run = async () => {
     leg2Fee > 0 && busAfter.availableBalance - (busBefore?.availableBalance ?? 0) === leg2Fee && busAfter.totalEarned === leg2Fee,
     JSON.stringify([leg2Fee, busBefore, busAfter].map((w) => (typeof w === "object" ? [w?.availableBalance, w?.totalEarned] : w))),
   );
+  r = await call("GET", "/wallets/me/transactions?mode=rider", null, B.token);
+  check(
+    "wallet history lines carry the order number (the app describes them in French)",
+    r.body.data?.[0]?.type === "earning_released" && r.body.data[0].subOrderNumber === icSub.subOrderNumber && typeof r.body.data[0].subOrderId === "string",
+    JSON.stringify(r.body.data?.[0]),
+  );
 
   // ═════ 10b. Admin panel: the exact requests the dashboard sends ═════
   // Categories: in use → cannot delete, can deactivate

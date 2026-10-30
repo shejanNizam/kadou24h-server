@@ -1105,6 +1105,8 @@ Errors: 409 already connected / already invited · 403 the inviter tried to answ
 - **Relay legs are paid at the station**, not when the parcel reaches the customer: the fee goes to `availableBalance` once (`deliveries.feePaidAt`), push `earnings_updated`. The final leg is still paid at delivery. The old way (`verify-handover` with `incomingHandoverPin`, older apps) still works and also pays at once.
 - **Riders' `totalEarned`** now counts every fee they receive (it stayed 0).
 - Repair of data saved before: `npm run fix:relay-legs` (dry run) then `npm run fix:relay-legs -- --apply` closes the relay legs left open, pays them, and recomputes riders' `totalEarned`.
+- `GET /wallets/me/transactions` lines now carry `subOrderNumber` (and `subOrderId` stays the id). The app shows each line's `note` in the user's language from its known patterns ("Escrow released for sub-order AP12-1" → "Commande AP12-1 versée sur votre solde"); a note typed by the team is shown as written.
+- Wording (client): the station → station partner is a "car driver" (bus, shared taxi or car), no longer "bus driver", in the app, the admin and API messages. `partnerType` stays `transit`, stations stay "bus stations".
 - `GET /wallets/admin/cod-settlements?riderId=` — one rider's cash declarations (`RiderProfile` id; invalid → 400). The dashboard shows the pending ones with a Confirm button in the rider's Money tab, and their count in the home page's Pending Actions.
 
 ### 7.20s Client feedback fixes: "&", ride history, app crash reports (2026-10-29)

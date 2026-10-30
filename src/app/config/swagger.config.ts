@@ -369,7 +369,7 @@ const options: swaggerJsdoc.Options = {
           type: "object",
           description: "Any subset — send what each onboarding screen collects",
           properties: {
-            partnerType: { type: "string", enum: ["moto", "transit"], description: "transit = bus driver" },
+            partnerType: { type: "string", enum: ["moto", "transit"], description: "transit = car driver (bus, shared taxi or car between stations)" },
             vehicle: {
               type: "object",
               properties: {
@@ -384,7 +384,7 @@ const options: swaggerJsdoc.Options = {
             nationalIdNumber: { type: "string", example: "53345-6646547-1" },
             transitRoutes: {
               type: "array",
-              description: "Bus drivers only (station ids from GET /transit-stations)",
+              description: "Car drivers only (station ids from GET /transit-stations)",
               items: {
                 type: "object",
                 properties: { fromStationId: { type: "string" }, toStationId: { type: "string" } },

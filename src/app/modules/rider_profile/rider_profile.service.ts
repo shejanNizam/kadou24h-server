@@ -154,7 +154,7 @@ const updateMyRiderProfile = async (userId: string, payload: RiderInput) => {
     throw new AppError(httpStatus.FORBIDDEN, "Your delivery partner account is not approved");
   }
   if (payload.transitRoutes && profile.partnerType !== PartnerType.transit) {
-    throw new AppError(httpStatus.BAD_REQUEST, "Only bus drivers have transit routes");
+    throw new AppError(httpStatus.BAD_REQUEST, "Only car drivers have transit routes");
   }
   await applyRiderInput(profile, payload);
   // Can't be cleared once approved (riders approved before the rule fill them in here)
