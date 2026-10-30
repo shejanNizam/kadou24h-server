@@ -14,7 +14,8 @@
     "test:coverage": "jest --coverage",
     "test:e2e": "node scripts/e2e/money-flow.e2e.mjs",
     "seed:local": "node scripts/seed/demo-seed.mjs --local",
-    "fix:ampersands": "node scripts/fix-ampersands.mjs"
+    "fix:ampersands": "node scripts/fix-ampersands.mjs",
+    "fix:relay-legs": "node scripts/fix-relay-legs.mjs"
   },
   "keywords": [
     "kadou24h",

@@ -67,6 +67,7 @@ export interface IDeliveryInitial {
   acceptedAt?: Date;
   pickedUpAt?: Date;
   deliveredAt?: Date;
+  feePaidAt?: Date; // the rider got `fee`: at the station handover, or with the final leg
 }
 
 export type IDelivery = IDeliveryInitial & Document;

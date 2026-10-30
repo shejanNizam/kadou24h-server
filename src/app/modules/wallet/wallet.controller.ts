@@ -191,6 +191,7 @@ const getAllCodSettlementsAdmin = catchAsync(async (req: Request, res: Response)
     page: Number(req.query.page),
     limit: Number(req.query.limit),
     status: enumQuery(req.query.status, CodSettlementStatus, "status"),
+    riderId: typeof req.query.riderId === "string" ? req.query.riderId : undefined,
   });
   sendResponse(res, {
     statusCode: httpStatus.OK,

@@ -350,6 +350,10 @@ const run = async () => {
   const settlementId = r.body.data._id;
   r = await call("POST", "/wallets/me/cod-settlements", { amount: 1, method: "orange_money" }, R.token);
   check("cannot declare the same cash twice", r.status === 400, brief(r));
+  r = await call("GET", `/wallets/admin/cod-settlements?riderId=${riderId}&status=pending`, null, admin);
+  check("admin: one rider's pending cash declarations (rider details → Money)", r.status === 200 && r.body.data?.length === 1 && r.body.data[0]._id === settlementId, brief(r));
+  r = await call("GET", "/wallets/admin/cod-settlements?riderId=nope", null, admin);
+  check("admin: a bad riderId filter is a clear 400", r.status === 400, brief(r));
   r = await call("PATCH", `/wallets/admin/cod-settlements/${settlementId}`, { status: "confirmed" }, admin);
   check("admin confirms → covered sub-order released", r.status === 200 && r.body.data.releasedSubOrders?.length === 1, brief(r));
   r = await call("PATCH", `/wallets/admin/cod-settlements/${settlementId}`, { status: "confirmed" }, admin);
@@ -1101,14 +1105,45 @@ const run = async () => {
   await call("POST", `/deliveries/${leg2}/accept`, null, B.token);
   const busView = (await call("GET", `/deliveries/${leg2}/track`, null, B.token)).body.data;
   check("relay: bus driver sees incomingHandoverPin", typeof busView?.incomingHandoverPin === "string", JSON.stringify(Object.keys(busView ?? {})));
+  // Older apps: the arriving rider types the bus driver's code; still works, and pays at once
+  const riderBefore = await wallet(R.token, "rider");
   r = await call("POST", `/deliveries/${leg1}/verify-handover`, { pin: busView.incomingHandoverPin }, R.token);
   check("relay: leg 1 handed to the bus driver with that PIN", r.status === 200, brief(r));
+  const riderAfter = await wallet(R.token, "rider");
+  check(
+    "relay: leg 1 is paid at the station, not at the customer",
+    riderAfter.availableBalance - riderBefore.availableBalance === 10000 && riderAfter.totalEarned - riderBefore.totalEarned === 10000,
+    JSON.stringify([riderBefore, riderAfter].map((w) => [w.availableBalance, w.totalEarned])),
+  );
   const riderView = (await call("GET", `/deliveries/${leg1}/track`, null, R.token)).body.data;
   check("relay: arriving rider sees outgoingPickupPin", typeof riderView?.outgoingPickupPin === "string", JSON.stringify(Object.keys(riderView ?? {})));
+
+  // The last-mile rider cannot take the parcel before the bus driver has it
+  await call("POST", `/deliveries/${leg3}/assign`, { riderId }, V.token);
+  await call("POST", `/deliveries/${leg3}/accept`, null, R.token);
+  const lastView = (await call("GET", `/deliveries/${leg2}/track`, null, B.token)).body.data;
+  r = await call("POST", `/deliveries/${leg3}/verify-pickup`, { pin: lastView.outgoingPickupPin }, R.token);
+  check("relay: next leg cannot start before the previous driver has the parcel", r.status === 400 && /previous driver/i.test(r.body.message), brief(r));
+
   r = await call("POST", `/deliveries/${leg2}/verify-pickup`, { pin: riderView.outgoingPickupPin }, B.token);
   check("relay: bus driver picks up leg 2 with that PIN", r.status === 200, brief(r));
   r = await call("GET", `/deliveries/${leg2}/track`, null, X.token);
   check("relay: strangers still cannot see station PINs", r.status === 403 || r.status === 401, brief(r));
+
+  // One code per station (client, 2026-10-30): the next driver types the code the bus
+  // driver shows; that alone closes leg 2 and pays the bus driver
+  const busBefore = await wallet(B.token, "rider");
+  r = await call("POST", `/deliveries/${leg3}/verify-pickup`, { pin: lastView.outgoingPickupPin }, R.token);
+  check("relay: last-mile rider takes the parcel with the bus driver's code", r.status === 200, brief(r));
+  const leg2After = (await call("GET", `/deliveries/${leg2}/track`, null, B.token)).body.data;
+  const busAfter = await wallet(B.token, "rider");
+  const leg2Fee = leg2After?.fee;
+  check("relay: that one code closes the bus leg", leg2After?.status === "delivered", leg2After?.status);
+  check(
+    "relay: the bus driver is paid right away, and it counts in total earned",
+    leg2Fee > 0 && busAfter.availableBalance - (busBefore?.availableBalance ?? 0) === leg2Fee && busAfter.totalEarned === leg2Fee,
+    JSON.stringify([leg2Fee, busBefore, busAfter].map((w) => (typeof w === "object" ? [w?.availableBalance, w?.totalEarned] : w))),
+  );
 
   // ═════ 10b. Admin panel: the exact requests the dashboard sends ═════
   // Categories: in use → cannot delete, can deactivate

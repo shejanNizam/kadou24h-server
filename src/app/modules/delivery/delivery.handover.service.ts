@@ -38,6 +38,51 @@ const assertPinUnlocked = (delivery: IDelivery) => {
   delivery.pinLockedUntil = undefined;
 };
 
+/** A rider has finished a leg: one more completed delivery, one less active */
+const countLegDone = async (riderId: Types.ObjectId) => {
+  await RiderProfile.updateOne(
+    { _id: riderId },
+    { $inc: { "stats.totalDeliveries": 1, "stats.completed": 1 } },
+  );
+  await RiderProfile.updateOne(
+    { _id: riderId, activeDeliveryCount: { $gt: 0 } },
+    { $inc: { activeDeliveryCount: -1 } },
+  );
+};
+
+/**
+ * One code per station handover (client, 2026-10-30): the next driver types the
+ * code the previous driver shows, which also closes the previous leg and pays
+ * its driver now, not when the parcel reaches the customer. Nothing to do if the
+ * previous driver already closed it by typing a code (older app).
+ */
+const closeRelayLeg = async (prevLegId: Types.ObjectId, nextLeg: IDelivery, actorUserId: string) => {
+  const closed = await Delivery.findOneAndUpdate(
+    { _id: prevLegId, status: { $in: [DeliveryStatus.picked_up, DeliveryStatus.in_transit] } },
+    { $set: { status: DeliveryStatus.delivered, deliveredAt: new Date(), pinAttempts: 0 }, $unset: { pinLockedUntil: 1 } },
+    { returnDocument: "after" },
+  );
+  if (!closed) return;
+  if (closed.riderId) await countLegDone(closed.riderId);
+
+  await SubOrder.updateOne(
+    { _id: closed.subOrderId },
+    {
+      $set: { currentLegId: nextLeg._id },
+      $push: {
+        timeline: {
+          status: "leg_completed",
+          note: `Leg #${closed.legNumber} handed over at ${closed.toName}`,
+          byUserId: new Types.ObjectId(actorUserId),
+          at: new Date(),
+        },
+      },
+    },
+  );
+  emitToDelivery(String(closed._id), "delivery:status_changed", { status: DeliveryStatus.delivered });
+  await WalletServices.payLegFee(closed._id, actorUserId);
+};
+
 /**
  * Rider begins moving to pickup location.
  */
@@ -107,6 +152,18 @@ const verifyPickup = async (
     );
   }
 
+  // At a station the parcel comes from the previous leg's driver: they must have it
+  const prevLeg =
+    delivery.fromKind === EndpointKind.station && delivery.legNumber > 1
+      ? await Delivery.findOne({ subOrderId: delivery.subOrderId, legNumber: delivery.legNumber - 1 }).select("status")
+      : null;
+  if (prevLeg && ![DeliveryStatus.picked_up, DeliveryStatus.in_transit, DeliveryStatus.delivered].includes(prevLeg.status)) {
+    throw new AppError(
+      httpStatus.BAD_REQUEST,
+      "The previous driver doesn't have the parcel yet. Wait until they reach the station.",
+    );
+  }
+
   assertPinUnlocked(delivery);
 
   const isMatch = await bcrypt.compare(pin, delivery.pickupPinHash);
@@ -156,6 +213,8 @@ const verifyPickup = async (
   emitToDelivery(String(delivery._id), "delivery:status_changed", {
     status: DeliveryStatus.picked_up,
   });
+
+  if (prevLeg) await closeRelayLeg(prevLeg._id, pickedUp, riderUserId);
 
   // Last leg (to the customer) is moving → tell the customer
   if (subOrder && pickedUp.toKind === EndpointKind.customer) {
@@ -238,15 +297,7 @@ const verifyHandover = async (
     throw new AppError(httpStatus.CONFLICT, "This delivery was already updated. Please refresh.");
   }
 
-  // Update rider stats & active delivery count
-  await RiderProfile.updateOne(
-    { _id: rider._id },
-    { $inc: { "stats.totalDeliveries": 1, "stats.completed": 1 } },
-  );
-  await RiderProfile.updateOne(
-    { _id: rider._id, activeDeliveryCount: { $gt: 0 } },
-    { $inc: { activeDeliveryCount: -1 } },
-  );
+  await countLegDone(rider._id as Types.ObjectId);
 
   const subOrder = await SubOrder.findById(delivery.subOrderId);
   if (!subOrder) throw new AppError(httpStatus.NOT_FOUND, "Sub-order not found");
@@ -272,6 +323,8 @@ const verifyHandover = async (
       at: new Date(),
     });
     await subOrder.save();
+    // A relay leg is paid at the station, like when the next driver types the code
+    await WalletServices.payLegFee(delivered._id, riderUserId);
   } else {
     // Final leg completed -> SubOrder is delivered!
     subOrder.status = SubOrderStatus.delivered;

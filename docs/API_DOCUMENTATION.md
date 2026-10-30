@@ -1098,6 +1098,15 @@ Errors: 409 already connected / already invited · 403 the inviter tried to answ
 - `GET /conversations/admin/moderation-violations/:id/context?around=5` and `GET /conversations/admin/messages/:messageId/context?around=5` (staff/admin; around 1–20). Returns `{ conversation: { type, subOrderNumber, participants: [{ userId, name, phone, status, violationCount, mode }] }, focusId, messages: [{ …message, violation?: { rule, snippet, action }, reportCount, hiddenFromRecipient }], hasMoreBefore, hasMoreAfter }`. Voice notes and photos keep their `mediaUrl`. Each opening is audit-logged (`chat.view_context`).
 - Violations now store `messageId`; older ones are matched to the masked message sent within a minute.
 
+### 7.20t Station handover: one code, relay legs paid at the station (2026-10-30, client test AP12)
+
+- **One code per station**: the driver taking the parcel types the code the arriving driver shows (`outgoingPickupPin` in the arriving driver's `GET /deliveries/:id/track`) with `POST /deliveries/:id/verify-pickup`. That also closes the previous leg (`delivered`, timeline `leg_completed`, socket `delivery:status_changed` on its room). Before, the previous leg only closed if its driver also typed the other driver's code, so it stayed `picked_up` and its driver was never paid.
+- `verify-pickup` on a leg starting at a station → 400 "The previous driver doesn't have the parcel yet…" while the previous leg is not picked up.
+- **Relay legs are paid at the station**, not when the parcel reaches the customer: the fee goes to `availableBalance` once (`deliveries.feePaidAt`), push `earnings_updated`. The final leg is still paid at delivery. The old way (`verify-handover` with `incomingHandoverPin`, older apps) still works and also pays at once.
+- **Riders' `totalEarned`** now counts every fee they receive (it stayed 0).
+- Repair of data saved before: `npm run fix:relay-legs` (dry run) then `npm run fix:relay-legs -- --apply` closes the relay legs left open, pays them, and recomputes riders' `totalEarned`.
+- `GET /wallets/admin/cod-settlements?riderId=` — one rider's cash declarations (`RiderProfile` id; invalid → 400). The dashboard shows the pending ones with a Confirm button in the rider's Money tab, and their count in the home page's Pending Actions.
+
 ### 7.20s Client feedback fixes: "&", ride history, app crash reports (2026-10-29)
 
 - **"&" kept as typed**: the input sanitizer still strips HTML tags but no longer stores `&` as `&amp;` (`<` / `>` stay escaped). Passwords (`password`, `oldPassword`, `newPassword`) keep the old encoding so existing logins still match. Repair of data saved before: `npm run fix:ampersands` (dry run, counts) then `npm run fix:ampersands -- --apply` on the `.env` database.

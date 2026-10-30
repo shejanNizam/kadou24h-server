@@ -159,6 +159,9 @@ const deliverySchema = new Schema<IDelivery>(
     deliveredAt: {
       type: Date,
     },
+    feePaidAt: {
+      type: Date,
+    },
   },
   {
     timestamps: true,

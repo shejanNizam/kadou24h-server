@@ -67,6 +67,8 @@ const recordTransaction = async (params: {
   settlementId?: Types.ObjectId | string;
   note?: string;
   createdBy?: Types.ObjectId | string;
+  /** A rider's fee: paid straight to available, with no held stage, so count it as earned here */
+  countsAsEarned?: boolean;
 }) => {
   const absAmount = Math.abs(params.amount);
 
@@ -118,7 +120,7 @@ const recordTransaction = async (params: {
   // overwrite each other (a read-modify-save here would lose one of them)
   const wallet = await Wallet.findOneAndUpdate(
     { _id: params.walletId },
-    [{ $set: changes[params.type] }],
+    [{ $set: { ...changes[params.type], ...(params.countsAsEarned && { totalEarned: add("totalEarned", absAmount) }) } }],
     { returnDocument: "after", updatePipeline: true },
   );
   if (!wallet) throw new AppError(httpStatus.NOT_FOUND, "Wallet not found");
@@ -197,8 +199,53 @@ const releaseVendorEarning = async (subOrder: ISubOrder, actorId?: string) => {
 };
 
 /**
+ * Pays one delivered leg's fee (100%) to its rider, once. Relay legs are paid at
+ * their station handover (client, 2026-10-30), the others with the final leg.
+ * Legs paid before `feePaidAt` existed already have their transaction: those
+ * are only marked, never paid again.
+ */
+const payLegFee = async (legId: Types.ObjectId | string, actorId?: string) => {
+  const leg = await Delivery.findOneAndUpdate(
+    { _id: legId, status: DeliveryStatus.delivered, feePaidAt: { $exists: false } },
+    { $set: { feePaidAt: new Date() } },
+    { returnDocument: "after" },
+  );
+  if (!leg?.riderId || leg.fee <= 0) return null;
+  const alreadyPaid = await WalletTransaction.exists({
+    deliveryId: leg._id,
+    type: TransactionType.earning_released,
+  });
+  if (alreadyPaid) return null;
+
+  const rider = await RiderProfile.findById(leg.riderId);
+  if (!rider) return null;
+  const riderWallet = await ensureWallet(rider.userId, WalletMode.rider);
+  const subOrder = await SubOrder.findById(leg.subOrderId).select("subOrderNumber").lean();
+
+  await recordTransaction({
+    walletId: riderWallet._id,
+    type: TransactionType.earning_released,
+    amount: leg.fee,
+    deliveryId: leg._id,
+    subOrderId: leg.subOrderId,
+    note: `Delivery fee earned for leg #${leg.legNumber}`,
+    createdBy: actorId,
+    countsAsEarned: true,
+  });
+  Notify.earningsUpdated(
+    rider.userId,
+    AppMode.rider,
+    leg.fee,
+    { fr: `livraison ${subOrder?.subOrderNumber ?? ""}`, en: `delivery ${subOrder?.subOrderNumber ?? ""}` },
+    { deliveryId: String(leg._id) },
+  );
+  return leg;
+};
+
+/**
  * Called when the final delivery leg is handed over.
- * - Every rider who completed a leg is paid their leg fee (100%).
+ * - Every rider who completed a leg is paid their leg fee (100%), unless already
+ *   paid at a station handover.
  * - Prepaid order → the vendor earning is released now.
  * - COD order     → the collecting rider's cashOwed grows by the cash amount and
  *                   the vendor earning waits (`awaiting_cod`) until the rider's
@@ -231,31 +278,13 @@ const releaseEscrowForSubOrder = async (subOrderId: string, actorId?: string) =>
   });
 
   for (const leg of legs) {
-    if (!leg.riderId) continue;
-    const rider = await RiderProfile.findById(leg.riderId);
-    if (!rider) continue;
-    const riderWallet = await ensureWallet(rider.userId, WalletMode.rider);
+    // Relay legs were already paid at their station handover: this pays only the rest
+    await payLegFee(leg._id, actorId);
 
-    if (leg.fee > 0) {
-      await recordTransaction({
-        walletId: riderWallet._id,
-        type: TransactionType.earning_released,
-        amount: leg.fee,
-        deliveryId: leg._id,
-        subOrderId: subOrder._id,
-        note: `Delivery fee earned for leg #${leg.legNumber}`,
-        createdBy: actorId,
-      });
-      Notify.earningsUpdated(
-        rider.userId,
-        AppMode.rider,
-        leg.fee,
-        { fr: `livraison ${subOrder.subOrderNumber}`, en: `delivery ${subOrder.subOrderNumber}` },
-        { deliveryId: String(leg._id) },
-      );
-    }
-
-    if (leg.collectsCash && subOrder.codAmountToCollect) {
+    if (leg.collectsCash && subOrder.codAmountToCollect && leg.riderId) {
+      const rider = await RiderProfile.findById(leg.riderId);
+      if (!rider) continue;
+      const riderWallet = await ensureWallet(rider.userId, WalletMode.rider);
       await recordTransaction({
         walletId: riderWallet._id,
         type: TransactionType.cod_collected,
@@ -916,6 +945,7 @@ const getAllCodSettlementsAdmin = async (query: {
   page?: number;
   limit?: number;
   status?: CodSettlementStatus;
+  riderId?: string;
 }) => {
   const page = Math.max(1, Number(query.page) || 1);
   const limit = Math.max(1, Math.min(50, Number(query.limit) || 20));
@@ -923,6 +953,11 @@ const getAllCodSettlementsAdmin = async (query: {
 
   const filter: Record<string, unknown> = {};
   if (query.status) filter.status = query.status;
+  // One rider's declarations (admin → rider details → Money)
+  if (query.riderId) {
+    if (!Types.ObjectId.isValid(query.riderId)) throw new AppError(httpStatus.BAD_REQUEST, "Invalid riderId");
+    filter.riderId = new Types.ObjectId(query.riderId);
+  }
 
   const [settlements, total] = await Promise.all([
     CodSettlement.find(filter)
@@ -957,6 +992,7 @@ export const WalletServices = {
   ensureWallet,
   getMyWallet,
   recordTransaction,
+  payLegFee,
   releaseEscrowForSubOrder,
   releaseVendorEarning,
   applyCodRemittance,
