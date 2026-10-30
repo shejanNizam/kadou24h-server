@@ -24,7 +24,7 @@ const getMyOrders = async (
   const limit = Math.max(1, Math.min(50, Number(query.limit) || 10));
   const skip = (page - 1) * limit;
 
-  const filter: Record<string, unknown> = { customerId };
+  const filter: Record<string, unknown> = { customerId, hiddenByCustomerAt: { $exists: false } };
   // One status or several, comma-separated (e.g. "cancelled,partially_cancelled")
   if (query.status) {
     const statuses = String(query.status).split(",").filter((s): s is OrderStatus =>
@@ -278,8 +278,22 @@ const cancelStorePart = async (orderId: string, subOrderId: string, customerId: 
   };
 };
 
+/**
+ * "Delete from my history" (client, 2026-10-30): the order is hidden for the customer
+ * only. The store, riders, admin and the accounting keep it. Only a finished order.
+ */
+const hideMyOrder = async (customerId: string, orderId: string) => {
+  const order = Types.ObjectId.isValid(orderId) ? await Order.findOne({ _id: orderId, customerId }) : null;
+  if (!order) throw new AppError(httpStatus.NOT_FOUND, "Order not found");
+  if (order.status === OrderStatus.active) {
+    throw new AppError(httpStatus.BAD_REQUEST, "This order is still in progress: you can delete it once it is finished");
+  }
+  await Order.updateOne({ _id: order._id }, { $set: { hiddenByCustomerAt: new Date() } });
+};
+
 export {
   getMyOrders,
+  hideMyOrder,
   getOrderDetails,
   cancelOrder,
   cancelStorePart,

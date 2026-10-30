@@ -275,16 +275,23 @@ const getRide = async (userId: string, id: string, isStaff = false) => {
 const getMyRides = async (passengerId: string, query: { page?: string; limit?: string }) => {
   const page = Math.max(1, Number(query.page) || 1);
   const limit = Math.max(1, Math.min(50, Number(query.limit) || 20));
-  // A request nobody took (cancelled while searching, or expired) is not a trip: keep it out of the history
-  const filter = {
-    passengerId: new Types.ObjectId(passengerId),
-    $nor: [{ riderId: null, status: { $in: [RideStatus.cancelled, RideStatus.expired] } }],
-  };
+  // Requests nobody took stay listed (client, 2026-10-30): the passenger can delete any finished ride
+  const filter = { passengerId: new Types.ObjectId(passengerId), hiddenByPassengerAt: { $exists: false } };
   const [rows, total] = await Promise.all([
     Ride.find(filter).populate(POPULATE).sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit).lean<Populated[]>(),
     Ride.countDocuments(filter),
   ]);
   return { meta: { page, limit, total, totalPage: Math.ceil(total / limit) }, data: rows.map((r) => present(r, "passenger")) };
+};
+
+/** "Delete from my history": hidden for the passenger only (the rider and admin keep it). Only a finished ride. */
+const hideMyRide = async (passengerId: string, id: string) => {
+  const ride = Types.ObjectId.isValid(id) ? await Ride.findOne({ _id: id, passengerId }).select("status").lean() : null;
+  if (!ride) throw new AppError(httpStatus.NOT_FOUND, "Ride not found");
+  if (ACTIVE_RIDE.includes(ride.status)) {
+    throw new AppError(httpStatus.BAD_REQUEST, "This ride is still in progress: you can delete it once it is over");
+  }
+  await Ride.updateOne({ _id: ride._id }, { $set: { hiddenByPassengerAt: new Date() } });
 };
 
 /** The passenger's running ride (the app reopens it), or null */
@@ -631,6 +638,7 @@ export const RideServices = {
   requestRide,
   getRide,
   getMyRides,
+  hideMyRide,
   getMyCurrentRide,
   cancelByPassenger,
   rateRide,

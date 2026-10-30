@@ -41,6 +41,7 @@ const rideSchema = new Schema<IRide>(
       at: { type: Date },
     },
     shareToken: { type: String, select: false },
+    hiddenByPassengerAt: { type: Date },
   },
   { timestamps: true, versionKey: false },
 );

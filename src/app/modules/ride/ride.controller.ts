@@ -20,6 +20,7 @@ const isStaff = (req: Request) => (req.user.roles ?? []).some((r: string) => (AD
 const estimate = catchAsync(async (req, res) => ok(res, "Ride price", await RideServices.estimate(req.user._id, req.body)));
 const requestRide = catchAsync(async (req, res) => ok(res, "Looking for a rider", await RideServices.requestRide(req.user._id, req.body), httpStatus.CREATED));
 const getMyRides = catchAsync(async (req, res) => page(res, "Rides retrieved", await RideServices.getMyRides(req.user._id, req.query as never)));
+const hideMyRide = catchAsync(async (req, res) => ok(res, "Ride deleted from your history", await RideServices.hideMyRide(req.user._id, id(req))));
 const getMyCurrentRide = catchAsync(async (req, res) => ok(res, "Current ride", await RideServices.getMyCurrentRide(req.user._id)));
 const getRide = catchAsync(async (req, res) => ok(res, "Ride retrieved", await RideServices.getRide(req.user._id, id(req), isStaff(req))));
 const cancelRide = catchAsync(async (req, res) => ok(res, "Ride cancelled", await RideServices.cancelByPassenger(req.user._id, id(req), req.body.reason)));
@@ -54,6 +55,7 @@ export const RideControllers = {
   shareRide,
   getSharedRide,
   getMyRides,
+  hideMyRide,
   getMyCurrentRide,
   getRide,
   cancelRide,

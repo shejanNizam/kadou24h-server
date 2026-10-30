@@ -106,6 +106,28 @@ router.post(
  */
 router.get("/my-orders", checkAuth(...ALL_ROLES), OrderControllers.getMyOrders);
 
+/**
+ * @swagger
+ * /orders/my-orders/{id}:
+ *   delete:
+ *     tags: [Order]
+ *     summary: Delete a finished order from my history (hidden for me only; kept for the store, riders and admin)
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Hidden from my orders
+ *       400:
+ *         description: Still in progress
+ */
+router.delete("/my-orders/:id", checkAuth(...ALL_ROLES), OrderControllers.hideMyOrder);
+
 // --- Vendor Sub-Order Routes ---
 
 /**

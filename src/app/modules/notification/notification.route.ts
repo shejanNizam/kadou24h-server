@@ -76,4 +76,45 @@ router.patch("/read-all", checkAuth(...ALL_ROLES), NotificationControllers.markA
  */
 router.patch("/:id/read", checkAuth(...ALL_ROLES), NotificationControllers.markAsRead);
 
+/**
+ * @swagger
+ * /notifications:
+ *   delete:
+ *     tags: [Notification]
+ *     summary: Delete all my notifications (of one mode's list when ?mode= is given)
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: mode
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: "{ deletedCount }"
+ */
+router.delete("/", checkAuth(...ALL_ROLES), NotificationControllers.deleteAllNotifications);
+
+/**
+ * @swagger
+ * /notifications/{id}:
+ *   delete:
+ *     tags: [Notification]
+ *     summary: Delete one of my notifications
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Deleted
+ *       404:
+ *         description: Not mine or not found
+ */
+router.delete("/:id", checkAuth(...ALL_ROLES), NotificationControllers.deleteNotification);
+
 export const NotificationRoutes = router;

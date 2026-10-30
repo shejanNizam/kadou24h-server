@@ -120,6 +120,7 @@ router.post("/estimate", app, validateRequest(estimateRideZodSchema), RideContro
 router.post("/", app, validateRequest(requestRideZodSchema), RideControllers.requestRide);
 router.get("/my", app, RideControllers.getMyRides);
 router.get("/my/current", app, RideControllers.getMyCurrentRide);
+router.delete("/my/:id", app, RideControllers.hideMyRide);
 
 router.get("/rider/offers", rider, RideControllers.getRideOffers);
 router.get("/rider/current", rider, RideControllers.getRiderCurrentRide);

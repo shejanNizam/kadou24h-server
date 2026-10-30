@@ -52,6 +52,17 @@ const markAllAsRead = catchAsync(async (req: Request, res: Response) => {
   });
 });
 
+const deleteNotification = catchAsync(async (req: Request, res: Response) => {
+  await NotificationServices.deleteNotification(req.user._id, req.params.id as string);
+  sendResponse(res, { statusCode: 200, success: true, message: "Notification deleted", data: null });
+});
+
+const deleteAllNotifications = catchAsync(async (req: Request, res: Response) => {
+  const mode = req.query.mode as string | undefined;
+  const result = await NotificationServices.deleteAllNotifications(req.user._id, mode);
+  sendResponse(res, { statusCode: 200, success: true, message: "Notifications deleted", data: result });
+});
+
 const getUnreadCount = catchAsync(async (req: Request, res: Response) => {
   const userId = req.user._id;
   const mode = req.query.mode as string | undefined;
@@ -71,5 +82,7 @@ export const NotificationControllers = {
   getMyNotifications,
   markAsRead,
   markAllAsRead,
+  deleteNotification,
+  deleteAllNotifications,
   getUnreadCount,
 };

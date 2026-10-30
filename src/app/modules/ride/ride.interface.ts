@@ -52,6 +52,8 @@ export interface IRideInitial {
   rating?: { stars: number; comment?: string; at: Date };
   /** "Share my trip": a close one follows the ride from this link; it closes when the ride ends */
   shareToken?: string;
+  /** The passenger deleted it from their history: hidden for them only */
+  hiddenByPassengerAt?: Date;
 }
 
 export type IRide = IRideInitial & Document;

@@ -1098,6 +1098,13 @@ Errors: 409 already connected / already invited · 403 the inviter tried to answ
 - `GET /conversations/admin/moderation-violations/:id/context?around=5` and `GET /conversations/admin/messages/:messageId/context?around=5` (staff/admin; around 1–20). Returns `{ conversation: { type, subOrderNumber, participants: [{ userId, name, phone, status, violationCount, mode }] }, focusId, messages: [{ …message, violation?: { rule, snippet, action }, reportCount, hiddenFromRecipient }], hasMoreBefore, hasMoreAfter }`. Voice notes and photos keep their `mediaUrl`. Each opening is audit-logged (`chat.view_context`).
 - Violations now store `messageId`; older ones are matched to the masked message sent within a minute.
 
+### 7.20u Customers delete their notifications and history (2026-10-30, client)
+
+- **Notifications** (really deleted, they are only the user's): `DELETE /notifications/:id` (not mine → 404), `DELETE /notifications?mode=` → `{ deletedCount }` (that mode's list, with the account-wide ones it shows).
+- **Orders**: `DELETE /orders/my-orders/:id` hides a finished order (`completed`, `cancelled`, `partially_cancelled`) from `GET /orders/my-orders` for the customer only (`hiddenByCustomerAt`). `GET /orders/:id`, the store, riders, admin and the accounting keep it. Still `active` → 400; not mine → 404.
+- **Moto-taxi rides**: `GET /rides/my` lists every ride again, including requests no rider took (cancelled, expired). `DELETE /rides/my/:id` hides a finished ride for the passenger only (`hiddenByPassengerAt`); a running ride → 400; not mine → 404.
+- App: long press on a notification / finished order / finished ride (with a hint above each list), "Delete all" in notifications, and "Delete from my history" on the order and ride screens.
+
 ### 7.20t Station handover: one code, relay legs paid at the station (2026-10-30, client test AP12)
 
 - **One code per station**: the driver taking the parcel types the code the arriving driver shows (`outgoingPickupPin` in the arriving driver's `GET /deliveries/:id/track`) with `POST /deliveries/:id/verify-pickup`. That also closes the previous leg (`delivered`, timeline `leg_completed`, socket `delivery:status_changed` on its room). Before, the previous leg only closed if its driver also typed the other driver's code, so it stayed `picked_up` and its driver was never paid.

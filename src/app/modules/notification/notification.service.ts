@@ -169,6 +169,22 @@ const markAllAsRead = async (userId: string, mode?: string) => {
   return { modifiedCount: result.modifiedCount };
 };
 
+/** The user deletes one of their notifications (client, 2026-10-30) */
+const deleteNotification = async (userId: string, notificationId: string) => {
+  const result = Types.ObjectId.isValid(notificationId)
+    ? await Notification.deleteOne({ _id: notificationId, userId: new Types.ObjectId(userId) })
+    : { deletedCount: 0 };
+  if (!result.deletedCount) throw new AppError(httpStatus.NOT_FOUND, "Notification not found");
+};
+
+/** "Delete all" in one mode's list (with the account-wide ones that list shows) */
+const deleteAllNotifications = async (userId: string, mode?: string) => {
+  const filter: Record<string, unknown> = { userId: new Types.ObjectId(userId) };
+  if (mode) Object.assign(filter, modeFilter(mode));
+  const result = await Notification.deleteMany(filter);
+  return { deletedCount: result.deletedCount };
+};
+
 const getUnreadCount = async (userId: string, mode?: string) => {
   const filter: Record<string, unknown> = {
     userId: new Types.ObjectId(userId),
@@ -223,5 +239,7 @@ export const NotificationServices = {
   getMyNotifications,
   markAsRead,
   markAllAsRead,
+  deleteNotification,
+  deleteAllNotifications,
   getUnreadCount,
 };

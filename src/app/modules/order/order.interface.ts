@@ -162,6 +162,8 @@ export interface IOrderInitial {
    * products in cash. Absent on older COD orders (everything was paid in cash).
    */
   upfrontAmount?: number;
+  /** The customer deleted it from their history: hidden for them only, kept for everyone else */
+  hiddenByCustomerAt?: Date;
   /** COD: when those fees were paid (the order then reached the stores) */
   feesPaidAt?: Date;
 }

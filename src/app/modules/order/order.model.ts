@@ -116,6 +116,7 @@ const orderSchema = new Schema<IOrder>(
     },
     upfrontAmount: { type: Number, min: 0 },
     feesPaidAt: { type: Date },
+    hiddenByCustomerAt: { type: Date },
   },
   {
     timestamps: true,

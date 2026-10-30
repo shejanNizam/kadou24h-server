@@ -38,6 +38,11 @@ const getMyOrders = catchAsync(async (req: Request, res: Response) => {
   });
 });
 
+const hideMyOrder = catchAsync(async (req: Request, res: Response) => {
+  await OrderServices.hideMyOrder(req.user._id, req.params.id as string);
+  sendResponse(res, { statusCode: httpStatus.OK, success: true, message: "Order deleted from your history", data: null });
+});
+
 const getOrderDetails = catchAsync(async (req: Request, res: Response) => {
   const result = await OrderServices.getOrderDetails(
     req.params.id as string,
@@ -201,6 +206,7 @@ export const OrderControllers = {
   checkoutSummary,
   placeOrder,
   getMyOrders,
+  hideMyOrder,
   getOrderDetails,
   cancelOrder,
   getVendorSubOrders,

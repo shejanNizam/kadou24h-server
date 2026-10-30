@@ -7,6 +7,7 @@ import {
 } from "./order.checkout.service";
 import {
   getMyOrders,
+  hideMyOrder,
   getOrderDetails,
   cancelOrder,
   cancelStorePart,
@@ -27,6 +28,7 @@ export const OrderServices = {
   calculateCheckout,
   placeOrder,
   getMyOrders,
+  hideMyOrder,
   getOrderDetails,
   cancelOrder,
   cancelStorePart,

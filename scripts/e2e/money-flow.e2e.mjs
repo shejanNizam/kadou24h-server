@@ -988,6 +988,18 @@ const run = async () => {
   check("team message: the user sees it, marked as from the team", (r.body.data ?? []).some((n) => n.type === "team_message" && n.body?.fr?.includes("garder les échanges")), brief(r));
   r = await call("GET", `/notifications/admin/team-messages/${P.id}`, null, admin);
   check("team message: the team sees what was sent to that user", ok(r) && r.body.data?.[0]?.title?.fr === "Rappel", brief(r));
+
+  // The user deletes their own notifications (client, 2026-10-30)
+  let mine = (await call("GET", "/notifications?mode=customer&limit=50", null, P.token)).body.data ?? [];
+  r = await call("DELETE", `/notifications/${mine[0]?._id}`, null, W.token);
+  check("notifications: nobody else can delete mine", r.status === 404, brief(r));
+  r = await call("DELETE", `/notifications/${mine[0]?._id}`, null, P.token);
+  check("notifications: delete one", ok(r), brief(r));
+  const afterOne = (await call("GET", "/notifications?mode=customer&limit=50", null, P.token)).body.data ?? [];
+  check("notifications: …it is gone", afterOne.length === mine.length - 1 && !afterOne.some((n) => n._id === mine[0]?._id), JSON.stringify([mine.length, afterOne.length]));
+  r = await call("DELETE", "/notifications?mode=customer", null, P.token);
+  mine = (await call("GET", "/notifications?mode=customer&limit=50", null, P.token)).body.data ?? [];
+  check("notifications: delete all", ok(r) && r.body.data?.deletedCount === afterOne.length && mine.length === 0, brief(r));
   // ═════ 6. Access control ═════
   r = await call("GET", `/deliveries/${legId}/track`, null, X.token);
   check("stranger cannot track a delivery", r.status === 403, brief(r));
@@ -1054,6 +1066,17 @@ const run = async () => {
   check("worker directory is public & has no phone/email", r.status === 200 && JSON.stringify(r.body.data).includes('"phone"') === false, brief(r));
   r = await call("GET", "/orders/my-orders?limit=2", null, C.token);
   check("pagination meta has totalPage (+ totalPages alias)", r.body.meta?.totalPage >= 1 && r.body.meta?.totalPages === r.body.meta?.totalPage, JSON.stringify(r.body.meta));
+  // "Delete from my history": a finished order is hidden for the customer only
+  r = await call("DELETE", `/orders/my-orders/${cancelOrder._id}`, null, W.token);
+  check("order history: nobody else can delete my order", r.status === 404, brief(r));
+  r = await call("DELETE", `/orders/my-orders/${cancelOrder._id}`, null, C.token);
+  check("order history: the customer deletes a cancelled order", ok(r), brief(r));
+  r = await call("GET", "/orders/my-orders?limit=50", null, C.token);
+  check("order history: …it is gone from the list", r.status === 200 && !r.body.data?.some((o) => o._id === cancelOrder._id), brief(r));
+  r = await call("GET", `/orders/${cancelOrder._id}`, null, C.token);
+  check("order history: …but the order is kept", r.status === 200, brief(r));
+  r = await call("GET", "/orders/admin/all?limit=100", null, admin);
+  check("order history: …and the team still sees it", r.body.data?.some((o) => o._id === cancelOrder._id), brief(r));
   r = await call("GET", "/notifications?limit=1", null, C.token);
   check("extra meta fields (unreadCount) are kept", r.body.meta && "unreadCount" in r.body.meta, JSON.stringify(r.body.meta));
 
@@ -1074,6 +1097,9 @@ const run = async () => {
   r = await order([{ productId, qty: 1 }], { deliveryType: "intercity", destinationStationId: stB });
   check("place intercity order", ok(r), brief(r));
   const icSub = r.body.data?.subOrders?.[0];
+  const icOrder = r.body.data?.order;
+  r = await call("DELETE", `/orders/my-orders/${icOrder?._id}`, null, C.token);
+  check("order history: an order in progress can't be deleted", r.status === 400, brief(r));
   for (const status of ["accepted", "preparing", "ready_for_pickup"]) {
     await call("PATCH", `/orders/vendor/sub-orders/${icSub._id}/status`, { status }, V.token);
   }
@@ -1464,7 +1490,22 @@ const run = async () => {
   r = await call("GET", `/rides/${ride3?._id}`, null, PA.token);
   check("ride: nobody in 10 minutes → expired, the passenger is told", r.body.data?.status === "expired", JSON.stringify(r.body.data?.status));
   r = await call("GET", "/rides/my", null, PA.token);
-  check("ride history: requests nobody took (cancelled, expired) are left out", r.body.meta?.total === 1 && r.body.data?.[0]?._id === ride?._id, brief(r));
+  check("ride history: requests nobody took (cancelled, expired) are listed too", r.body.meta?.total === 3 && [ride3?._id, ride2?._id, ride?._id].every((x, i) => r.body.data?.[i]?._id === x), brief(r));
+
+  // "Delete from my history": hidden for the passenger only, never a running ride
+  r = await call("DELETE", `/rides/my/${ride3?._id}`, null, PA.token);
+  check("ride history: the passenger deletes an expired request", ok(r), brief(r));
+  r = await call("DELETE", `/rides/my/${ride?._id}`, null, T.token);
+  check("ride history: nobody else can delete it", r.status === 404, brief(r));
+  r = await call("GET", "/rides/my", null, PA.token);
+  check("ride history: …it is gone from the list", r.body.meta?.total === 2 && !r.body.data?.some((x) => x._id === ride3?._id), brief(r));
+  r = await call("GET", `/rides/${ride3?._id}`, null, PA.token);
+  check("ride history: …but the ride itself is kept", ok(r) && r.body.data?.status === "expired", brief(r));
+  r = await call("POST", "/rides", { pickup: PICK, dropoff: DROP }, PA.token);
+  const running = r.body.data;
+  r = await call("DELETE", `/rides/my/${running?._id}`, null, PA.token);
+  check("ride history: a running ride can't be deleted", r.status === 400, brief(r));
+  await call("POST", `/rides/${running?._id}/cancel`, { reason: "Test" }, PA.token);
 
   // The team
   r = await call("GET", "/rides/admin?status=completed", null, admin);
