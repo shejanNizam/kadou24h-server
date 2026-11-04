@@ -17,6 +17,7 @@ import { emitToDelivery, emitToUser } from "../../../socket/socket";
 import { logger } from "../../utils/logger";
 import { calculateDistanceKm } from "../delivery_rate/delivery_rate.service";
 import { Notify } from "../notification/notification.events";
+import { Notification } from "../notification/notification.model";
 import { SubOrderStatus } from "../order/order.interface";
 import { SubOrder } from "../order/sub_order.model";
 import { ApprovalStatus } from "../profile_common/profile.common";
@@ -95,7 +96,8 @@ const reach = (
   const now = ctx.now ?? Date.now();
   const fresh = rider.lastLocationAt && now - rider.lastLocationAt.getTime() <= DISPATCH.locationFreshMinutes * MINUTE;
   const coords = rider.lastLocation?.coordinates;
-  const pickupKm = fresh && coords ? round1(calculateDistanceKm(leg.fromLocation.coordinates, coords)) : undefined;
+  const lastKm = coords ? round1(calculateDistanceKm(leg.fromLocation.coordinates, coords)) : undefined;
+  const pickupKm = fresh ? lastKm : undefined;
   const servesRoute =
     leg.legType === LegType.line_haul &&
     (rider.transitRoutes ?? []).some(
@@ -106,8 +108,9 @@ const reach = (
   const radius = leg.offerOpenedAt ? radiusAt(leg.offerOpenedAt, now) : 0;
   const visible =
     servesRoute ||
-    // The store's own riders see its deliveries from the start (even without a known position)
-    (ctx.linked && (pickupKm === undefined || pickupKm <= DISPATCH.maxRadiusKm)) ||
+    // The store's own riders see its deliveries from the start, even without a recent position.
+    // Their last known one still counts: a far rider's list would otherwise change when it ages
+    (ctx.linked && (lastKm === undefined || lastKm <= DISPATCH.maxRadiusKm)) ||
     (pickupKm !== undefined && pickupKm <= radius);
   return { visible, pickupKm, servesRoute };
 };
@@ -229,6 +232,23 @@ const openLegsSoon = (subOrderId: Types.ObjectId | string) => {
       error: error instanceof Error ? error.message : error,
     }),
   );
+};
+
+/**
+ * The leg is no longer open to the riders who were told (taken, or sent by the store to
+ * one rider): it leaves their lists with its notification, and if it opens again they are
+ * told again (client, 2026-11-04: an alert that leads to nothing looks like a broken app).
+ */
+const withdrawOffer = async (legId: Types.ObjectId | string, keepRiderId?: Types.ObjectId | string) => {
+  const leg = await Delivery.findOneAndUpdate({ _id: legId }, { $unset: { offerNotified: 1 } })
+    .select("+offerNotified")
+    .lean();
+  const told = (leg?.offerNotified ?? []).filter((id) => String(id) !== String(keepRiderId));
+  if (!told.length) return;
+  const riders = await RiderProfile.find({ _id: { $in: told } }).select("userId").lean();
+  const userIds = riders.map((r) => r.userId);
+  await Notification.deleteMany({ userId: { $in: userIds }, "data.deliveryId": String(legId), "data.offer": true });
+  for (const userId of userIds) emitToUser(String(userId), "delivery:offer_gone", { deliveryId: legId });
 };
 
 // ── The rider's side ────────────────────────────────────────────────
@@ -355,7 +375,7 @@ const claimOffer = async (riderUserId: string, deliveryId: string) => {
       $unset: { reservedUntil: 1, declineReason: 1 },
     },
     { returnDocument: "after" },
-  ).select("+offerNotified");
+  );
   if (!taken) throw new AppError(httpStatus.CONFLICT, "Another rider has already taken this delivery");
 
   await RiderProfile.updateOne({ _id: rider._id }, { $inc: { activeDeliveryCount: 1 } });
@@ -372,12 +392,7 @@ const claimOffer = async (riderUserId: string, deliveryId: string) => {
   });
 
   emitToDelivery(String(leg._id), "delivery:status_changed", { status: DeliveryStatus.accepted, riderId: rider._id });
-  // The offer disappears from the other riders' lists
-  for (const other of taken.offerNotified ?? []) {
-    if (String(other) === String(rider._id)) continue;
-    const otherUser = await RiderProfile.findById(other).select("userId").lean();
-    if (otherUser) emitToUser(String(otherUser.userId), "delivery:offer_gone", { deliveryId: leg._id });
-  }
+  await withdrawOffer(leg._id, rider._id);
   if (fromStore && subOrder) {
     const vendor = await VendorProfile.findById(subOrder.vendorId).select("userId").lean();
     const me = await User.findById(riderUserId).select("name").lean();
@@ -387,10 +402,7 @@ const claimOffer = async (riderUserId: string, deliveryId: string) => {
     }
   }
 
-  // Who was told stays on the server
-  const result = taken.toObject();
-  Reflect.deleteProperty(result, "offerNotified");
-  return result;
+  return taken.toObject();
 };
 
 /** "Not for me": the offer leaves my list. */
@@ -498,6 +510,7 @@ const startDispatchSweep = () => {
 
 export const DeliveryDispatch = {
   announce,
+  withdrawOffer,
   openLegsForSubOrder,
   openLegsSoon,
   getOffers,

@@ -1289,6 +1289,11 @@ const run = async () => {
     return { ...u, riderId: s.body.data?._id };
   };
   const offersOf = async (token) => (await call("GET", "/deliveries/rider/offers", null, token)).body.data?.offers ?? [];
+  const offerAlerts = async (token, legId) => {
+    await sleep(400);
+    const list = (await call("GET", "/notifications?mode=rider&limit=100", null, token)).body.data ?? [];
+    return list.filter((n) => n.data?.offer && n.data?.deliveryId === legId).length;
+  };
   const vendorLeg = async (subOrderId, legId) =>
     (await call("GET", `/orders/vendor/sub-orders/${subOrderId}`, null, V.token)).body.data?.deliveries?.find((l) => String(l._id) === legId);
   const vendorTitles = async () => {
@@ -1339,6 +1344,7 @@ const run = async () => {
   check("dispatch: the store sees the rider who took it", leg?.status === "accepted" && Boolean(leg?.riderId), JSON.stringify(leg?.status));
   check("dispatch: the store is told 'rider found'", (await vendorTitles()).includes("Rider found"));
   check("dispatch: the offer left the other rider's list", !(await offersOf(loser.token)).some((o) => o._id === dLeg));
+  check("dispatch: the other rider's alert for it is gone too", (await offerAlerts(loser.token, dLeg)) === 0);
   r = await call("GET", "/deliveries/rider/my-deliveries?type=ongoing", null, winner.token);
   check("dispatch: the delivery is in the winner's ongoing list", r.body.data?.some((d) => String(d._id) === dLeg), brief(r));
 
@@ -1347,10 +1353,13 @@ const run = async () => {
   const eSub = r.body.data?.subOrders?.[0];
   const eLeg = String(eSub?.currentLegId);
   await call("PATCH", `/orders/vendor/sub-orders/${eSub._id}/status`, { status: "accepted" }, V.token);
+  check("dispatch: once accepted, nearby riders are alerted", (await offerAlerts(R.token, eLeg)) === 1);
   r = await call("POST", `/deliveries/${eLeg}/assign`, { riderId: D.riderId }, V.token);
   const left = (new Date(r.body.data?.reservedUntil).getTime() - Date.now()) / 60_000;
   check("dispatch: the store's pick has 10 minutes to answer", ok(r) && left > 9.5 && left <= 10, brief(r));
   check("dispatch: while reserved, other riders don't see it", !(await offersOf(R.token)).some((o) => o._id === eLeg));
+  check("dispatch: while reserved, their alert for it is gone", (await offerAlerts(R.token, eLeg)) === 0);
+  check("dispatch: the chosen rider keeps theirs", (await notificationTypes(D.token, "rider")).includes("new_delivery_assigned"));
   await mongoose.connect(DATABASE_URL);
   await mongoose.connection.collection("deliveries").updateOne({ _id: new mongoose.Types.ObjectId(eLeg) }, { $set: { reservedUntil: new Date(Date.now() - 1000) } });
   await mongoose.disconnect();
@@ -1360,6 +1369,7 @@ const run = async () => {
   check("dispatch: the store is told the rider didn't answer", (await vendorTitles()).includes("No answer from the rider"));
   check("dispatch: the silent rider isn't offered it again", !(await offersOf(D.token)).some((o) => o._id === eLeg));
   check("dispatch: the other nearby riders see it again", (await offersOf(R.token)).some((o) => o._id === eLeg));
+  check("dispatch: and are alerted again when it reopens", (await offerAlerts(R.token, eLeg)) === 1);
   r = await call("POST", `/deliveries/${eLeg}/skip`, null, R.token);
   check("dispatch: 'not for me' hides it from my list", ok(r) && !(await offersOf(R.token)).some((o) => o._id === eLeg), brief(r));
 

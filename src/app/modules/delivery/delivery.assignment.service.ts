@@ -208,6 +208,8 @@ const assignRider = async (
     currentRiderId: rider._id,
   });
   Notify.deliveryAssigned(rider.userId, delivery, subOrder.codAmountToCollect, DISPATCH.reserveMinutes);
+  // Reserved for this rider: the others lose the offer until the reservation ends
+  await DeliveryDispatch.withdrawOffer(delivery._id, rider._id);
 
   // Real-time notifications
   emitToUser(String(rider.userId), "delivery:assigned", {
