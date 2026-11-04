@@ -261,6 +261,7 @@ const run = async () => {
       brief(rt),
     );
     check(`${label}: customer tracking has no store phone`, ct.body.data?.fromPhone === undefined, String(ct.body.data?.fromPhone));
+    check(`${label}: on the way, the customer sees where the rider is`, Boolean(ct.body.data?.riderId?.lastLocation), JSON.stringify(ct.body.data?.riderId));
     const pin = ct.body.data?.handoverPin;
     const [h1, h2] = await Promise.all([
       call("POST", `/deliveries/${legId}/verify-handover`, { pin }, R.token),
@@ -270,6 +271,8 @@ const run = async () => {
     const doneDetail = (await call("GET", `/orders/${subOrder.orderId}`, null, C.token)).body.data;
     const doneSub = doneDetail?.subOrders?.find((s) => String(s._id) === String(subOrder._id));
     check(`${label}: delivery PIN gone once delivered, deliveredAt set`, doneSub && doneSub.deliveryPin === undefined && Boolean(doneSub.deliveredAt), JSON.stringify([doneSub?.deliveryPin, doneSub?.deliveredAt]));
+    const doneTrack = (await call("GET", `/deliveries/${legId}/track`, null, C.token)).body.data;
+    check(`${label}: once delivered, the rider's position is no longer shown`, doneTrack && doneTrack.riderId && doneTrack.riderId.lastLocation === undefined, JSON.stringify(doneTrack?.riderId));
     return legId;
   };
 

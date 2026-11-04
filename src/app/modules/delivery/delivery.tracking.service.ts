@@ -35,6 +35,9 @@ const withoutCustomerAddress = <T extends { toKind: EndpointKind; legType: LegTy
   return { ...leg, orderId: order, toPhone: undefined };
 };
 
+/** Legs on the way: only then do the customer and the store see where the rider is */
+const RIDER_ON_THE_WAY = [DeliveryStatus.accepted, DeliveryStatus.going_to_pickup, DeliveryStatus.picked_up, DeliveryStatus.in_transit];
+
 /**
  * Returns tracking details for customer, vendor, or rider with secure PIN exposure.
  */
@@ -129,6 +132,12 @@ const trackDelivery = async (
   // Riders (this leg's or the next / previous one's at a station) on a leg that
   // ends at a station never meet the customer
   const view = !isVendor && !isCustomer && !isStaffOrAdmin ? withoutCustomerAddress(deliveryObj) : deliveryObj;
+  // The rider's position is not shown once the leg is over, nor before they accept it
+  const riderView = view.riderId as unknown as { lastLocation?: unknown; lastLocationAt?: unknown } | null;
+  if (riderView && !isRider && !isStaffOrAdmin && !RIDER_ON_THE_WAY.includes(delivery.status)) {
+    Reflect.deleteProperty(riderView, "lastLocation");
+    Reflect.deleteProperty(riderView, "lastLocationAt");
+  }
 
   return {
     ...withoutPins(view),
