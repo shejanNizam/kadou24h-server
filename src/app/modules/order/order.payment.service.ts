@@ -48,10 +48,6 @@ const confirmOrderPaid = async (orderId: Types.ObjectId | string) => {
         $push: {
           timeline: {
             status: "payment_received",
-            note:
-              order.paymentMethod === PaymentMethod.cod
-                ? "Fees paid online — order sent to the store (products paid in cash at delivery)"
-                : "Online payment received — order sent to the store",
             byUserId: order.customerId,
             at: now,
           },
@@ -79,6 +75,7 @@ const confirmOrderPaid = async (orderId: Types.ObjectId | string) => {
       orderId: order._id,
       source: RefundSource.cancellation,
       reason: `${order.orderNumber}: paid after the order was cancelled`,
+      paidAfterCancel: true,
     });
   }
 };

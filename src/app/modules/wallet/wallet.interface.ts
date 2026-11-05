@@ -22,6 +22,30 @@ export enum TransactionType {
   adjustment = "adjustment",
 }
 
+/**
+ * What a wallet line is, for the apps to describe it in the user's language
+ * (with eventParams). `note` keeps an English text for the team and audits.
+ */
+export enum WalletEvent {
+  sale_held = "sale_held",
+  sale_released = "sale_released",
+  commission = "commission",
+  sale_cancelled = "sale_cancelled",
+  sale_changed = "sale_changed",
+  checkout_failed = "checkout_failed",
+  refund = "refund",
+  delivery_fee = "delivery_fee",
+  cash_collected = "cash_collected",
+  cash_offset = "cash_offset",
+  cash_settled = "cash_settled",
+  withdrawal = "withdrawal",
+  withdrawal_fee = "withdrawal_fee",
+  withdrawal_rejected = "withdrawal_rejected",
+}
+
+/** Values shown with a wallet event, e.g. { order: "AP12-1" } */
+export type WalletEventParams = Record<string, string | number>;
+
 export enum WithdrawalStatus {
   pending = "pending",
   approved = "approved",
@@ -79,6 +103,8 @@ export interface IWalletTransactionInitial {
   withdrawalId?: Types.ObjectId;
   settlementId?: Types.ObjectId;
   note?: string;
+  event?: WalletEvent;
+  eventParams?: WalletEventParams;
   createdBy?: Types.ObjectId;
   createdAt: Date;
 }

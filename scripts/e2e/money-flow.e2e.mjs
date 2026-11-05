@@ -466,6 +466,7 @@ const run = async () => {
   r = await call("GET", "/payments/admin/refunds?limit=100", null, admin);
   const lateRefund = (r.body.data ?? []).find((x) => String(x.orderId?._id ?? x.orderId) === lateOrder._id);
   check("late payment → refund request for the admin", lateRefund?.status === "pending" && lateRefund?.amount === lateOrder.total, JSON.stringify(lateRefund ?? brief(r)));
+  check("i18n: …its line says the payment came after the cancel (no English to show)", lateRefund?.lines?.[0]?.paidAfterCancel === true, JSON.stringify(lateRefund?.lines));
   r = await call("GET", `/orders/${lateOrder._id}`, null, C.token);
   check("late payment does not revive the order", r.body.data?.order?.status === "cancelled" && r.body.data?.subOrders?.[0]?.status === "cancelled");
   await call("DELETE", "/cart", null, C.token);
@@ -520,6 +521,18 @@ const run = async () => {
   r = await call("GET", "/payments/admin/refunds?limit=100", null, admin);
   const feeRefund = (r.body.data ?? []).find((x) => String(x.orderId?._id ?? x.orderId) === feeOrder?._id);
   check("COD cancelled after paying the fees → all the fees come back (refund request)", feeRefund?.status === "pending" && feeRefund?.amount === feeOrder?.upfrontAmount, JSON.stringify(feeRefund ?? brief(r)));
+  check(
+    "i18n: the refund line keeps who cancelled and their own words",
+    feeRefund?.lines?.some((l) => l.source === "cancellation" && l.by === "customer" && l.note === "Changed my mind"),
+    JSON.stringify(feeRefund?.lines),
+  );
+  r = await call("GET", `/orders/${feeOrder?._id}`, null, C.token);
+  const feeSteps = r.body.data?.subOrders?.[0]?.timeline ?? [];
+  check(
+    "i18n: order history has no English system notes, only what people wrote",
+    feeSteps.length > 1 && feeSteps.every((s) => s.note === undefined || s.note === "Changed my mind") && feeSteps.at(-1)?.params?.by === "customer",
+    JSON.stringify(feeSteps),
+  );
 
   // ═════ 4. Cancellations: stock and escrow restored exactly once ═════
   let stock = await stockOf(productId);
@@ -1197,6 +1210,11 @@ const run = async () => {
   check(
     "wallet history lines carry the order number (the app describes them in French)",
     r.body.data?.[0]?.type === "earning_released" && r.body.data[0].subOrderNumber === icSub.subOrderNumber && typeof r.body.data[0].subOrderId === "string",
+    JSON.stringify(r.body.data?.[0]),
+  );
+  check(
+    "i18n: each wallet line says what it is (event + params) for the app to describe",
+    r.body.data?.[0]?.event === "delivery_fee" && typeof r.body.data[0].eventParams?.leg === "number",
     JSON.stringify(r.body.data?.[0]),
   );
 

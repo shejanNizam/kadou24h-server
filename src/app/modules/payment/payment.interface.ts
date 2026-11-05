@@ -59,7 +59,14 @@ export enum RefundSource {
 export interface IRefundLine {
   subOrderId?: Types.ObjectId;
   source: RefundSource;
+  /** English summary, for the team and audits */
   reason: string;
+  /** Who cancelled or changed the order (cancellation / modification) */
+  by?: string;
+  /** Text a person wrote: the cancel reason, the store's note, the admin's resolution */
+  note?: string;
+  /** The payment arrived after the order was already cancelled */
+  paidAfterCancel?: boolean;
   amount: number;
   at: Date;
 }

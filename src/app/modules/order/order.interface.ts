@@ -77,7 +77,10 @@ export interface ISubOrderItem {
 export interface ISubOrderTimelineEntry {
   _id?: Types.ObjectId;
   status: string;
+  /** Text a person wrote (a reason, the store's note). System steps have none: `status` and `params` say it */
   note?: string;
+  /** Facts shown with the step, e.g. { leg: 2, place: "Gare de Kindia" } or { by: "customer" } */
+  params?: Record<string, string | number>;
   byUserId?: Types.ObjectId;
   at: Date;
 }

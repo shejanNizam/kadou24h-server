@@ -94,7 +94,9 @@ const cancelSubOrder = async (opts: {
       $push: {
         timeline: {
           status: SubOrderStatus.cancelled,
-          note: `Cancelled by ${opts.by}: ${opts.reason}`,
+          // The system's own reason is English (payment window): `by` says it
+          ...(opts.by !== "system" && { note: opts.reason }),
+          params: { by: opts.by },
           byUserId: new Types.ObjectId(opts.actorUserId),
           at: now,
         },
@@ -139,6 +141,8 @@ const cancelSubOrder = async (opts: {
     amount: feesOnly ? previous.deliveryFee : previous.total,
     source: RefundSource.cancellation,
     reason: `${previous.subOrderNumber} cancelled by ${opts.by}: ${opts.reason}`,
+    by: opts.by,
+    ...(opts.by !== "system" && { note: opts.reason }),
   });
 
   const openLegStatuses = parcelWithRider

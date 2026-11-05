@@ -398,7 +398,7 @@ const claimOffer = async (riderUserId: string, deliveryId: string) => {
     $push: {
       timeline: {
         status: "rider_accepted",
-        note: `Delivery partner took leg #${leg.legNumber} (open offer)`,
+        params: { leg: leg.legNumber },
         byUserId: new Types.ObjectId(riderUserId),
         at: now,
       },

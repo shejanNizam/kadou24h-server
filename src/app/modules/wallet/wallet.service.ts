@@ -19,6 +19,8 @@ import {
   IWallet,
   MAX_PAYOUT_METHODS,
   TransactionType,
+  WalletEvent,
+  WalletEventParams,
   WalletMode,
   WithdrawalStatus,
 } from "./wallet.interface";
@@ -66,6 +68,8 @@ const recordTransaction = async (params: {
   withdrawalId?: Types.ObjectId | string;
   settlementId?: Types.ObjectId | string;
   note?: string;
+  event?: WalletEvent;
+  eventParams?: WalletEventParams;
   createdBy?: Types.ObjectId | string;
   /** A rider's fee: paid straight to available, with no held stage, so count it as earned here */
   countsAsEarned?: boolean;
@@ -136,6 +140,8 @@ const recordTransaction = async (params: {
     withdrawalId: params.withdrawalId,
     settlementId: params.settlementId,
     note: params.note,
+    event: params.event,
+    eventParams: params.eventParams,
     createdBy: params.createdBy,
   });
 
@@ -171,6 +177,8 @@ const releaseVendorEarning = async (subOrder: ISubOrder, actorId?: string) => {
     amount: claimed.vendorEarning,
     subOrderId: claimed._id,
     note: `Escrow released for sub-order ${claimed.subOrderNumber}`,
+    event: WalletEvent.sale_released,
+    eventParams: { order: claimed.subOrderNumber },
     createdBy: actorId,
   });
 
@@ -180,6 +188,8 @@ const releaseVendorEarning = async (subOrder: ISubOrder, actorId?: string) => {
     amount: claimed.commissionAmount,
     subOrderId: claimed._id,
     note: `Platform commission for sub-order ${claimed.subOrderNumber}`,
+    event: WalletEvent.commission,
+    eventParams: { order: claimed.subOrderNumber },
     createdBy: actorId,
   });
 
@@ -229,6 +239,8 @@ const payLegFee = async (legId: Types.ObjectId | string, actorId?: string) => {
     deliveryId: leg._id,
     subOrderId: leg.subOrderId,
     note: `Delivery fee earned for leg #${leg.legNumber}`,
+    event: WalletEvent.delivery_fee,
+    eventParams: { leg: leg.legNumber },
     createdBy: actorId,
     countsAsEarned: true,
   });
@@ -292,6 +304,8 @@ const releaseEscrowForSubOrder = async (subOrderId: string, actorId?: string) =>
         deliveryId: leg._id,
         subOrderId: subOrder._id,
         note: `COD cash collected for ${subOrder.subOrderNumber}`,
+        event: WalletEvent.cash_collected,
+        eventParams: { order: subOrder.subOrderNumber },
         createdBy: actorId,
       });
     }
@@ -375,6 +389,8 @@ const reverseEscrowForSubOrder = async (
       amount: subOrder.vendorEarning,
       subOrderId: subOrder._id,
       note: `Escrow reversed for cancelled sub-order ${subOrder.subOrderNumber}`,
+      event: WalletEvent.sale_cancelled,
+      eventParams: { order: subOrder.subOrderNumber },
       createdBy: actorId,
     });
   }
@@ -559,6 +575,8 @@ const requestWithdrawal = async (
     balanceAfter: updatedWallet.availableBalance + fee,
     withdrawalId: withdrawal._id,
     note: `Withdrawal request ${requestNumber} (net payout)`,
+    event: WalletEvent.withdrawal,
+    eventParams: { ref: requestNumber },
     createdBy: ownerId,
   });
 
@@ -571,6 +589,8 @@ const requestWithdrawal = async (
       balanceAfter: updatedWallet.availableBalance,
       withdrawalId: withdrawal._id,
       note: `Fee for withdrawal request ${requestNumber}`,
+      event: WalletEvent.withdrawal_fee,
+      eventParams: { ref: requestNumber },
       createdBy: ownerId,
     });
   }
@@ -649,6 +669,8 @@ const processWithdrawal = async (
       amount: withdrawal.amount,
       withdrawalId: withdrawal._id,
       note: `Reversal of rejected withdrawal ${withdrawal.requestNumber}: ${withdrawal.rejectionReason}`,
+      event: WalletEvent.withdrawal_rejected,
+      eventParams: { ref: withdrawal.requestNumber, reason: withdrawal.rejectionReason ?? "" },
       createdBy: adminUserId,
     });
 
@@ -730,6 +752,7 @@ const submitCodSettlement = async (
       balanceAfter: updated.availableBalance,
       settlementId: settlement._id,
       note: "Offset COD cash owed against available earnings",
+      event: WalletEvent.cash_offset,
       createdBy: riderUserId,
     });
 
@@ -801,6 +824,8 @@ const confirmCodSettlement = async (
     amount: settlement.amount,
     settlementId: settlement._id,
     note: `COD cash settlement confirmed (${settlement.method})`,
+    event: WalletEvent.cash_settled,
+    eventParams: { method: settlement.method },
     createdBy: adminUserId,
   });
 

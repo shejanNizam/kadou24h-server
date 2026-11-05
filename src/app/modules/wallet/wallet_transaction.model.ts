@@ -2,6 +2,7 @@ import { Schema, model } from "mongoose";
 import {
   IWalletTransaction,
   TransactionType,
+  WalletEvent,
 } from "./wallet.interface";
 
 const walletTransactionSchema = new Schema<IWalletTransaction>(
@@ -47,6 +48,8 @@ const walletTransactionSchema = new Schema<IWalletTransaction>(
       type: String,
       trim: true,
     },
+    event: { type: String, enum: Object.values(WalletEvent) },
+    eventParams: { type: Schema.Types.Mixed },
     createdBy: {
       type: Schema.Types.ObjectId,
       ref: "User",

@@ -284,7 +284,7 @@ const acceptDelivery = async (riderUserId: string, deliveryId: string) => {
     $push: {
       timeline: {
         status: "rider_accepted",
-        note: `Delivery partner accepted leg #${delivery.legNumber}`,
+        params: { leg: delivery.legNumber },
         byUserId: new Types.ObjectId(riderUserId),
         at: new Date(),
       },

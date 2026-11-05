@@ -12,7 +12,7 @@ import { VendorProfile } from "../vendor_profile/vendor_profile.model";
 import { ISubOrderModification, SettlementStatus, SubOrderStatus } from "./order.interface";
 import { Order } from "./order.model";
 import { SubOrder } from "./sub_order.model";
-import { TransactionType, WalletMode } from "../wallet/wallet.interface";
+import { TransactionType, WalletEvent, WalletMode } from "../wallet/wallet.interface";
 import { WalletServices } from "../wallet/wallet.service";
 import { cancelSubOrder, codCashBase, syncOrderStatus } from "./order.utils";
 import { Notify } from "../notification/notification.events";
@@ -232,7 +232,7 @@ const updateSubOrderStatus = async (
       $push: {
         timeline: {
           status: newStatus,
-          note: note || `Status updated to ${newStatus}`,
+          ...(note && { note }),
           byUserId: new Types.ObjectId(vendorUserId),
           at: new Date(),
         },
@@ -393,6 +393,8 @@ const modifySubOrderItems = async (
         amount: earningDiff,
         subOrderId: subOrder._id,
         note: `Escrow reduced due to sub-order items modification (${subOrder.subOrderNumber})`,
+        event: WalletEvent.sale_changed,
+        eventParams: { order: subOrder.subOrderNumber },
         createdBy: vendorUserId,
       });
     }
@@ -409,6 +411,8 @@ const modifySubOrderItems = async (
         amount: Math.abs(earningDiff),
         subOrderId: subOrder._id,
         note: `Escrow increased due to sub-order items modification (${subOrder.subOrderNumber})`,
+        event: WalletEvent.sale_changed,
+        eventParams: { order: subOrder.subOrderNumber },
         createdBy: vendorUserId,
       });
     }
@@ -440,7 +444,7 @@ const modifySubOrderItems = async (
 
   subOrder.timeline.push({
     status: "order_modified",
-    note: `Order modified by vendor: ${reason || "Customer chat agreement"}`,
+    ...(reason && { note: reason }),
     byUserId: new Types.ObjectId(vendorUserId),
     at: new Date(),
   });
@@ -455,6 +459,8 @@ const modifySubOrderItems = async (
       amount: refundAmount,
       source: RefundSource.modification,
       reason: `${subOrder.subOrderNumber} changed by the store: ${reason || "items removed"}`,
+      by: "vendor",
+      ...(reason && { note: reason }),
     });
   }
 

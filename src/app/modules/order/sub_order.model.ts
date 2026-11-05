@@ -57,6 +57,7 @@ const subOrderTimelineSchema = new Schema<ISubOrderTimelineEntry>(
       type: String,
       trim: true,
     },
+    params: { type: Schema.Types.Mixed },
     byUserId: {
       type: Schema.Types.ObjectId,
       ref: "User",

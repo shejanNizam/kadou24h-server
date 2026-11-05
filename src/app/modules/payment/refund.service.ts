@@ -20,7 +20,7 @@ import { IOrder, OrderStatus, PaymentMethod as OrderPaymentMethod, PaymentStatus
 import { Order } from "../order/order.model";
 import { SubOrder } from "../order/sub_order.model";
 import { VendorProfile } from "../vendor_profile/vendor_profile.model";
-import { TransactionType, WalletMode } from "../wallet/wallet.interface";
+import { TransactionType, WalletEvent, WalletMode } from "../wallet/wallet.interface";
 import { WalletServices } from "../wallet/wallet.service";
 import {
   IRefund,
@@ -69,6 +69,9 @@ const requestRefund = async (params: {
   amount?: number;
   source: RefundSource;
   reason: string;
+  by?: string;
+  note?: string;
+  paidAfterCancel?: boolean;
 }) => {
   try {
     const order = await Order.findById(params.orderId);
@@ -90,6 +93,9 @@ const requestRefund = async (params: {
       ...(params.subOrderId && { subOrderId: new Types.ObjectId(String(params.subOrderId)) }),
       source: params.source,
       reason: params.reason,
+      ...(params.by && { by: params.by }),
+      ...(params.note && { note: params.note }),
+      ...(params.paidAfterCancel && { paidAfterCancel: true }),
       amount,
       at: new Date(),
     };
@@ -163,6 +169,8 @@ const applyCompletedRefund = async (refund: IRefund, order: OrderDoc, actorUserI
           amount: refund.amount,
           subOrderId: subOrder._id,
           note: `Refund deduction for ${subOrder.subOrderNumber}: ${refund.reason}`,
+          event: WalletEvent.refund,
+          eventParams: { order: subOrder.subOrderNumber, reason: refund.lines?.[0]?.note ?? refund.reason },
           createdBy: actorUserId,
         });
       }
@@ -239,6 +247,8 @@ const issueRefund = async (
     subOrderId?: string;
     amount: number;
     reason: string;
+    /** The admin's own words when `reason` is a summary (dispute) */
+    note?: string;
     notes?: string;
     transactionId?: string;
     source?: RefundSource.admin | RefundSource.dispute;
@@ -282,6 +292,8 @@ const issueRefund = async (
         ...(payload.subOrderId && { subOrderId: new Types.ObjectId(payload.subOrderId) }),
         source,
         reason: payload.reason,
+        // Typed by the admin (refund or dispute resolution)
+        note: payload.note ?? payload.reason,
         amount: payload.amount,
         at: new Date(),
       },

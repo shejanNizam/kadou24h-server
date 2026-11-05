@@ -14,6 +14,11 @@ interface TMeta {
 interface TResponse<T> {
   statusCode: number;
   success: boolean;
+  /**
+   * English, for developers and logs. The apps never show it: they say "saved",
+   * "sent"… in the user's language themselves. Text a user sees comes as data
+   * (codes, params) or as an error (i18n/errors), never here.
+   */
   message?: string;
   data: T;
   meta?: TMeta;

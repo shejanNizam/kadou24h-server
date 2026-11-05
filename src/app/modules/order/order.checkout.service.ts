@@ -39,7 +39,7 @@ import {
 } from "./order.interface";
 import { Order } from "./order.model";
 import { SubOrder } from "./sub_order.model";
-import { TransactionType, WalletMode } from "../wallet/wallet.interface";
+import { TransactionType, WalletEvent, WalletMode } from "../wallet/wallet.interface";
 import { WalletServices } from "../wallet/wallet.service";
 
 /**
@@ -493,6 +493,7 @@ const placeOrder = async (
         amount: hold.amount,
         subOrderId: hold.subOrderId,
         note: "Checkout failed — escrow hold undone",
+        event: WalletEvent.checkout_failed,
         createdBy: customerId,
       });
     }
@@ -630,9 +631,6 @@ const createOrderRecords = async (
       timeline: [
         {
           status: "order_placed",
-          note: isCod
-            ? "Order placed by customer — waiting for the fees to be paid online"
-            : "Order placed by customer — waiting for the online payment",
           byUserId: new Types.ObjectId(customerId),
           at: placedAt,
         },
@@ -698,6 +696,8 @@ const holdEscrow = async (
     amount: subOrder.vendorEarning,
     subOrderId: subOrder._id,
     note: `Escrow held for sub-order ${subOrder.subOrderNumber}`,
+    event: WalletEvent.sale_held,
+    eventParams: { order: subOrder.subOrderNumber },
     createdBy: actorId,
   });
   return vendorWallet._id as Types.ObjectId;

@@ -72,7 +72,7 @@ const closeRelayLeg = async (prevLegId: Types.ObjectId, nextLeg: IDelivery, acto
       $push: {
         timeline: {
           status: "leg_completed",
-          note: `Leg #${closed.legNumber} handed over at ${closed.toName}`,
+          params: { leg: closed.legNumber, place: closed.toName },
           byUserId: new Types.ObjectId(actorUserId),
           at: new Date(),
         },
@@ -107,7 +107,6 @@ const goingToPickup = async (riderUserId: string, deliveryId: string) => {
     $push: {
       timeline: {
         status: "going_to_pickup",
-        note: "Delivery partner is en route to pickup location",
         byUserId: new Types.ObjectId(riderUserId),
         at: new Date(),
       },
@@ -203,7 +202,7 @@ const verifyPickup = async (
     $push: {
       timeline: {
         status: "picked_up",
-        note: `Parcel picked up by partner from ${delivery.fromName}`,
+        params: { place: delivery.fromName },
         byUserId: new Types.ObjectId(riderUserId),
         at: new Date(),
       },
@@ -318,7 +317,7 @@ const verifyHandover = async (
     subOrder.currentLegId = nextLeg._id as Types.ObjectId;
     subOrder.timeline.push({
       status: "leg_completed",
-      note: `Leg #${delivery.legNumber} delivered to ${delivery.toName}`,
+      params: { leg: delivery.legNumber, place: delivery.toName },
       byUserId: new Types.ObjectId(riderUserId),
       at: new Date(),
     });
@@ -331,7 +330,6 @@ const verifyHandover = async (
     subOrder.deliveredAt = new Date();
     subOrder.timeline.push({
       status: "delivered",
-      note: `Order successfully delivered to customer by partner`,
       byUserId: new Types.ObjectId(riderUserId),
       at: new Date(),
     });

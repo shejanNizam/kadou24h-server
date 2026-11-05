@@ -413,6 +413,7 @@ const resolveDispute = async (
         subOrderId: dispute.subOrderId ? String(dispute.subOrderId) : undefined,
         amount: refundAmount as number,
         reason: `Dispute resolved: ${payload.adminResolution}`,
+        note: payload.adminResolution,
         source: RefundSource.dispute,
       });
     } catch (error) {
