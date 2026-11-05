@@ -23,6 +23,6 @@ export const createPlanSchema = z.object({
 export const updatePlanSchema = z.object({ ...planFields, isActive: z.boolean() }).partial();
 
 export const subscribeSchema = z.object({
-  planId: z.string().regex(/^[0-9a-fA-F]{24}$/, "Valid planId required"),
+  planId: z.string().regex(/^[0-9a-fA-F]{24}$/, "INVALID_ID"),
   paymentMethod: z.enum(Object.values(PaymentMethod) as [string, ...string[]]),
 });

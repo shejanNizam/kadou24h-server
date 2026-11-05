@@ -86,7 +86,7 @@ const applyStoreInput = async (profile: IVendorProfile, payload: StoreInput) => 
 const findMyProfile = async (userId: string) => {
   const profile = await VendorProfile.findOne({ userId });
   if (!profile) {
-    throw new AppError(httpStatus.NOT_FOUND, "You have not started a vendor application");
+    throw new AppError(httpStatus.NOT_FOUND, "VENDOR_APPLICATION_NOT_STARTED");
   }
   return profile;
 };
@@ -127,7 +127,7 @@ const submitApplication = async (userId: string) => {
   ].filter(Boolean);
 
   if (missing.length) {
-    throw new AppError(httpStatus.BAD_REQUEST, `Please complete: ${missing.join(", ")}`);
+    throw new AppError(httpStatus.BAD_REQUEST, "APPLICATION_INCOMPLETE", { fields: missing.join(", ") });
   }
 
   markSubmitted(profile, userId);
@@ -137,7 +137,7 @@ const submitApplication = async (userId: string) => {
 
 const assertApproved = (profile: IVendorProfile) => {
   if (profile.approvalStatus !== ApprovalStatus.approved) {
-    throw new AppError(httpStatus.FORBIDDEN, "Your store is not approved");
+    throw new AppError(httpStatus.FORBIDDEN, "STORE_NOT_APPROVED_YET");
   }
 };
 
@@ -169,7 +169,7 @@ const updateAvailability = async (
   }
   const { openTime, closeTime } = profile.availability;
   if (openTime >= closeTime) {
-    throw new AppError(httpStatus.BAD_REQUEST, "openTime must be before closeTime");
+    throw new AppError(httpStatus.BAD_REQUEST, "OPENING_HOURS_INVALID");
   }
 
   await profile.save();
@@ -206,7 +206,7 @@ const getPublicVendor = async (id: string) => {
     .select(PUBLIC_FIELDS)
     .populate("businessCategoryId", "name slug")
     .lean();
-  if (!vendor) throw new AppError(httpStatus.NOT_FOUND, "Store not found");
+  if (!vendor) throw new AppError(httpStatus.NOT_FOUND, "STORE_NOT_FOUND");
   return present(vendor);
 };
 
@@ -233,7 +233,7 @@ const getVendorsForAdmin = async (query: Record<string, string>) => {
 
 const getVendorForAdmin = async (id: string) => {
   const base = await VendorProfile.findById(id).select("userId").lean();
-  if (!base) throw new AppError(httpStatus.NOT_FOUND, "Vendor not found");
+  if (!base) throw new AppError(httpStatus.NOT_FOUND, "VENDOR_PROFILE_NOT_FOUND");
 
   const [vendor, wallet] = await Promise.all([
     VendorProfile.findById(id)
@@ -244,7 +244,7 @@ const getVendorForAdmin = async (id: string) => {
     WalletServices.ensureWallet(base.userId, WalletMode.vendor),
   ]);
 
-  if (!vendor) throw new AppError(httpStatus.NOT_FOUND, "Vendor not found");
+  if (!vendor) throw new AppError(httpStatus.NOT_FOUND, "VENDOR_PROFILE_NOT_FOUND");
   return { ...present(vendor), payoutMethods: wallet.payoutMethods, wallet: walletSummary(wallet) };
 };
 
@@ -255,9 +255,9 @@ const reviewDocument = async (
   actorId: string,
 ) => {
   const vendor = await VendorProfile.findById(id);
-  if (!vendor) throw new AppError(httpStatus.NOT_FOUND, "Vendor not found");
+  if (!vendor) throw new AppError(httpStatus.NOT_FOUND, "VENDOR_PROFILE_NOT_FOUND");
   const doc = vendor.documents.id(docId);
-  if (!doc) throw new AppError(httpStatus.NOT_FOUND, "Document not found");
+  if (!doc) throw new AppError(httpStatus.NOT_FOUND, "DOCUMENT_NOT_FOUND");
 
   doc.status = payload.status;
   doc.note = payload.note;
@@ -279,10 +279,10 @@ const reviewApplication = async (
   actorId: string,
 ) => {
   const vendor = await VendorProfile.findById(id);
-  if (!vendor) throw new AppError(httpStatus.NOT_FOUND, "Vendor not found");
+  if (!vendor) throw new AppError(httpStatus.NOT_FOUND, "VENDOR_PROFILE_NOT_FOUND");
 
   const owner = await User.findOne({ _id: vendor.userId, isDeleted: false });
-  if (!owner) throw new AppError(httpStatus.BAD_REQUEST, "The applicant's account no longer exists");
+  if (!owner) throw new AppError(httpStatus.BAD_REQUEST, "APPLICANT_ACCOUNT_GONE");
 
   const before = vendor.approvalStatus;
   const status = applyReview(vendor, payload.action, payload.note, actorId);

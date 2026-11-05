@@ -52,7 +52,7 @@ const recordClick = async (adId: string) => {
   );
 
   if (!ad) {
-    throw new AppError(404, "Advertisement not found");
+    throw new AppError(404, "AD_NOT_FOUND");
   }
 
   return {
@@ -70,7 +70,7 @@ const createAdAdmin = async (
   const endDate = new Date(payload.endAt);
 
   if (endDate <= startDate) {
-    throw new AppError(400, "Advertisement end date must be after start date");
+    throw new AppError(400, "END_DATE_BEFORE_START");
   }
 
   const ad = await Advertisement.create({
@@ -166,7 +166,7 @@ const getAllAdsAdmin = async (query: {
 const getAdByIdAdmin = async (adId: string): Promise<IAdvertisement> => {
   const ad = await Advertisement.findById(adId).populate("createdBy", "name email");
   if (!ad) {
-    throw new AppError(404, "Advertisement not found");
+    throw new AppError(404, "AD_NOT_FOUND");
   }
   return ad;
 };
@@ -178,7 +178,7 @@ const updateAdAdmin = async (
 ): Promise<IAdvertisement> => {
   const ad = await Advertisement.findById(adId);
   if (!ad) {
-    throw new AppError(404, "Advertisement not found");
+    throw new AppError(404, "AD_NOT_FOUND");
   }
 
   const before = ad.toObject();
@@ -195,7 +195,7 @@ const updateAdAdmin = async (
   if (payload.status) ad.status = payload.status;
 
   if (ad.endAt <= ad.startAt) {
-    throw new AppError(400, "Advertisement end date must be after start date");
+    throw new AppError(400, "END_DATE_BEFORE_START");
   }
 
   await ad.save();
@@ -215,7 +215,7 @@ const updateAdAdmin = async (
 const deleteAdAdmin = async (adminId: string, adId: string) => {
   const ad = await Advertisement.findByIdAndDelete(adId);
   if (!ad) {
-    throw new AppError(404, "Advertisement not found");
+    throw new AppError(404, "AD_NOT_FOUND");
   }
 
   await AuditLogServices.record({

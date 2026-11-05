@@ -34,7 +34,7 @@ export const enumQuery = <T extends string>(
   if (!options.includes(text as T)) {
     throw new AppError(
       httpStatus.BAD_REQUEST,
-      `Invalid ${name} "${text}". Allowed: ${options.join(", ")}`,
+      "QUERY_VALUE_INVALID", { name, value: text, allowed: options.join(", ") },
     );
   }
   return text as T;

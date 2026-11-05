@@ -9,7 +9,7 @@ type AddressInput = Partial<Omit<IUserAddress, "location" | "_id">> & { location
 
 const loadAddresses = async (userId: string) => {
   const user = await User.findOne({ _id: userId, isDeleted: false }).select("addresses");
-  if (!user?.addresses) throw new AppError(httpStatus.NOT_FOUND, "User not found");
+  if (!user?.addresses) throw new AppError(httpStatus.NOT_FOUND, "ACCOUNT_NOT_FOUND");
   return { user, addresses: user.addresses };
 };
 
@@ -29,7 +29,7 @@ const createAddress = async (userId: string, payload: AddressInput) => {
   const { user, addresses } = await loadAddresses(userId);
 
   if (addresses.length >= MAX_ADDRESSES) {
-    throw new AppError(httpStatus.BAD_REQUEST, `You can save up to ${MAX_ADDRESSES} addresses`);
+    throw new AppError(httpStatus.BAD_REQUEST, "ADDRESS_LIMIT", { max: MAX_ADDRESSES });
   }
 
   // The first address is always the default
@@ -49,7 +49,7 @@ const createAddress = async (userId: string, payload: AddressInput) => {
 const updateAddress = async (userId: string, addressId: string, payload: AddressInput) => {
   const { user, addresses } = await loadAddresses(userId);
   const address = addresses.id(addressId);
-  if (!address) throw new AppError(httpStatus.NOT_FOUND, "Address not found");
+  if (!address) throw new AppError(httpStatus.NOT_FOUND, "ADDRESS_NOT_FOUND");
 
   const { location, isDefault, ...rest } = payload;
   address.set(rest);
@@ -68,7 +68,7 @@ const setDefaultAddress = async (userId: string, addressId: string) =>
 const deleteAddress = async (userId: string, addressId: string) => {
   const { user, addresses } = await loadAddresses(userId);
   const address = addresses.id(addressId);
-  if (!address) throw new AppError(httpStatus.NOT_FOUND, "Address not found");
+  if (!address) throw new AppError(httpStatus.NOT_FOUND, "ADDRESS_NOT_FOUND");
   const wasDefault = address.isDefault;
 
   address.deleteOne();

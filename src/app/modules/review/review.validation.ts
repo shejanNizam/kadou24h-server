@@ -3,12 +3,12 @@ import { ReviewStatus } from "./review.interface";
 
 const createReviewZodSchema = z.object({
   body: z.object({
-    subOrderId: z.string().min(1, "Sub-order ID is required"),
+    subOrderId: z.string().min(1, "FIELD_REQUIRED"),
     rating: z
       .number()
       .int()
-      .min(1, "Rating must be between 1 and 5")
-      .max(5, "Rating must be between 1 and 5"),
+      .min(1, "RATING_RANGE")
+      .max(5, "RATING_RANGE"),
     comment: z.string().trim().optional(),
   }),
 });

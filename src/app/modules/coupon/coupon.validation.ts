@@ -4,9 +4,9 @@ import { CouponType } from "./coupon.interface";
 const code = z
   .string()
   .trim()
-  .min(3, "At least 3 characters")
-  .max(20, "At most 20 characters")
-  .regex(/^[A-Za-z0-9_-]+$/, "Letters, numbers, - and _ only");
+  .min(3, "TEXT_TOO_SHORT")
+  .max(20, "TEXT_TOO_LONG")
+  .regex(/^[A-Za-z0-9_-]+$/, "COUPON_CODE_FORMAT");
 
 export const createCouponZodSchema = z.object({
   code,
@@ -16,7 +16,7 @@ export const createCouponZodSchema = z.object({
   maxDiscount: z.number().int().min(1).optional(),
   minOrder: z.number().int().min(0).default(0),
   startsAt: z.coerce.date().optional(),
-  expiresAt: z.coerce.date({ error: "Choose an end date" }),
+  expiresAt: z.coerce.date({ error: "END_DATE_REQUIRED" }),
   usageLimit: z.number().int().min(1).optional(),
   isActive: z.boolean().default(true),
 });

@@ -65,6 +65,6 @@ export const sendEmail = async ({
       command: error.command,
       response: error.response,
     });
-    throw new AppError(502, "Email not sent");
+    throw new AppError(502, "EMAIL_NOT_SENT");
   }
 };

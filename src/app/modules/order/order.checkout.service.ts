@@ -4,6 +4,8 @@
 import httpStatus from "http-status";
 import { Types } from "mongoose";
 import AppError from "../../errorHelpers/AppError";
+import type { ErrorCode } from "../../i18n/errors";
+import type { MessageParams } from "../../i18n/translate";
 import { logger } from "../../utils/logger";
 import { Notify } from "../notification/notification.events";
 import { Cart } from "../cart/cart.model";
@@ -390,7 +392,10 @@ const calculateCheckout = async (
   // Promo code: Kadou24h pays the discount, so store earnings and commissions don't change
   let discount = 0;
   let appliedCoupon: Awaited<ReturnType<typeof CouponServices.evaluate>>["coupon"] | undefined;
-  let coupon: { code: string; valid: boolean; discount: number; description?: string; message?: string } | undefined;
+  // A refused code says why (`reason`, an error code); the controller adds the message in the user's language
+  let coupon:
+    | { code: string; valid: boolean; discount: number; description?: string; reason?: ErrorCode; params?: MessageParams }
+    | undefined;
   if (payload.couponCode?.trim()) {
     try {
       const result = await CouponServices.evaluate(payload.couponCode, customerId, overallSubtotal);
@@ -399,7 +404,7 @@ const calculateCheckout = async (
       coupon = { code: result.coupon.code, valid: true, discount, description: result.coupon.description };
     } catch (error) {
       if (opts.strictCoupon || !(error instanceof AppError)) throw error;
-      coupon = { code: normalizeCode(payload.couponCode), valid: false, discount: 0, message: error.message };
+      coupon = { code: normalizeCode(payload.couponCode), valid: false, discount: 0, reason: error.code, params: error.params };
     }
   }
   // Spread over the stores by their share of the products (the last one takes the rounding)

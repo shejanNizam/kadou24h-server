@@ -8,7 +8,6 @@ import { handleCastError } from "../helpers/handleCastError";
 import { handlerDuplicateError } from "../helpers/handlerDuplicateError";
 import { handlerValidationError } from "../helpers/handlerValidationError";
 import { handlerZodError } from "../helpers/handlerZodError";
-import type { ErrorCode } from "../i18n/errors";
 import { localeOf, type Locale } from "../i18n/locale";
 import { translateError } from "../i18n/translate";
 import { TGenericErrorResponse } from "../interfaces/error.types";
@@ -18,22 +17,6 @@ const swallowError = (): void => undefined;
 const MAX_UPLOAD_MB = 10;
 const MAX_UPLOAD_FILES = 10;
 
-/** The code answered when an error has none of its own (legacy text errors, unknown failures) */
-const GENERIC_CODES: Partial<Record<number, ErrorCode>> = {
-  400: "BAD_REQUEST",
-  401: "UNAUTHORIZED",
-  403: "FORBIDDEN",
-  404: "NOT_FOUND",
-  409: "CONFLICT",
-  413: "BODY_TOO_LARGE",
-  422: "UNPROCESSABLE",
-  429: "TOO_MANY_REQUESTS",
-  503: "SERVICE_UNAVAILABLE",
-};
-
-export const genericCodeFor = (statusCode: number): ErrorCode =>
-  GENERIC_CODES[statusCode] ?? (statusCode >= 500 ? "INTERNAL_ERROR" : "BAD_REQUEST");
-
 /** Turns any thrown value into a status, a code and (optionally) a final text. */
 function classify(err: any, locale: Locale): TGenericErrorResponse {
   if (err?.code === 11000) return handlerDuplicateError(err);
@@ -41,12 +24,7 @@ function classify(err: any, locale: Locale): TGenericErrorResponse {
   if (err?.name === "ZodError") return handlerZodError(err, locale);
   if (err?.name === "ValidationError") return handlerValidationError(err);
 
-  if (err instanceof AppError) {
-    return err.code
-      ? { statusCode: err.statusCode, code: err.code, params: err.params }
-      : // Legacy text error: its English text is kept until the throw gets a code
-        { statusCode: err.statusCode, code: genericCodeFor(err.statusCode), message: err.message };
-  }
+  if (err instanceof AppError) return { statusCode: err.statusCode, code: err.code, params: err.params };
 
   if (err?.name === "MulterError") {
     if (err.code === "LIMIT_FILE_SIZE") return { statusCode: 413, code: "FILE_TOO_LARGE", params: { maxMb: MAX_UPLOAD_MB } };

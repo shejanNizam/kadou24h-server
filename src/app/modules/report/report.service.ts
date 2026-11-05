@@ -108,7 +108,7 @@ const actionReportAdmin = async (
 ): Promise<IReport> => {
   const report = await Report.findById(reportId);
   if (!report) {
-    throw new AppError(404, "Report not found");
+    throw new AppError(404, "REPORT_NOT_FOUND");
   }
 
   report.status = payload.status;

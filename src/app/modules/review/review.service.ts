@@ -67,22 +67,22 @@ const createReview = async (
   // 1. Fetch sub-order
   const subOrder = await SubOrder.findById(payload.subOrderId);
   if (!subOrder) {
-    throw new AppError(404, "Sub-order not found");
+    throw new AppError(404, "SUB_ORDER_NOT_FOUND");
   }
 
   // 2. Fetch parent order to verify ownership
   const order = await Order.findById(subOrder.orderId);
   if (!order) {
-    throw new AppError(404, "Parent order not found");
+    throw new AppError(404, "ORDER_NOT_FOUND");
   }
 
   if (order.customerId.toString() !== authorId.toString()) {
-    throw new AppError(403, "You can only review orders that you placed");
+    throw new AppError(403, "REVIEW_NOT_YOUR_ORDER");
   }
 
   // 3. Ensure sub-order has been delivered
   if (subOrder.status !== SubOrderStatus.delivered) {
-    throw new AppError(400, "You can only review delivered orders");
+    throw new AppError(400, "REVIEW_NOT_DELIVERED");
   }
 
   // 4. Ensure no duplicate review for this sub-order by the same customer
@@ -92,7 +92,7 @@ const createReview = async (
   });
 
   if (existingReview) {
-    throw new AppError(400, "You have already reviewed this sub-order");
+    throw new AppError(400, "ORDER_ALREADY_REVIEWED");
   }
 
   // 5. Extract products and rider if assigned
@@ -226,7 +226,7 @@ const getMyReviews = async (
 };
 
 const reportReview = async (reviewId: string, userId: string) => {
-  if (!Types.ObjectId.isValid(reviewId)) throw new AppError(404, "Review not found");
+  if (!Types.ObjectId.isValid(reviewId)) throw new AppError(404, "REVIEW_NOT_FOUND");
   // Counted once per person
   const review =
     (await Review.findOneAndUpdate(
@@ -236,7 +236,7 @@ const reportReview = async (reviewId: string, userId: string) => {
     )) ?? (await Review.findById(reviewId));
 
   if (!review) {
-    throw new AppError(404, "Review not found");
+    throw new AppError(404, "REVIEW_NOT_FOUND");
   }
 
   return {
@@ -252,7 +252,7 @@ const updateReviewStatusAdmin = async (
 ): Promise<IReview> => {
   const review = await Review.findById(reviewId);
   if (!review) {
-    throw new AppError(404, "Review not found");
+    throw new AppError(404, "REVIEW_NOT_FOUND");
   }
 
   const before = { status: review.status };

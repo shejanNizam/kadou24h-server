@@ -168,14 +168,14 @@ const getUnreadCount = async (userId: string, mode: string) => {
 };
 
 const getConversationById = async (userId: string, conversationId: string) => {
-  if (!Types.ObjectId.isValid(conversationId)) throw new AppError(404, "Conversation not found");
+  if (!Types.ObjectId.isValid(conversationId)) throw new AppError(404, "CONVERSATION_NOT_FOUND");
   const conversation = await Conversation.findById(conversationId)
     .populate("participants.userId", PARTICIPANT_FIELDS)
     .populate("subOrderId", "subOrderNumber orderId status")
     .lean();
 
   if (!conversation) {
-    throw new AppError(404, "Conversation not found");
+    throw new AppError(404, "CONVERSATION_NOT_FOUND");
   }
 
   const isParticipant = (conversation.participants as unknown as LeanParticipant[]).some(
@@ -183,7 +183,7 @@ const getConversationById = async (userId: string, conversationId: string) => {
   );
 
   if (!isParticipant) {
-    throw new AppError(403, "You are not a participant in this conversation");
+    throw new AppError(403, "NOT_CONVERSATION_PARTICIPANT");
   }
 
   const [presented] = await presentConversations([conversation as unknown as typeof conversation & { participants: LeanParticipant[] }], userId);
@@ -197,7 +197,7 @@ const getMessages = async (
 ) => {
   const conversation = await Conversation.findById(conversationId);
   if (!conversation) {
-    throw new AppError(404, "Conversation not found");
+    throw new AppError(404, "CONVERSATION_NOT_FOUND");
   }
 
   const isParticipant = conversation.participants.some(
@@ -205,7 +205,7 @@ const getMessages = async (
   );
 
   if (!isParticipant) {
-    throw new AppError(403, "You are not a participant in this conversation");
+    throw new AppError(403, "NOT_CONVERSATION_PARTICIPANT");
   }
 
   const page = Math.max(1, Number(query.page) || 1);
@@ -254,11 +254,11 @@ const sendMessage = async (
   // 1. Verify sender user & check moderation restrictions
   const sender = await User.findById(senderId);
   if (!sender || sender.isDeleted) {
-    throw new AppError(404, "Sender user not found");
+    throw new AppError(404, "ACCOUNT_NOT_FOUND");
   }
 
   if (sender.status === UserStatus.suspended || sender.status === UserStatus.banned) {
-    throw new AppError(403, "Your account is suspended. You cannot send messages.");
+    throw new AppError(403, "CHAT_ACCOUNT_SUSPENDED");
   }
 
   if (
@@ -267,16 +267,15 @@ const sendMessage = async (
   ) {
     throw new AppError(
       403,
-      `Your chat is temporarily restricted until ${new Date(
-        sender.moderation.chatRestrictedUntil,
-      ).toLocaleString()} due to policy violations.`,
+      "CHAT_RESTRICTED",
+      { until: new Date(sender.moderation.chatRestrictedUntil) },
     );
   }
 
   // 2. Fetch conversation
   const conversation = await Conversation.findById(conversationId);
   if (!conversation) {
-    throw new AppError(404, "Conversation not found");
+    throw new AppError(404, "CONVERSATION_NOT_FOUND");
   }
 
   const isParticipant = conversation.participants.some(
@@ -284,13 +283,13 @@ const sendMessage = async (
   );
 
   if (!isParticipant) {
-    throw new AppError(403, "You are not a participant in this conversation");
+    throw new AppError(403, "NOT_CONVERSATION_PARTICIPANT");
   }
 
   // 3. Voice note policy check
   if (payload.type === MessageType.voice) {
     if (!voiceAllowedFor(conversation.type)) {
-      throw new AppError(400, "Voice notes are not available in this chat.");
+      throw new AppError(400, "VOICE_NOT_ALLOWED");
     }
   }
 
@@ -478,7 +477,7 @@ const markConversationAsRead = async (
 ): Promise<IConversation> => {
   const conversation = await Conversation.findById(conversationId);
   if (!conversation) {
-    throw new AppError(404, "Conversation not found");
+    throw new AppError(404, "CONVERSATION_NOT_FOUND");
   }
 
   const participant = conversation.participants.find(
@@ -517,7 +516,7 @@ const getModerationViolationsAdmin = async (query: {
   if (query.rule) filter.rule = query.rule;
   if (query.action) filter.action = query.action;
   if (query.userId) {
-    if (!Types.ObjectId.isValid(query.userId)) throw new AppError(400, "Invalid userId");
+    if (!Types.ObjectId.isValid(query.userId)) throw new AppError(400, "INVALID_ID");
     filter.userId = new Types.ObjectId(query.userId);
   }
 
@@ -546,7 +545,7 @@ const getModerationViolationsAdmin = async (query: {
 const liftUserChatRestrictionAdmin = async (targetUserId: string) => {
   const user = await User.findById(targetUserId);
   if (!user) {
-    throw new AppError(404, "User not found");
+    throw new AppError(404, "ACCOUNT_NOT_FOUND");
   }
 
   // Fresh start: otherwise the very next flagged message suspends them again

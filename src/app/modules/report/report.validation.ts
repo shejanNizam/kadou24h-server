@@ -4,10 +4,10 @@ import { ReportStatus, ReportTargetType } from "./report.interface";
 const createReportZodSchema = z.object({
   body: z.object({
     targetType: z.nativeEnum(ReportTargetType),
-    targetId: z.string().min(1, "Target ID is required"),
+    targetId: z.string().min(1, "FIELD_REQUIRED"),
     orderId: z.string().optional(),
     conversationId: z.string().optional(),
-    reason: z.string().min(2, "Reason is required"),
+    reason: z.string().min(2, "REASON_TOO_SHORT"),
     description: z.string().optional(),
   }),
 });

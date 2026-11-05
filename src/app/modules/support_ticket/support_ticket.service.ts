@@ -32,7 +32,7 @@ const createTicket = async (
 ): Promise<ISupportTicket> => {
   const user = await User.findById(userId);
   if (!user || user.isDeleted) {
-    throw new AppError(404, "User not found");
+    throw new AppError(404, "ACCOUNT_NOT_FOUND");
   }
 
   const effectiveMode = payload.userMode || userMode || user.lastActiveMode || AppMode.customer;
@@ -116,11 +116,11 @@ const getTicketById = async (
     .populate("assignedTo", "name email");
 
   if (!ticket) {
-    throw new AppError(404, "Support ticket not found");
+    throw new AppError(404, "TICKET_NOT_FOUND");
   }
 
   if (!isAdmin && ticket.userId._id?.toString() !== userId.toString() && ticket.userId.toString() !== userId.toString()) {
-    throw new AppError(403, "You do not have permission to view this ticket");
+    throw new AppError(403, "TICKET_FORBIDDEN");
   }
 
   return ticket;
@@ -181,12 +181,12 @@ const assignTicketAdmin = async (
 ): Promise<ISupportTicket> => {
   const ticket = await SupportTicket.findById(ticketId);
   if (!ticket) {
-    throw new AppError(404, "Support ticket not found");
+    throw new AppError(404, "TICKET_NOT_FOUND");
   }
 
   const staffUser = await User.findById(assignedTo);
   if (!staffUser) {
-    throw new AppError(404, "Assigned staff member not found");
+    throw new AppError(404, "STAFF_NOT_FOUND");
   }
 
   const before = { assignedTo: ticket.assignedTo };
@@ -215,7 +215,7 @@ const updateTicketStatusAdmin = async (
 ): Promise<ISupportTicket> => {
   const ticket = await SupportTicket.findById(ticketId);
   if (!ticket) {
-    throw new AppError(404, "Support ticket not found");
+    throw new AppError(404, "TICKET_NOT_FOUND");
   }
 
   const before = { status: ticket.status, resolution: ticket.resolution };

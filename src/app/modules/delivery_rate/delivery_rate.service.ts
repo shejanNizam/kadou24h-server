@@ -43,7 +43,7 @@ const calculateDeliveryFee = async (
     if (!params.fromStationId || !params.toStationId) {
       throw new AppError(
         httpStatus.BAD_REQUEST,
-        "fromStationId and toStationId are required for intercity delivery",
+        "STATIONS_REQUIRED",
       );
     }
 
@@ -57,7 +57,7 @@ const calculateDeliveryFee = async (
     if (!rate || rate.fee === undefined) {
       throw new AppError(
         httpStatus.NOT_FOUND,
-        "No active intercity route found for the selected stations",
+        "NO_INTERCITY_ROUTE",
       );
     }
 
@@ -72,7 +72,7 @@ const calculateDeliveryFee = async (
   if (!params.vendorLocation || !params.customerLocation) {
     throw new AppError(
       httpStatus.BAD_REQUEST,
-      "vendorLocation and customerLocation [lng, lat] are required for local delivery",
+      "LOCATIONS_REQUIRED",
     );
   }
 
@@ -172,7 +172,7 @@ const getDeliveryRateById = async (id: string) => {
     .populate("toStationId", "name city location");
 
   if (!rate) {
-    throw new AppError(httpStatus.NOT_FOUND, "Delivery rate not found");
+    throw new AppError(httpStatus.NOT_FOUND, "DELIVERY_RATE_NOT_FOUND");
   }
   return rate;
 };
@@ -189,7 +189,7 @@ const updateDeliveryRate = async (
   );
 
   if (!rate) {
-    throw new AppError(httpStatus.NOT_FOUND, "Delivery rate not found");
+    throw new AppError(httpStatus.NOT_FOUND, "DELIVERY_RATE_NOT_FOUND");
   }
 
   await AuditLogServices.record({
@@ -211,7 +211,7 @@ const deleteDeliveryRate = async (id: string, actorId: string) => {
   );
 
   if (!rate) {
-    throw new AppError(httpStatus.NOT_FOUND, "Delivery rate not found");
+    throw new AppError(httpStatus.NOT_FOUND, "DELIVERY_RATE_NOT_FOUND");
   }
 
   await AuditLogServices.record({

@@ -47,7 +47,7 @@ const uniqueSlug = async (name: ILocalizedText, type: CategoryType) => {
 const assertCategory = async (id: string, type: CategoryType) => {
   const category = await Category.findOne({ _id: id, type, isActive: true });
   if (!category) {
-    throw new AppError(httpStatus.BAD_REQUEST, `Invalid or inactive ${type} category`);
+    throw new AppError(httpStatus.BAD_REQUEST, "CATEGORY_INVALID", { type });
   }
   return category;
 };
@@ -79,7 +79,7 @@ const getCategoryTree = async (type: CategoryType) => {
 
 const getSingleCategory = async (id: string) => {
   const category = await Category.findById(id).lean();
-  if (!category) throw new AppError(httpStatus.NOT_FOUND, "Category not found");
+  if (!category) throw new AppError(httpStatus.NOT_FOUND, "CATEGORY_NOT_FOUND");
   return category;
 };
 
@@ -98,12 +98,12 @@ const createCategory = async (
 ) => {
   if (payload.parentId) {
     const parent = await Category.findById(payload.parentId);
-    if (!parent) throw new AppError(httpStatus.BAD_REQUEST, "Parent category not found");
+    if (!parent) throw new AppError(httpStatus.BAD_REQUEST, "PARENT_CATEGORY_NOT_FOUND");
     if (parent.type !== payload.type) {
-      throw new AppError(httpStatus.BAD_REQUEST, "Subcategory must have the same type as its parent");
+      throw new AppError(httpStatus.BAD_REQUEST, "SUBCATEGORY_TYPE_MISMATCH");
     }
     if (parent.parentId) {
-      throw new AppError(httpStatus.BAD_REQUEST, "Only two levels are allowed (category → subcategory)");
+      throw new AppError(httpStatus.BAD_REQUEST, "CATEGORY_TOO_DEEP");
     }
   }
 
@@ -132,7 +132,7 @@ const updateCategory = async (
   actorId: string,
 ) => {
   const category = await Category.findById(id);
-  if (!category) throw new AppError(httpStatus.NOT_FOUND, "Category not found");
+  if (!category) throw new AppError(httpStatus.NOT_FOUND, "CATEGORY_NOT_FOUND");
 
   const before = category.toObject() as unknown as Record<string, unknown>;
   const { name, image, ...rest } = payload;
@@ -158,13 +158,13 @@ const updateCategory = async (
 // Hard delete only when nothing hangs under it; otherwise deactivate instead.
 const deleteCategory = async (id: string, actorId: string) => {
   const category = await Category.findById(id);
-  if (!category) throw new AppError(httpStatus.NOT_FOUND, "Category not found");
+  if (!category) throw new AppError(httpStatus.NOT_FOUND, "CATEGORY_NOT_FOUND");
 
   const hasChildren = await Category.exists({ parentId: id });
   if (hasChildren) {
     throw new AppError(
       httpStatus.CONFLICT,
-      "This category has subcategories. Delete them first or deactivate it (isActive: false).",
+      "CATEGORY_HAS_CHILDREN",
     );
   }
 
@@ -175,17 +175,8 @@ const deleteCategory = async (id: string, actorId: string) => {
     Job.countDocuments({ categoryId: id }),
     ProfessionalProfile.countDocuments({ serviceCategoryId: id }),
   ]);
-  const inUse = [
-    products && `${products} product(s)`,
-    vendors && `${vendors} store(s)`,
-    jobs && `${jobs} job(s)`,
-    workers && `${workers} worker profile(s)`,
-  ].filter(Boolean);
-  if (inUse.length) {
-    throw new AppError(
-      httpStatus.CONFLICT,
-      `This category is used by ${inUse.join(", ")}. Deactivate it instead (it disappears from the app but the data stays valid).`,
-    );
+  if (products || vendors || jobs || workers) {
+    throw new AppError(httpStatus.CONFLICT, "CATEGORY_IN_USE", { products, stores: vendors, jobs, workers });
   }
 
   await category.deleteOne();

@@ -11,7 +11,7 @@ const addressFields = {
   fullName: nameSchema,
   phone: phoneSchema,
   region: text(60),
-  city: text(60).min(2, { message: "City is required" }),
+  city: text(60).min(2, { message: "TEXT_TOO_SHORT" }),
   commune: text(60),
   neighborhood: text(80),
   landmark: text(200),

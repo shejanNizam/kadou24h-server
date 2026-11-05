@@ -15,7 +15,7 @@ const vehicleSchema = z
 const transitRouteSchema = z
   .object({ fromStationId: objectIdSchema, toStationId: objectIdSchema })
   .refine((r) => r.fromStationId !== r.toStationId, {
-    message: "A route needs two different stations",
+    message: "ROUTE_STATIONS_SAME",
   });
 
 // Draft — any subset; completeness is checked on submit

@@ -25,11 +25,11 @@ const recomputeWorkerRating = async (workerProfileId: Types.ObjectId) => {
 
 const createReview = async (customerId: string, bookingId: string, payload: { rating: number; comment?: string; photos?: IFileRef[] }) => {
   const booking = Types.ObjectId.isValid(bookingId) ? await Booking.findById(bookingId) : null;
-  if (!booking || String(booking.customerId) !== customerId) throw new AppError(httpStatus.NOT_FOUND, "Booking not found");
+  if (!booking || String(booking.customerId) !== customerId) throw new AppError(httpStatus.NOT_FOUND, "BOOKING_NOT_FOUND");
   if (booking.status !== BookingStatus.completed) {
-    throw new AppError(httpStatus.BAD_REQUEST, "You can review a worker once the job is completed");
+    throw new AppError(httpStatus.BAD_REQUEST, "BOOKING_REVIEW_TOO_EARLY");
   }
-  if (booking.reviewId) throw new AppError(httpStatus.CONFLICT, "You already reviewed this booking");
+  if (booking.reviewId) throw new AppError(httpStatus.CONFLICT, "BOOKING_ALREADY_REVIEWED");
 
   let review;
   try {
@@ -43,7 +43,7 @@ const createReview = async (customerId: string, bookingId: string, payload: { ra
       photos: payload.photos ?? [],
     });
   } catch (error) {
-    if ((error as { code?: number }).code === 11000) throw new AppError(httpStatus.CONFLICT, "You already reviewed this booking");
+    if ((error as { code?: number }).code === 11000) throw new AppError(httpStatus.CONFLICT, "BOOKING_ALREADY_REVIEWED");
     throw error;
   }
   booking.reviewId = review._id as Types.ObjectId;
@@ -55,7 +55,7 @@ const createReview = async (customerId: string, bookingId: string, payload: { ra
 
 /** Public: a worker's visible reviews (author name + avatar only). */
 const getWorkerReviews = async (workerProfileId: string, query: { page?: number; limit?: number }) => {
-  if (!Types.ObjectId.isValid(workerProfileId)) throw new AppError(httpStatus.NOT_FOUND, "Worker profile not found");
+  if (!Types.ObjectId.isValid(workerProfileId)) throw new AppError(httpStatus.NOT_FOUND, "WORKER_NOT_FOUND");
   const page = Math.max(1, Number(query.page) || 1);
   const limit = Math.max(1, Math.min(50, Number(query.limit) || 10));
   const filter = { workerProfileId: new Types.ObjectId(workerProfileId), status: WorkerReviewStatus.visible };
@@ -101,7 +101,7 @@ const getReviewsForAdmin = async (query: { status?: string; rating?: string; pag
 
 const setReviewStatus = async (id: string, status: WorkerReviewStatus, actorId: string) => {
   const review = Types.ObjectId.isValid(id) ? await WorkerReview.findById(id) : null;
-  if (!review) throw new AppError(httpStatus.NOT_FOUND, "Review not found");
+  if (!review) throw new AppError(httpStatus.NOT_FOUND, "REVIEW_NOT_FOUND");
   const before = review.status;
   review.status = status;
   await review.save();

@@ -23,8 +23,8 @@ const firstName = (name?: string) => name?.trim().split(/\s+/)[0] ?? "";
 /** The passenger's link for one running ride (the same link if asked again) */
 const createShareLink = async (passengerId: string, rideId: string, baseUrl: string) => {
   const ride = Types.ObjectId.isValid(rideId) ? await Ride.findById(rideId).select("+shareToken passengerId status") : null;
-  if (!ride || String(ride.passengerId) !== passengerId) throw new AppError(httpStatus.NOT_FOUND, "Ride not found");
-  if (!ACTIVE_RIDE.includes(ride.status)) throw new AppError(httpStatus.BAD_REQUEST, "This ride is over: there is nothing to share");
+  if (!ride || String(ride.passengerId) !== passengerId) throw new AppError(httpStatus.NOT_FOUND, "RIDE_NOT_FOUND");
+  if (!ACTIVE_RIDE.includes(ride.status)) throw new AppError(httpStatus.BAD_REQUEST, "RIDE_SHARE_OVER");
   if (!ride.shareToken) {
     ride.shareToken = randomBytes(16).toString("base64url");
     await ride.save();
@@ -63,7 +63,7 @@ const getSharedRide = async (token: string) => {
         .populate({ path: "riderId", select: "userId vehicle vestNumber lastLocation lastLocationAt", populate: { path: "userId", select: "name avatar" } })
         .lean<SharedRide>()
     : null;
-  if (!ride) throw new AppError(httpStatus.NOT_FOUND, "This link doesn't exist or has expired");
+  if (!ride) throw new AppError(httpStatus.NOT_FOUND, "SHARE_LINK_INVALID");
 
   const base = { status: ride.status, rideNumber: ride.rideNumber, passenger: firstName(ride.passengerId?.name) };
   if (!ACTIVE_RIDE.includes(ride.status)) {
@@ -182,7 +182,7 @@ const page = (token: string, nonce: string) => `<!doctype html>
     in_progress: "On the way", shares: function (n) { return n ? n + " shares this trip with you" : "A trip is shared with you"; },
     plate: "Plate", vest: "Vest", from: "From", to: "To", updated: function (m) { return m < 1 ? "Position updated just now" : "Position updated " + m + " min ago"; },
     noPos: "Waiting for the driver's position", ended: "This trip is over", completed: "Arrived at", cancelled: "The trip was cancelled",
-    expired: "No driver was found", gone: "This link doesn't exist or has expired"
+    expired: "No driver was found", gone: "SHARE_LINK_INVALID"
   } : {
     title: "Suivi de course", searching: "Recherche d’un chauffeur", accepted: "Le chauffeur arrive au point de départ", arrived: "Le chauffeur est au point de départ",
     in_progress: "En route", shares: function (n) { return n ? n + " partage sa course avec vous" : "Une course est partagée avec vous"; },

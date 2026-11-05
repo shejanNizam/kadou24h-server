@@ -86,7 +86,7 @@ const applyRiderInput = async (profile: IRiderProfile, payload: RiderInput) => {
     if (!VEHICLES_BY_PARTNER[profile.partnerType].includes(profile.vehicle.type)) {
       throw new AppError(
         httpStatus.BAD_REQUEST,
-        `A ${profile.partnerType} partner can use: ${VEHICLES_BY_PARTNER[profile.partnerType].join(", ")}`,
+        "VEHICLE_NOT_ALLOWED", { partnerType: profile.partnerType },
       );
     }
   }
@@ -95,7 +95,7 @@ const applyRiderInput = async (profile: IRiderProfile, payload: RiderInput) => {
 const findMyProfile = async (userId: string) => {
   const profile = await RiderProfile.findOne({ userId });
   if (!profile) {
-    throw new AppError(httpStatus.NOT_FOUND, "You have not started a delivery partner application");
+    throw new AppError(httpStatus.NOT_FOUND, "RIDER_APPLICATION_NOT_STARTED");
   }
   return profile;
 };
@@ -140,7 +140,7 @@ const submitApplication = async (userId: string) => {
   ].filter(Boolean);
 
   if (missing.length) {
-    throw new AppError(httpStatus.BAD_REQUEST, `Please complete: ${missing.join(", ")}`);
+    throw new AppError(httpStatus.BAD_REQUEST, "APPLICATION_INCOMPLETE", { fields: missing.join(", ") });
   }
 
   markSubmitted(profile, userId);
@@ -151,16 +151,16 @@ const submitApplication = async (userId: string) => {
 const updateMyRiderProfile = async (userId: string, payload: RiderInput) => {
   const profile = await findMyProfile(userId);
   if (profile.approvalStatus !== ApprovalStatus.approved) {
-    throw new AppError(httpStatus.FORBIDDEN, "Your delivery partner account is not approved");
+    throw new AppError(httpStatus.FORBIDDEN, "RIDER_NOT_APPROVED");
   }
   if (payload.transitRoutes && profile.partnerType !== PartnerType.transit) {
-    throw new AppError(httpStatus.BAD_REQUEST, "Only car drivers have transit routes");
+    throw new AppError(httpStatus.BAD_REQUEST, "TRANSIT_ROUTES_ONLY_DRIVERS");
   }
   await applyRiderInput(profile, payload);
   // Can't be cleared once approved (riders approved before the rule fill them in here)
   const missing = missingSafetyIds(profile);
   if (missing.length) {
-    throw new AppError(httpStatus.BAD_REQUEST, `Please complete: ${missing.join(", ")}`);
+    throw new AppError(httpStatus.BAD_REQUEST, "APPLICATION_INCOMPLETE", { fields: missing.join(", ") });
   }
   await profile.save();
   return present(profile);
@@ -233,7 +233,7 @@ const getRidersForAdmin = async (query: Record<string, string>) => {
 
 const getRiderForAdmin = async (id: string) => {
   const base = await RiderProfile.findById(id).select("userId").lean();
-  if (!base) throw new AppError(httpStatus.NOT_FOUND, "Delivery partner not found");
+  if (!base) throw new AppError(httpStatus.NOT_FOUND, "PARTNER_NOT_FOUND");
 
   const [rider, wallet] = await Promise.all([
     RiderProfile.findById(id)
@@ -244,7 +244,7 @@ const getRiderForAdmin = async (id: string) => {
     WalletServices.ensureWallet(base.userId, WalletMode.rider),
   ]);
 
-  if (!rider) throw new AppError(httpStatus.NOT_FOUND, "Delivery partner not found");
+  if (!rider) throw new AppError(httpStatus.NOT_FOUND, "PARTNER_NOT_FOUND");
   return {
     ...present(rider),
     payoutMethods: wallet.payoutMethods,
@@ -260,9 +260,9 @@ const reviewDocument = async (
   actorId: string,
 ) => {
   const rider = await RiderProfile.findById(id);
-  if (!rider) throw new AppError(httpStatus.NOT_FOUND, "Delivery partner not found");
+  if (!rider) throw new AppError(httpStatus.NOT_FOUND, "PARTNER_NOT_FOUND");
   const doc = rider.documents.id(docId);
-  if (!doc) throw new AppError(httpStatus.NOT_FOUND, "Document not found");
+  if (!doc) throw new AppError(httpStatus.NOT_FOUND, "DOCUMENT_NOT_FOUND");
 
   doc.status = payload.status;
   doc.note = payload.note;
@@ -284,10 +284,10 @@ const reviewApplication = async (
   actorId: string,
 ) => {
   const rider = await RiderProfile.findById(id);
-  if (!rider) throw new AppError(httpStatus.NOT_FOUND, "Delivery partner not found");
+  if (!rider) throw new AppError(httpStatus.NOT_FOUND, "PARTNER_NOT_FOUND");
 
   const owner = await User.findOne({ _id: rider.userId, isDeleted: false });
-  if (!owner) throw new AppError(httpStatus.BAD_REQUEST, "The applicant's account no longer exists");
+  if (!owner) throw new AppError(httpStatus.BAD_REQUEST, "APPLICANT_ACCOUNT_GONE");
 
   const before = rider.approvalStatus;
   const status = applyReview(rider, payload.action, payload.note, actorId);

@@ -3,8 +3,8 @@ import { fileRefZodSchema, objectIdSchema } from "../../utils/commonSchemas";
 import { CategoryType } from "./category.interface";
 
 const localizedName = z.object({
-  fr: z.string().trim().min(1, { message: "French name is required" }).max(60),
-  en: z.string().trim().min(1, { message: "English name is required" }).max(60),
+  fr: z.string().trim().min(1, { message: "FIELD_REQUIRED" }).max(60),
+  en: z.string().trim().min(1, { message: "FIELD_REQUIRED" }).max(60),
 });
 
 export const createCategoryZodSchema = z

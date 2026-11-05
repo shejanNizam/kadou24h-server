@@ -19,7 +19,7 @@ const getCategories = catchAsync(async (req: Request, res: Response) => {
 const getCategoryTree = catchAsync(async (req: Request, res: Response) => {
   const type = req.query.type as CategoryType;
   if (!Object.values(CategoryType).includes(type)) {
-    throw new AppError(httpStatus.BAD_REQUEST, "Query `type` must be product, business, service or job");
+    throw new AppError(httpStatus.BAD_REQUEST, "CATEGORY_TYPE_INVALID");
   }
   const result = await CategoryServices.getCategoryTree(type);
   sendResponse(res, {

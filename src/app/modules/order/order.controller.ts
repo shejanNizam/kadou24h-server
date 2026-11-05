@@ -1,5 +1,7 @@
 import { Request, Response } from "express";
 import httpStatus from "http-status";
+import { localeOf } from "../../i18n/locale";
+import { translateError } from "../../i18n/translate";
 import catchAsync from "../../utils/catchAsync";
 import sendResponse from "../../utils/sendResponse";
 import { OrderServices } from "./order.service";
@@ -8,12 +10,17 @@ import { OrderStatus, PaymentMethod, PaymentStatus } from "./order.interface";
 
 const checkoutSummary = catchAsync(async (req: Request, res: Response) => {
   const result = await OrderServices.calculateCheckout(req.user._id, req.body);
+  const { coupon } = result;
   sendResponse(res, {
     statusCode: httpStatus.OK,
     success: true,
     message: "Checkout summary calculated successfully",
     // The promo code document stays on the server (usage counters); the app gets result.coupon
-    data: { ...result, appliedCoupon: undefined },
+    data: {
+      ...result,
+      appliedCoupon: undefined,
+      coupon: coupon?.reason ? { ...coupon, message: translateError(coupon.reason, localeOf(req), coupon.params) } : coupon,
+    },
   });
 });
 

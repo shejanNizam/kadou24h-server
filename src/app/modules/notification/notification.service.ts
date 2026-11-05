@@ -149,7 +149,7 @@ const markAsRead = async (userId: string, notificationId: string): Promise<INoti
   });
 
   if (!notification) {
-    throw new AppError(404, "Notification not found");
+    throw new AppError(404, "NOTIFICATION_NOT_FOUND");
   }
 
   notification.isRead = true;
@@ -174,7 +174,7 @@ const deleteNotification = async (userId: string, notificationId: string) => {
   const result = Types.ObjectId.isValid(notificationId)
     ? await Notification.deleteOne({ _id: notificationId, userId: new Types.ObjectId(userId) })
     : { deletedCount: 0 };
-  if (!result.deletedCount) throw new AppError(httpStatus.NOT_FOUND, "Notification not found");
+  if (!result.deletedCount) throw new AppError(httpStatus.NOT_FOUND, "NOTIFICATION_NOT_FOUND");
 };
 
 /** "Delete all" in one mode's list (with the account-wide ones that list shows) */
@@ -201,9 +201,9 @@ const getUnreadCount = async (userId: string, mode?: string) => {
  * No mode, so it shows in every role's list; always pushed; audit-logged.
  */
 const sendTeamMessage = async (adminId: string, payload: { userId: string; title: string; body: string }) => {
-  if (!Types.ObjectId.isValid(payload.userId)) throw new AppError(httpStatus.NOT_FOUND, "User not found");
+  if (!Types.ObjectId.isValid(payload.userId)) throw new AppError(httpStatus.NOT_FOUND, "ACCOUNT_NOT_FOUND");
   const user = await User.findOne({ _id: payload.userId, isDeleted: { $ne: true } }).select("_id").lean();
-  if (!user) throw new AppError(httpStatus.NOT_FOUND, "User not found");
+  if (!user) throw new AppError(httpStatus.NOT_FOUND, "ACCOUNT_NOT_FOUND");
   const notification = await createNotification({
     userId: user._id,
     type: NotificationType.team_message,
@@ -224,7 +224,7 @@ const sendTeamMessage = async (adminId: string, payload: { userId: string; title
 
 /** Team messages already sent to a user (newest first) */
 const getTeamMessages = async (userId: string) => {
-  if (!Types.ObjectId.isValid(userId)) throw new AppError(httpStatus.NOT_FOUND, "User not found");
+  if (!Types.ObjectId.isValid(userId)) throw new AppError(httpStatus.NOT_FOUND, "ACCOUNT_NOT_FOUND");
   return Notification.find({ userId: new Types.ObjectId(userId), type: NotificationType.team_message })
     .select("title body isRead createdAt")
     .sort({ createdAt: -1 })

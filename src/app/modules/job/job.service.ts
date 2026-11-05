@@ -98,7 +98,7 @@ const updateJob = async (
   payload: Partial<IJob> & { location?: { lat: number; lng: number } },
 ) => {
   const job = await Job.findOne({ _id: jobId, postedBy: userId, isDeleted: false });
-  if (!job) throw new AppError(httpStatus.NOT_FOUND, "Job not found");
+  if (!job) throw new AppError(httpStatus.NOT_FOUND, "JOB_NOT_FOUND");
 
   const { location, categoryId, ...rest } = payload;
   if (location) job.location = toGeoPoint(location);
@@ -119,10 +119,10 @@ const publishJob = async (
   paymentMethod: PaymentMethod,
 ) => {
   const job = await Job.findOne({ _id: jobId, postedBy: userId, isDeleted: false });
-  if (!job) throw new AppError(httpStatus.NOT_FOUND, "Job not found");
+  if (!job) throw new AppError(httpStatus.NOT_FOUND, "JOB_NOT_FOUND");
 
   if (job.status === JobStatus.published && job.expiresAt && job.expiresAt > new Date()) {
-    throw new AppError(httpStatus.BAD_REQUEST, "Job is already published");
+    throw new AppError(httpStatus.BAD_REQUEST, "JOB_ALREADY_PUBLISHED");
   }
 
   // 1. Process 5,000 GNF publishing payment
@@ -151,7 +151,7 @@ const publishJob = async (
  */
 const closeJob = async (userId: string, jobId: string) => {
   const job = await Job.findOne({ _id: jobId, postedBy: userId, isDeleted: false });
-  if (!job) throw new AppError(httpStatus.NOT_FOUND, "Job not found");
+  if (!job) throw new AppError(httpStatus.NOT_FOUND, "JOB_NOT_FOUND");
 
   job.status = JobStatus.closed;
   await job.save();
@@ -234,11 +234,11 @@ const getJobDetails = async (jobId: string, viewerId?: string) => {
     .populate("categoryId", "name slug")
     .populate("postedBy", "name avatar");
 
-  if (!job) throw new AppError(httpStatus.NOT_FOUND, "Job not found");
+  if (!job) throw new AppError(httpStatus.NOT_FOUND, "JOB_NOT_FOUND");
 
   const isOwner = Boolean(viewerId && String(job.postedBy._id) === viewerId);
   if (!isOwner && [JobStatus.draft, JobStatus.pending_payment].includes(job.status)) {
-    throw new AppError(httpStatus.NOT_FOUND, "Job not found");
+    throw new AppError(httpStatus.NOT_FOUND, "JOB_NOT_FOUND");
   }
 
   // Increment views if viewer is not the creator
@@ -325,14 +325,14 @@ const applyToJob = async (
   });
 
   if (!job) {
-    throw new AppError(httpStatus.NOT_FOUND, "Job is not available for applications");
+    throw new AppError(httpStatus.NOT_FOUND, "JOB_CLOSED");
   }
 
   if (String(job.postedBy) === applicantId) {
-    throw new AppError(httpStatus.BAD_REQUEST, "Cannot apply to your own job");
+    throw new AppError(httpStatus.BAD_REQUEST, "APPLY_OWN_JOB");
   }
   if (await JobApplication.exists({ jobId: job._id, applicantId })) {
-    throw new AppError(httpStatus.CONFLICT, "You already applied to this job");
+    throw new AppError(httpStatus.CONFLICT, "JOB_ALREADY_APPLIED");
   }
 
   const profile = await ProfessionalProfile.findOne({ userId: applicantId });
@@ -400,9 +400,9 @@ const applySpontaneous = async (
     _id: payload.targetVendorId,
     approvalStatus: ApprovalStatus.approved,
   });
-  if (!vendor) throw new AppError(httpStatus.NOT_FOUND, "Vendor not found");
+  if (!vendor) throw new AppError(httpStatus.NOT_FOUND, "STORE_NOT_FOUND");
   if (String(vendor.userId) === applicantId) {
-    throw new AppError(httpStatus.BAD_REQUEST, "You cannot apply to your own store");
+    throw new AppError(httpStatus.BAD_REQUEST, "APPLY_OWN_STORE");
   }
 
   const profile = await ProfessionalProfile.findOne({ userId: applicantId });
@@ -495,16 +495,16 @@ const withPaywall = async (recruiterId: string, applications: IJobApplication[])
 const assertCanManageApplication = async (recruiterId: string, application: IJobApplication) => {
   if (application.jobId) {
     const job = await Job.findOne({ _id: application.jobId, postedBy: recruiterId });
-    if (!job) throw new AppError(httpStatus.FORBIDDEN, "Not authorized to manage this application");
+    if (!job) throw new AppError(httpStatus.FORBIDDEN, "APPLICATION_MANAGE_FORBIDDEN");
     return job;
   }
 
   const vendor = await VendorProfile.findOne({ userId: recruiterId }).select("_id");
   if (!vendor || !application.targetVendorId?.equals(vendor._id as Types.ObjectId)) {
-    throw new AppError(httpStatus.FORBIDDEN, "Not authorized to manage this application");
+    throw new AppError(httpStatus.FORBIDDEN, "APPLICATION_MANAGE_FORBIDDEN");
   }
   if (application.status === ApplicationStatus.pending_payment) {
-    throw new AppError(httpStatus.NOT_FOUND, "Application not found");
+    throw new AppError(httpStatus.NOT_FOUND, "JOB_APPLICATION_NOT_FOUND");
   }
   return null;
 };
@@ -515,7 +515,7 @@ const getReceivedApplications = async (
   query: { page?: number; limit?: number; status?: ApplicationStatus },
 ) => {
   const vendor = await VendorProfile.findOne({ userId: vendorUserId }).select("_id");
-  if (!vendor) throw new AppError(httpStatus.FORBIDDEN, "Vendor profile not found");
+  if (!vendor) throw new AppError(httpStatus.FORBIDDEN, "VENDOR_PROFILE_NOT_FOUND");
 
   const page = Math.max(1, Number(query.page) || 1);
   const limit = Math.max(1, Math.min(50, Number(query.limit) || 20));
@@ -550,7 +550,7 @@ const getJobApplicants = async (
   query: { page?: number; limit?: number; status?: ApplicationStatus; sortBy?: "match" | "date" },
 ) => {
   const job = await Job.findOne({ _id: jobId, postedBy: recruiterId });
-  if (!job) throw new AppError(httpStatus.NOT_FOUND, "Job not found or unauthorized");
+  if (!job) throw new AppError(httpStatus.NOT_FOUND, "JOB_NOT_FOUND");
 
   const page = Math.max(1, Number(query.page) || 1);
   const limit = Math.max(1, Math.min(50, Number(query.limit) || 20));
@@ -590,16 +590,16 @@ const updateApplicationStatus = async (
   status: ApplicationStatus,
 ) => {
   const application = await JobApplication.findById(applicationId);
-  if (!application) throw new AppError(httpStatus.NOT_FOUND, "Application not found");
+  if (!application) throw new AppError(httpStatus.NOT_FOUND, "JOB_APPLICATION_NOT_FOUND");
 
   const job = await assertCanManageApplication(recruiterId, application);
   // The recruiter decides; "interview" goes through scheduleInterview (date, place),
   // "withdrawn" is the candidate's own choice
   if (!RECRUITER_STATUSES.includes(status)) {
-    throw new AppError(httpStatus.BAD_REQUEST, "Use: under_review, shortlisted, hired or rejected (interview: schedule it)");
+    throw new AppError(httpStatus.BAD_REQUEST, "APPLICATION_STATUS_INVALID");
   }
   if (application.status === ApplicationStatus.withdrawn) {
-    throw new AppError(httpStatus.BAD_REQUEST, "The candidate withdrew this application");
+    throw new AppError(httpStatus.BAD_REQUEST, "CANDIDATE_WITHDREW");
   }
   if (
     job &&
@@ -645,11 +645,11 @@ const scheduleInterview = async (
   payload: { at: string | Date; location?: string; mapUrl?: string; note?: string },
 ) => {
   const application = await JobApplication.findById(applicationId);
-  if (!application) throw new AppError(httpStatus.NOT_FOUND, "Application not found");
+  if (!application) throw new AppError(httpStatus.NOT_FOUND, "JOB_APPLICATION_NOT_FOUND");
 
   const job = await assertCanManageApplication(recruiterId, application);
   if (application.status === ApplicationStatus.withdrawn) {
-    throw new AppError(httpStatus.BAD_REQUEST, "The candidate withdrew this application");
+    throw new AppError(httpStatus.BAD_REQUEST, "CANDIDATE_WITHDREW");
   }
   // A new date for the same candidate is a reschedule, not one more interview
   if (job && application.status !== ApplicationStatus.interview) {
@@ -702,7 +702,7 @@ const getApplication = async (userId: string, applicationId: string) => {
   const application = await JobApplication.findById(applicationId)
     .populate("jobId", "title organizationName organizationLogo city area salaryMin salaryMax salaryFrequency salaryCurrency status expiresAt postedBy")
     .populate("targetVendorId", "storeName logo");
-  if (!application) throw new AppError(httpStatus.NOT_FOUND, "Application not found");
+  if (!application) throw new AppError(httpStatus.NOT_FOUND, "JOB_APPLICATION_NOT_FOUND");
 
   if (String(application.applicantId) === userId) {
     return { ...application.toObject(), viewerRole: "candidate" as const };
@@ -727,7 +727,7 @@ const withdrawApplication = async (applicantId: string, applicationId: string) =
     { returnDocument: "after" },
   );
   if (!application) {
-    throw new AppError(httpStatus.BAD_REQUEST, "This application can no longer be withdrawn");
+    throw new AppError(httpStatus.BAD_REQUEST, "APPLICATION_WITHDRAW_TOO_LATE");
   }
 
   const recruiter = await recruiterOf(application);
@@ -752,7 +752,7 @@ const confirmInterview = async (applicantId: string, applicationId: string) => {
     { $set: { "interview.confirmedAt": new Date() } },
     { returnDocument: "after" },
   );
-  if (!application) throw new AppError(httpStatus.BAD_REQUEST, "There is no interview to confirm");
+  if (!application) throw new AppError(httpStatus.BAD_REQUEST, "NO_INTERVIEW");
 
   const recruiter = await recruiterOf(application);
   if (recruiter) {
@@ -826,7 +826,7 @@ const unlockCandidateCv = async (
   if (!hasApplied) {
     throw new AppError(
       httpStatus.FORBIDDEN,
-      "You can only unlock candidates who applied to your jobs or your store",
+      "UNLOCK_NOT_YOURS",
     );
   }
 

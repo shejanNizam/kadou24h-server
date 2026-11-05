@@ -169,20 +169,20 @@ const addToCart = async (userId: string, productId: string, qty: number) => {
   });
 
   if (!product) {
-    throw new AppError(httpStatus.NOT_FOUND, "Product not found");
+    throw new AppError(httpStatus.NOT_FOUND, "PRODUCT_NOT_FOUND");
   }
 
   if (product.approvalStatus !== ProductApprovalStatus.approved) {
     throw new AppError(
       httpStatus.BAD_REQUEST,
-      "Product is not approved for sale",
+      "PRODUCT_NOT_FOR_SALE",
     );
   }
 
   if (!product.isAvailable || product.stockQty <= 0) {
     throw new AppError(
       httpStatus.BAD_REQUEST,
-      "Product is currently out of stock",
+      "PRODUCT_OUT_OF_STOCK",
     );
   }
 
@@ -200,7 +200,7 @@ const addToCart = async (userId: string, productId: string, qty: number) => {
     if (newQty > product.stockQty) {
       throw new AppError(
         httpStatus.BAD_REQUEST,
-        `Cannot add ${qty} more. Only ${product.stockQty} item(s) available in stock.`,
+        "CART_ADD_OVER_STOCK", { qty, available: product.stockQty },
       );
     }
     cart.items[existingItemIndex].qty = newQty;
@@ -208,7 +208,7 @@ const addToCart = async (userId: string, productId: string, qty: number) => {
     if (qty > product.stockQty) {
       throw new AppError(
         httpStatus.BAD_REQUEST,
-        `Only ${product.stockQty} item(s) available in stock`,
+        "STOCK_ONLY", { available: product.stockQty },
       );
     }
     cart.items.push({
@@ -229,7 +229,7 @@ const updateItemQty = async (
 ) => {
   const cart = await Cart.findOne({ userId });
   if (!cart) {
-    throw new AppError(httpStatus.NOT_FOUND, "Cart not found");
+    throw new AppError(httpStatus.NOT_FOUND, "CART_NOT_FOUND");
   }
 
   const existingItemIndex = cart.items.findIndex(
@@ -237,7 +237,7 @@ const updateItemQty = async (
   );
 
   if (existingItemIndex === -1) {
-    throw new AppError(httpStatus.NOT_FOUND, "Item not found in cart");
+    throw new AppError(httpStatus.NOT_FOUND, "CART_ITEM_NOT_FOUND");
   }
 
   if (qty <= 0) {
@@ -249,13 +249,13 @@ const updateItemQty = async (
     });
 
     if (!product) {
-      throw new AppError(httpStatus.NOT_FOUND, "Product not found");
+      throw new AppError(httpStatus.NOT_FOUND, "PRODUCT_NOT_FOUND");
     }
 
     if (qty > product.stockQty) {
       throw new AppError(
         httpStatus.BAD_REQUEST,
-        `Only ${product.stockQty} item(s) available in stock`,
+        "STOCK_ONLY", { available: product.stockQty },
       );
     }
 
@@ -269,7 +269,7 @@ const updateItemQty = async (
 const removeItem = async (userId: string, productId: string) => {
   const cart = await Cart.findOne({ userId });
   if (!cart) {
-    throw new AppError(httpStatus.NOT_FOUND, "Cart not found");
+    throw new AppError(httpStatus.NOT_FOUND, "CART_NOT_FOUND");
   }
 
   cart.items = cart.items.filter((i) => String(i.productId) !== productId);

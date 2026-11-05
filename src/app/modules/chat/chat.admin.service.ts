@@ -7,6 +7,7 @@
 import httpStatus from "http-status";
 import { Types } from "mongoose";
 import AppError from "../../errorHelpers/AppError";
+import type { ErrorCode } from "../../i18n/errors";
 import { AuditLogServices } from "../audit_log/audit_log.service";
 import { ReportTargetType } from "../report/report.interface";
 import { Report } from "../report/report.model";
@@ -18,8 +19,8 @@ import { ModerationStatus } from "./chat.interface";
 const DEFAULT_AROUND = 5;
 const MAX_AROUND = 20;
 
-const oid = (id: string, what: string) => {
-  if (!Types.ObjectId.isValid(id)) throw new AppError(httpStatus.NOT_FOUND, `${what} not found`);
+const oid = (id: string, notFound: ErrorCode) => {
+  if (!Types.ObjectId.isValid(id)) throw new AppError(httpStatus.NOT_FOUND, notFound);
   return new Types.ObjectId(id);
 };
 
@@ -31,7 +32,7 @@ const contextAround = async (adminId: string, focus: { conversationId: Types.Obj
     .populate("participants.userId", "name phone avatar status moderation.violationCount")
     .populate("subOrderId", "subOrderNumber")
     .lean();
-  if (!conversation) throw new AppError(httpStatus.NOT_FOUND, "Conversation not found");
+  if (!conversation) throw new AppError(httpStatus.NOT_FOUND, "CONVERSATION_NOT_FOUND");
 
   const fields = "senderId type text mediaUrl mediaDurationSec moderationStatus moderationRules createdAt +hiddenFor";
   const target = focus.messageId ? await Message.findOne({ _id: focus.messageId, conversationId: conversation._id }).select(fields).lean() : null;
@@ -102,15 +103,15 @@ const clampAround = (value: unknown) => Math.min(MAX_AROUND, Math.max(1, Math.fl
 
 /** From a report (or any message id) */
 const getMessageContext = async (adminId: string, messageId: string, around?: unknown) => {
-  const message = await Message.findById(oid(messageId, "Message")).select("conversationId createdAt").lean();
-  if (!message) throw new AppError(httpStatus.NOT_FOUND, "Message not found");
+  const message = await Message.findById(oid(messageId, "MESSAGE_NOT_FOUND")).select("conversationId createdAt").lean();
+  if (!message) throw new AppError(httpStatus.NOT_FOUND, "MESSAGE_NOT_FOUND");
   return contextAround(adminId, { conversationId: message.conversationId, messageId: message._id, at: message.createdAt! }, clampAround(around));
 };
 
 /** From an automatic moderation violation (older ones have no message id: found by time) */
 const getViolationContext = async (adminId: string, violationId: string, around?: unknown) => {
-  const violation = await ModerationViolation.findById(oid(violationId, "Violation")).lean();
-  if (!violation?.conversationId) throw new AppError(httpStatus.NOT_FOUND, "Violation not found");
+  const violation = await ModerationViolation.findById(oid(violationId, "VIOLATION_NOT_FOUND")).lean();
+  if (!violation?.conversationId) throw new AppError(httpStatus.NOT_FOUND, "VIOLATION_NOT_FOUND");
   const at = violation.createdAt ?? new Date();
   let messageId = violation.messageId;
   if (!messageId) {

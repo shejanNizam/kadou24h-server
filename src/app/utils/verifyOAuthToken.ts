@@ -43,7 +43,7 @@ const getSigningKey = async (provider: OAuthProvider, kid: string, retry = true)
   if (!cached || Date.now() - cached.fetchedAt > JWKS_TTL_MS) {
     const res = await fetch(jwksUrl);
     if (!res.ok) {
-      throw new AppError(httpStatus.BAD_GATEWAY, `Could not reach ${provider} to verify sign-in`);
+      throw new AppError(httpStatus.BAD_GATEWAY, "OAUTH_UNREACHABLE", { provider });
     }
     const body = (await res.json()) as { keys: Jwk[] };
     cached = { keys: body.keys, fetchedAt: Date.now() };
@@ -57,7 +57,7 @@ const getSigningKey = async (provider: OAuthProvider, kid: string, retry = true)
       jwksCache.delete(provider);
       return getSigningKey(provider, kid, false);
     }
-    throw new AppError(httpStatus.UNAUTHORIZED, "Invalid sign-in token");
+    throw new AppError(httpStatus.UNAUTHORIZED, "OAUTH_TOKEN_INVALID");
   }
 
   return crypto.createPublicKey({ key: jwk, format: "jwk" } as Parameters<typeof crypto.createPublicKey>[0]);
@@ -72,12 +72,12 @@ export const verifyOAuthToken = async (
   const allowedAudiences = audiences();
 
   if (allowedAudiences.length === 0) {
-    throw new AppError(httpStatus.SERVICE_UNAVAILABLE, `${provider} sign-in is not configured`);
+    throw new AppError(httpStatus.SERVICE_UNAVAILABLE, "OAUTH_NOT_CONFIGURED", { provider });
   }
 
   const decoded = jwt.decode(idToken, { complete: true });
   if (!decoded || typeof decoded.payload === "string" || !decoded.header.kid) {
-    throw new AppError(httpStatus.UNAUTHORIZED, "Invalid sign-in token");
+    throw new AppError(httpStatus.UNAUTHORIZED, "OAUTH_TOKEN_INVALID");
   }
 
   const key = await getSigningKey(provider, decoded.header.kid);
@@ -90,11 +90,11 @@ export const verifyOAuthToken = async (
       audience: allowedAudiences as [string, ...string[]],
     }) as JwtPayload;
   } catch {
-    throw new AppError(httpStatus.UNAUTHORIZED, "Invalid or expired sign-in token");
+    throw new AppError(httpStatus.UNAUTHORIZED, "OAUTH_TOKEN_INVALID");
   }
 
   if (!payload.sub) {
-    throw new AppError(httpStatus.UNAUTHORIZED, "Invalid sign-in token");
+    throw new AppError(httpStatus.UNAUTHORIZED, "OAUTH_TOKEN_INVALID");
   }
 
   // Apple sends email_verified as a string

@@ -1,8 +1,12 @@
 import { authErrors } from "./auth";
+import { catalogErrors } from "./catalog";
+import { chatErrors } from "./chat";
 import { commonErrors } from "./common";
 import { deliveryErrors } from "./delivery";
 import { orderErrors } from "./orders";
+import { partnerErrors } from "./partners";
 import { paymentErrors } from "./payment";
+import { serviceErrors } from "./services";
 import { validationErrors } from "./validation";
 import { walletErrors } from "./wallet";
 
@@ -21,6 +25,10 @@ export const errorCatalogParts = [
   paymentErrors,
   deliveryErrors,
   walletErrors,
+  catalogErrors,
+  partnerErrors,
+  serviceErrors,
+  chatErrors,
 ] as const;
 
 type MergeParts<T extends readonly object[]> = T extends readonly [infer Head, ...infer Rest extends readonly object[]]

@@ -18,7 +18,7 @@ const assertStations = async (ids: string[]) => {
   const unique = [...new Set(ids)];
   const count = await TransitStation.countDocuments({ _id: { $in: unique }, isActive: true });
   if (count !== unique.length) {
-    throw new AppError(httpStatus.BAD_REQUEST, "One or more bus stations are invalid or inactive");
+    throw new AppError(httpStatus.BAD_REQUEST, "STATIONS_INVALID");
   }
 };
 
@@ -51,7 +51,7 @@ const updateStation = async (id: string, payload: StationInput, actorId: string)
     { $set: { ...rest, ...(location && { location: toGeoPoint(location) }) } },
     { returnDocument: "after", runValidators: true },
   );
-  if (!station) throw new AppError(httpStatus.NOT_FOUND, "Station not found");
+  if (!station) throw new AppError(httpStatus.NOT_FOUND, "STATION_NOT_FOUND");
 
   await AuditLogServices.record({
     actorId,

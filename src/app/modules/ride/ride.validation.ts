@@ -2,7 +2,7 @@ import z from "zod";
 import { latLngSchema } from "../../utils/commonSchemas";
 
 const place = latLngSchema.extend({
-  address: z.string().trim().min(2, "Say where (neighbourhood, street or landmark)").max(200),
+  address: z.string().trim().min(2, "RIDE_ADDRESS_REQUIRED").max(200),
 });
 
 export const estimateRideZodSchema = z.object({
@@ -26,5 +26,5 @@ export const rateRideZodSchema = z.object({
 });
 
 export const adminCancelRideZodSchema = z.object({
-  reason: z.string().trim().min(3, "Give a reason").max(300),
+  reason: z.string().trim().min(3, "REASON_TOO_SHORT").max(300),
 });

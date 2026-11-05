@@ -7,11 +7,11 @@ import {
 const createLocalDeliveryRateSchema = z.object({
   body: z.object({
     type: z.literal(DeliveryRateType.local),
-    city: z.string().min(1, "City is required for local rates"),
+    city: z.string().min(1, "FIELD_REQUIRED"),
     vehicleType: z.nativeEnum(DeliveryVehicleType),
-    baseFee: z.number().int().min(0, "Base fee must be non-negative"),
-    perKmFee: z.number().int().min(0, "Per km fee must be non-negative"),
-    minFee: z.number().int().min(0, "Min fee must be non-negative"),
+    baseFee: z.number().int().min(0, "NUMBER_TOO_LOW"),
+    perKmFee: z.number().int().min(0, "NUMBER_TOO_LOW"),
+    minFee: z.number().int().min(0, "NUMBER_TOO_LOW"),
     isActive: z.boolean().optional().default(true),
   }),
 });
@@ -21,15 +21,15 @@ const createIntercityDeliveryRateSchema = z.object({
     type: z.literal(DeliveryRateType.intercity),
     fromStationId: z
       .string()
-      .regex(/^[0-9a-fA-F]{24}$/, "Valid fromStationId is required"),
+      .regex(/^[0-9a-fA-F]{24}$/, "INVALID_ID"),
     toStationId: z
       .string()
-      .regex(/^[0-9a-fA-F]{24}$/, "Valid toStationId is required"),
-    fee: z.number().int().min(0, "Fee must be non-negative"),
+      .regex(/^[0-9a-fA-F]{24}$/, "INVALID_ID"),
+    fee: z.number().int().min(0, "NUMBER_TOO_LOW"),
     estimatedHours: z
       .number()
       .int()
-      .min(1, "Estimated hours must be at least 1")
+      .min(1, "NUMBER_TOO_LOW")
       .optional(),
     isActive: z.boolean().optional().default(true),
   }),

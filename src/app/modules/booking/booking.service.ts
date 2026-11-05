@@ -27,8 +27,6 @@ import { IFileRef } from "../../interfaces/common.types";
 const ACTIVE = [BookingStatus.requested, BookingStatus.accepted];
 const HISTORY = [BookingStatus.declined, BookingStatus.expired, BookingStatus.cancelled, BookingStatus.completed];
 
-const fmtDay = (date: Date) => date.toLocaleDateString("en-GB", { timeZone: "Africa/Conakry", day: "numeric", month: "long" });
-
 const step = (status: BookingStatus, by: BookingActor, note?: string) => ({ status, by, at: new Date(), ...(note ? { note } : {}) });
 
 // ── Views ───────────────────────────────────────────────────────────
@@ -105,9 +103,9 @@ const present = (b: Populated, viewerId: string, admin = false) => {
 };
 
 const load = async (id: string) => {
-  if (!Types.ObjectId.isValid(id)) throw new AppError(httpStatus.NOT_FOUND, "Booking not found");
+  if (!Types.ObjectId.isValid(id)) throw new AppError(httpStatus.NOT_FOUND, "BOOKING_NOT_FOUND");
   const booking = await Booking.findById(id).populate(POPULATE).lean<Populated>();
-  if (!booking) throw new AppError(httpStatus.NOT_FOUND, "Booking not found");
+  if (!booking) throw new AppError(httpStatus.NOT_FOUND, "BOOKING_NOT_FOUND");
   return booking;
 };
 
@@ -117,7 +115,7 @@ const view = async (id: string, viewerId: string) => present(await load(id), vie
 const getMyBooking = async (userId: string, id: string) => {
   const booking = await load(id);
   if (String(booking.customerId?._id) !== userId && String(booking.workerId?._id) !== userId) {
-    throw new AppError(httpStatus.NOT_FOUND, "Booking not found");
+    throw new AppError(httpStatus.NOT_FOUND, "BOOKING_NOT_FOUND");
   }
   const result = present(booking, userId);
   const review = booking.reviewId ? await WorkerReview.findById(booking.reviewId).select("rating comment photos status createdAt").lean() : null;
@@ -163,7 +161,7 @@ const savedAddress = async (userId: string, addressId?: string): Promise<IAddres
     ? user?.addresses?.find((a) => String(a._id) === String(addressId))
     : user?.addresses?.find((a) => a.isDefault) ?? user?.addresses?.[0];
   if (!address?.location) {
-    throw new AppError(httpStatus.BAD_REQUEST, "Please choose the address where the work will be done");
+    throw new AppError(httpStatus.BAD_REQUEST, "BOOKING_ADDRESS_REQUIRED");
   }
   return {
     fullName: address.fullName,
@@ -186,15 +184,15 @@ const createBooking = async (
   const profile = await ProfessionalProfile.findOne({ _id: payload.workerProfileId, ...publicWorkerFilter(now) }).select(
     "userId profession hourlyRate serviceCategoryId",
   );
-  if (!profile) throw new AppError(httpStatus.NOT_FOUND, "This worker is not available for bookings");
-  if (String(profile.userId) === customerId) throw new AppError(httpStatus.BAD_REQUEST, "You cannot book yourself");
+  if (!profile) throw new AppError(httpStatus.NOT_FOUND, "WORKER_UNAVAILABLE");
+  if (String(profile.userId) === customerId) throw new AppError(httpStatus.BAD_REQUEST, "BOOK_SELF");
 
   const scheduledAt = new Date(payload.scheduledAt);
   if (Number.isNaN(scheduledAt.getTime()) || scheduledAt.getTime() < now.getTime() + BOOKING.minLeadMs) {
-    throw new AppError(httpStatus.BAD_REQUEST, "Choose a date and time at least 30 minutes from now");
+    throw new AppError(httpStatus.BAD_REQUEST, "BOOKING_TOO_SOON", { minutes: Math.round(BOOKING.minLeadMs / 60_000) });
   }
   if (scheduledAt.getTime() > now.getTime() + BOOKING.maxAheadMs) {
-    throw new AppError(httpStatus.BAD_REQUEST, "You can book up to 60 days ahead");
+    throw new AppError(httpStatus.BAD_REQUEST, "BOOKING_TOO_FAR", { days: Math.round(BOOKING.maxAheadMs / 86_400_000) });
   }
 
   const me = new Types.ObjectId(customerId);
@@ -205,11 +203,11 @@ const createBooking = async (
     BookingPenalty.customerLimitedUntil(me, now),
   ]);
   if (limitedUntil && activeCount > 0) {
-    throw new AppError(httpStatus.BAD_REQUEST, `Your bookings are limited to one at a time until ${fmtDay(limitedUntil)}`);
+    throw new AppError(httpStatus.BAD_REQUEST, "BOOKING_LIMITED", { until: limitedUntil });
   }
-  if (sameWorker) throw new AppError(httpStatus.CONFLICT, "You already have an open booking with this worker");
+  if (sameWorker) throw new AppError(httpStatus.CONFLICT, "BOOKING_DUPLICATE");
   if (openRequests >= BOOKING.maxOpenRequests) {
-    throw new AppError(httpStatus.BAD_REQUEST, `You can have up to ${BOOKING.maxOpenRequests} requests waiting for an answer`);
+    throw new AppError(httpStatus.BAD_REQUEST, "BOOKING_TOO_MANY_REQUESTS", { max: BOOKING.maxOpenRequests });
   }
 
   const address = await savedAddress(customerId, payload.addressId);
@@ -260,10 +258,15 @@ const transition = async (
 };
 
 /** Why an action failed: not yours / wrong status */
-const explain = async (id: string, userId: string, field: "customerId" | "workerId", what: string) => {
+const explain = async (
+  id: string,
+  userId: string,
+  field: "customerId" | "workerId",
+  action: "accept" | "decline" | "finish" | "confirm" | "reopen",
+) => {
   const b = Types.ObjectId.isValid(id) ? await Booking.findById(id).select("customerId workerId status").lean() : null;
-  if (!b || String(b[field]) !== userId) throw new AppError(httpStatus.NOT_FOUND, "Booking not found");
-  throw new AppError(httpStatus.BAD_REQUEST, `This booking is ${b.status}: you can't ${what} it`);
+  if (!b || String(b[field]) !== userId) throw new AppError(httpStatus.NOT_FOUND, "BOOKING_NOT_FOUND");
+  throw new AppError(httpStatus.BAD_REQUEST, "BOOKING_ACTION_NOT_ALLOWED", { status: b.status, action });
 };
 
 const nameOf = async (userId: Types.ObjectId) => (await User.findById(userId).select("name").lean())?.name ?? "";
@@ -275,20 +278,20 @@ const accept = async (workerId: string, id: string) => {
   if (!booking) return explain(id, workerId, "workerId", "accept");
   const profile = await ProfessionalProfile.findOne({ userId: workerId }).select("approvalStatus bookingPenalty");
   if (!profile || profile.approvalStatus !== ApprovalStatus.approved) {
-    throw new AppError(httpStatus.FORBIDDEN, "Your worker profile is not approved");
+    throw new AppError(httpStatus.FORBIDDEN, "WORKER_NOT_APPROVED");
   }
   const penalty = profile.bookingPenalty;
   if (penalty?.suspendedUntil && penalty.suspendedUntil > now) {
-    throw new AppError(httpStatus.FORBIDDEN, `Your bookings are suspended until ${fmtDay(penalty.suspendedUntil)}`);
+    throw new AppError(httpStatus.FORBIDDEN, "WORKER_SUSPENDED", { until: penalty.suspendedUntil });
   }
   if (penalty?.limitedUntil && penalty.limitedUntil > now) {
     const busy = await Booking.exists({ workerId, status: { $in: [BookingStatus.accepted, BookingStatus.done] }, _id: { $ne: id } });
-    if (busy) throw new AppError(httpStatus.BAD_REQUEST, `You can only have one booking at a time until ${fmtDay(penalty.limitedUntil)}`);
+    if (busy) throw new AppError(httpStatus.BAD_REQUEST, "WORKER_LIMITED", { until: penalty.limitedUntil });
   }
 
   if (booking.respondBy <= now) {
     await expireOne(id);
-    throw new AppError(httpStatus.BAD_REQUEST, "This request has expired");
+    throw new AppError(httpStatus.BAD_REQUEST, "BOOKING_EXPIRED");
   }
   const updated = await transition(id, { field: "workerId", userId: workerId }, [BookingStatus.requested], { acceptedAt: now }, step(BookingStatus.accepted, "worker"));
   if (!updated) return explain(id, workerId, "workerId", "accept");
@@ -315,25 +318,25 @@ const decline = async (workerId: string, id: string, reason?: string) => {
  */
 const cancel = async (userId: string, id: string, reason?: string) => {
   const current = Types.ObjectId.isValid(id) ? await Booking.findById(id).select("customerId workerId status") : null;
-  if (!current) throw new AppError(httpStatus.NOT_FOUND, "Booking not found");
+  if (!current) throw new AppError(httpStatus.NOT_FOUND, "BOOKING_NOT_FOUND");
   const isCustomer = String(current.customerId) === userId;
   const isWorker = String(current.workerId) === userId;
-  if (!isCustomer && !isWorker) throw new AppError(httpStatus.NOT_FOUND, "Booking not found");
+  if (!isCustomer && !isWorker) throw new AppError(httpStatus.NOT_FOUND, "BOOKING_NOT_FOUND");
 
   if (isWorker && current.status === BookingStatus.requested) {
     return { booking: await decline(userId, id, reason), penalty: null };
   }
   if (current.status === BookingStatus.done) {
-    throw new AppError(httpStatus.BAD_REQUEST, "The job is marked as done: confirm it or say it is not finished");
+    throw new AppError(httpStatus.BAD_REQUEST, "BOOKING_DONE_CONFIRM");
   }
   const counted = current.status === BookingStatus.accepted;
   if (counted && (reason?.trim().length ?? 0) < 3) {
-    throw new AppError(httpStatus.BAD_REQUEST, "Please give the reason for cancelling");
+    throw new AppError(httpStatus.BAD_REQUEST, "CANCEL_REASON_REQUIRED");
   }
   const by = isCustomer ? "customer" : "worker";
   const from = isCustomer ? [BookingStatus.requested, BookingStatus.accepted] : [BookingStatus.accepted];
   if (!from.includes(current.status)) {
-    throw new AppError(httpStatus.BAD_REQUEST, `This booking is ${current.status}: you can't cancel it`);
+    throw new AppError(httpStatus.BAD_REQUEST, "BOOKING_ACTION_NOT_ALLOWED", { status: current.status, action: "cancel" });
   }
   const updated = await transition(
     id,
@@ -344,7 +347,7 @@ const cancel = async (userId: string, id: string, reason?: string) => {
     step(BookingStatus.cancelled, by, reason),
   );
   if (!updated) {
-    throw new AppError(httpStatus.CONFLICT, "This booking has just changed. Please refresh");
+    throw new AppError(httpStatus.CONFLICT, "BOOKING_CHANGED");
   }
   BookingNotify.cancelled(updated, by, reason);
   const strike = counted ? await BookingPenalty.addStrike(updated, isCustomer ? StrikeRole.customer : StrikeRole.worker) : null;
@@ -501,7 +504,7 @@ const cancelByAdmin = async (id: string, reason: string, actorId: string) => {
     { cancelledAt: new Date(), cancelledBy: "admin", cancelCounted: false, cancelReason: reason },
     step(BookingStatus.cancelled, "admin", reason),
   );
-  if (!updated) throw new AppError(httpStatus.BAD_REQUEST, "Only an open booking can be cancelled");
+  if (!updated) throw new AppError(httpStatus.BAD_REQUEST, "BOOKING_NOT_OPEN");
   BookingNotify.cancelled(updated, "admin", reason);
   await AuditLogServices.record({ actorId, action: "booking.cancel", targetType: "booking", targetId: id, after: { reason } });
   return getBookingForAdmin(id);

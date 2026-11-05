@@ -82,6 +82,42 @@ export const validationErrors = {
     en: "The amount must be at least {minimum, number} GNF.",
     fr: "Le montant doit être d'au moins {minimum, number} GNF.",
   },
+  TEXT_TOO_SHORT: {
+    en: "Must be at least {minimum} characters.",
+    fr: "Doit contenir au moins {minimum} caractères.",
+  },
+  NUMBER_TOO_LOW: {
+    en: "Must be at least {minimum, number}.",
+    fr: "Doit être au moins {minimum, number}.",
+  },
+  NUMBER_TOO_HIGH: {
+    en: "Cannot be more than {maximum, number}.",
+    fr: "Ne peut pas dépasser {maximum, number}.",
+  },
+  WHOLE_NUMBER: {
+    en: "Must be a whole number.",
+    fr: "Doit être un nombre entier.",
+  },
+  END_DATE_REQUIRED: {
+    en: "Choose an end date.",
+    fr: "Choisissez une date de fin.",
+  },
+  END_DATE_BEFORE_START: {
+    en: "The end date must be after the start date.",
+    fr: "La date de fin doit être postérieure à la date de début.",
+  },
+  CURRENCY_CODE_INVALID: {
+    en: "The currency must be a 3-letter code.",
+    fr: "La devise doit être un code de 3 lettres.",
+  },
+  TEXT_TOO_LONG: {
+    en: "Must be at most {maximum} characters.",
+    fr: "Doit contenir au plus {maximum} caractères.",
+  },
+  TIME_FORMAT: {
+    en: "Use the HH:mm format.",
+    fr: "Utilisez le format HH:mm.",
+  },
   PIN_FORMAT: {
     en: "The code must be exactly 4 digits.",
     fr: "Le code doit contenir exactement 4 chiffres.",

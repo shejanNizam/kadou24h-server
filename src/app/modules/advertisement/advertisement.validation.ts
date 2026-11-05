@@ -3,11 +3,11 @@ import { AdPlacement, AdStatus, AdType } from "./advertisement.interface";
 
 const createAdZodSchema = z.object({
   body: z.object({
-    name: z.string().min(2, "Name must be at least 2 characters"),
-    advertiserName: z.string().min(2, "Advertiser name is required"),
+    name: z.string().min(2, "TEXT_TOO_SHORT"),
+    advertiserName: z.string().min(2, "TEXT_TOO_SHORT"),
     type: z.nativeEnum(AdType).default(AdType.banner),
     placement: z.nativeEnum(AdPlacement),
-    images: z.array(z.string().url()).min(1, "At least one image URL is required"),
+    images: z.array(z.string().url()).min(1, "IMAGES_REQUIRED"),
     linkUrl: z.string().url().optional(),
     description: z.string().optional(),
     startAt: z.string().datetime().or(z.string()),

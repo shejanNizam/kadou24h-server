@@ -3,6 +3,7 @@ import { v2 as cloudinary, UploadApiResponse } from "cloudinary";
 import httpStatus from "http-status";
 import { configs } from "./index";
 import AppError from "../errorHelpers/AppError";
+import { logger } from "../utils/logger";
 
 cloudinary.config({
   cloud_name: configs.CLOUDINARY.cloudinary_cloud_name,
@@ -28,10 +29,8 @@ export const uploadBufferToCloudinary = async (
         .end(buffer);
     });
   } catch (error: any) {
-    throw new AppError(
-      httpStatus.INTERNAL_SERVER_ERROR,
-      `Error uploading file: ${error.message}`,
-    );
+    logger.error("Cloudinary upload failed", { error: error.message });
+    throw new AppError(httpStatus.INTERNAL_SERVER_ERROR, "UPLOAD_FAILED");
   }
 };
 
@@ -50,10 +49,8 @@ export const deleteFromCloudinary = async (url: string): Promise<void> => {
     if (!public_id) return;
     await cloudinary.uploader.destroy(public_id, { resource_type: "auto" });
   } catch (error: any) {
-    throw new AppError(
-      httpStatus.INTERNAL_SERVER_ERROR,
-      `Cloudinary deletion failed: ${error.message}`,
-    );
+    logger.error("Cloudinary deletion failed", { error: error.message });
+    throw new AppError(httpStatus.INTERNAL_SERVER_ERROR, "FILE_DELETE_FAILED");
   }
 };
 

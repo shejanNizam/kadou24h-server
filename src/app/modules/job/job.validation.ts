@@ -17,7 +17,7 @@ export const createJobSchema = z.object({
   title: z.string().trim().min(3).max(120),
   categoryId: z
     .string()
-    .regex(/^[0-9a-fA-F]{24}$/, "Valid categoryId required")
+    .regex(/^[0-9a-fA-F]{24}$/, "INVALID_ID")
     .optional(),
   jobType: z.enum(Object.values(JobType) as [string, ...string[]]),
   workplace: z.enum(Object.values(WorkplaceType) as [string, ...string[]]),
@@ -56,11 +56,11 @@ export const updateJobSchema = createJobSchema
   .partial();
 
 export const publishJobSchema = z.object({
-  paymentMethod: z.enum(["orange_money", "mobile_money", "card"], { error: "Choose Orange Money, Mobile Money or card" }),
+  paymentMethod: z.enum(["orange_money", "mobile_money", "card"], { error: "PAYMENT_METHOD_ONLINE" }),
 });
 
 export const applyJobSchema = z.object({
-  jobId: z.string().regex(/^[0-9a-fA-F]{24}$/, "Valid jobId required"),
+  jobId: z.string().regex(/^[0-9a-fA-F]{24}$/, "INVALID_ID"),
   resume: fileRefZod.optional(),
   coverNote: z.string().trim().max(1000).optional(),
 });
@@ -68,10 +68,10 @@ export const applyJobSchema = z.object({
 export const applySpontaneousSchema = z.object({
   targetVendorId: z
     .string()
-    .regex(/^[0-9a-fA-F]{24}$/, "Valid targetVendorId required"),
+    .regex(/^[0-9a-fA-F]{24}$/, "INVALID_ID"),
   resume: fileRefZod.optional(),
   coverNote: z.string().trim().max(1000).optional(),
-  paymentMethod: z.enum(["orange_money", "mobile_money", "card"], { error: "Choose Orange Money, Mobile Money or card" }),
+  paymentMethod: z.enum(["orange_money", "mobile_money", "card"], { error: "PAYMENT_METHOD_ONLINE" }),
 });
 
 export const updateApplicationStatusSchema = z.object({
@@ -86,6 +86,6 @@ export const scheduleInterviewSchema = z.object({
 });
 
 // Fees (CV unlock, job publish, spontaneous application) are paid online only
-const onlineMethod = z.enum(["orange_money", "mobile_money", "card"], { error: "Choose Orange Money, Mobile Money or card" });
+const onlineMethod = z.enum(["orange_money", "mobile_money", "card"], { error: "PAYMENT_METHOD_ONLINE" });
 
 export const unlockCvSchema = z.object({ paymentMethod: onlineMethod });

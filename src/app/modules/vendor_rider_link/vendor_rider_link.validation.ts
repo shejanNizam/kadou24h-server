@@ -6,5 +6,5 @@ export const inviteRiderZodSchema = z.object({ riderId: objectIdSchema });
 export const requestVendorZodSchema = z.object({ vendorId: objectIdSchema });
 
 export const respondLinkZodSchema = z.object({
-  accept: z.boolean({ error: "accept must be true or false" }),
+  accept: z.boolean(),
 });

@@ -15,6 +15,7 @@
 import httpStatus from "http-status";
 import { Types } from "mongoose";
 import AppError from "../../errorHelpers/AppError";
+import type { ErrorCode } from "../../i18n/errors";
 import { emitToUser } from "../../../socket/socket";
 import { ILatLng } from "../../interfaces/common.types";
 import { toGeoPoint } from "../../utils/commonSchemas";
@@ -76,11 +77,11 @@ interface PlaceInput extends ILatLng {
 const quote = async (pickup: ILatLng, dropoff: ILatLng) => {
   const settings = await SettingsServices.getSettings();
   const rides = settings.rides ?? { enabled: true, baseFare: 3000, perKm: 1500, minFare: 5000 };
-  if (rides.enabled === false) throw new AppError(httpStatus.BAD_REQUEST, "Moto-taxi is not available right now");
+  if (rides.enabled === false) throw new AppError(httpStatus.BAD_REQUEST, "RIDE_SERVICE_OFF");
   const straight = calculateDistanceKm([pickup.lng, pickup.lat], [dropoff.lng, dropoff.lat]);
-  if (straight < RIDE.minKm) throw new AppError(httpStatus.BAD_REQUEST, "The pickup and the destination are too close");
+  if (straight < RIDE.minKm) throw new AppError(httpStatus.BAD_REQUEST, "RIDE_TOO_CLOSE");
   const distanceKm = round1(straight * RIDE.roadFactor);
-  if (distanceKm > RIDE.maxKm) throw new AppError(httpStatus.BAD_REQUEST, "This trip is too long for a moto-taxi");
+  if (distanceKm > RIDE.maxKm) throw new AppError(httpStatus.BAD_REQUEST, "RIDE_TOO_LONG");
   const raw = rides.baseFare + rides.perKm * distanceKm;
   const fare = Math.max(rides.minFare, Math.ceil(raw / RIDE.roundTo) * RIDE.roundTo);
   const durationMin = Math.max(3, Math.round((distanceKm / RIDE.speedKmh) * 60));
@@ -134,19 +135,19 @@ const availableRiders = async (point: [number, number], now = Date.now()) => {
 };
 
 /** Why this rider can't take a ride now (null = can) */
-const riderBlocker = async (rider: RiderLite) => {
+const riderBlocker = async (rider: RiderLite): Promise<ErrorCode | null> => {
   if (rider.approvalStatus !== ApprovalStatus.approved || rider.partnerType !== PartnerType.moto) {
-    return "Only approved moto riders can take rides";
+    return "RIDE_ONLY_MOTO";
   }
   if (missingSafetyIds(rider).length) {
-    return "Add your plate and vest number (Profile → My vehicle) to take passengers";
+    return "RIDE_SAFETY_IDS_MISSING";
   }
   if (!rideAccessState(rider, await rideSettings()).allowed) {
-    return "Your moto-taxi subscription has ended. Choose a plan to receive passengers again";
+    return "RIDE_SUBSCRIPTION_ENDED";
   }
-  if (!rider.isOnline) return "Go online to take rides";
-  if ((rider.activeDeliveryCount ?? 0) > 0) return "Finish your deliveries before taking a passenger";
-  if (await Ride.exists({ riderId: rider._id, status: { $in: WITH_RIDER } })) return "Finish your current ride first";
+  if (!rider.isOnline) return "GO_ONLINE_FOR_RIDES";
+  if ((rider.activeDeliveryCount ?? 0) > 0) return "FINISH_DELIVERIES_FIRST";
+  if (await Ride.exists({ riderId: rider._id, status: { $in: WITH_RIDER } })) return "FINISH_CURRENT_RIDE";
   return null;
 };
 
@@ -243,7 +244,7 @@ const estimate = async (passengerId: string, payload: { pickup: ILatLng; dropoff
 
 const requestRide = async (passengerId: string, payload: { pickup: PlaceInput; dropoff: PlaceInput; note?: string }) => {
   if (await Ride.exists({ passengerId, status: { $in: ACTIVE_RIDE } })) {
-    throw new AppError(httpStatus.CONFLICT, "You already have a ride in progress");
+    throw new AppError(httpStatus.CONFLICT, "RIDE_IN_PROGRESS");
   }
   const price = await quote(payload.pickup, payload.dropoff);
   const now = new Date();
@@ -264,12 +265,12 @@ const requestRide = async (passengerId: string, payload: { pickup: PlaceInput; d
 
 const getRide = async (userId: string, id: string, isStaff = false) => {
   const ride = await loadRide(id);
-  if (!ride) throw new AppError(httpStatus.NOT_FOUND, "Ride not found");
+  if (!ride) throw new AppError(httpStatus.NOT_FOUND, "RIDE_NOT_FOUND");
   const passengerId = String((ride.passengerId as { _id?: Types.ObjectId })._id ?? ride.passengerId);
   if (passengerId === userId) return present(ride, "passenger");
   if (ride.riderId && String(ride.riderId.userId?._id) === userId) return present(ride, "rider");
   if (isStaff) return present(ride, "admin");
-  throw new AppError(httpStatus.NOT_FOUND, "Ride not found");
+  throw new AppError(httpStatus.NOT_FOUND, "RIDE_NOT_FOUND");
 };
 
 const getMyRides = async (passengerId: string, query: { page?: string; limit?: string }) => {
@@ -287,9 +288,9 @@ const getMyRides = async (passengerId: string, query: { page?: string; limit?: s
 /** "Delete from my history": hidden for the passenger only (the rider and admin keep it). Only a finished ride. */
 const hideMyRide = async (passengerId: string, id: string) => {
   const ride = Types.ObjectId.isValid(id) ? await Ride.findOne({ _id: id, passengerId }).select("status").lean() : null;
-  if (!ride) throw new AppError(httpStatus.NOT_FOUND, "Ride not found");
+  if (!ride) throw new AppError(httpStatus.NOT_FOUND, "RIDE_NOT_FOUND");
   if (ACTIVE_RIDE.includes(ride.status)) {
-    throw new AppError(httpStatus.BAD_REQUEST, "This ride is still in progress: you can delete it once it is over");
+    throw new AppError(httpStatus.BAD_REQUEST, "RIDE_DELETE_IN_PROGRESS");
   }
   await Ride.updateOne({ _id: ride._id }, { $set: { hiddenByPassengerAt: new Date() } });
 };
@@ -302,14 +303,14 @@ const getMyCurrentRide = async (passengerId: string) => {
 
 const cancelByPassenger = async (passengerId: string, id: string, reason?: string) => {
   const ride = Types.ObjectId.isValid(id) ? await Ride.findOne({ _id: id, passengerId }) : null;
-  if (!ride) throw new AppError(httpStatus.NOT_FOUND, "Ride not found");
-  if (ride.status === RideStatus.in_progress) throw new AppError(httpStatus.BAD_REQUEST, "The ride has started: it can no longer be cancelled");
+  if (!ride) throw new AppError(httpStatus.NOT_FOUND, "RIDE_NOT_FOUND");
+  if (ride.status === RideStatus.in_progress) throw new AppError(httpStatus.BAD_REQUEST, "RIDE_STARTED");
   const cancelled = await Ride.findOneAndUpdate(
     { _id: ride._id, status: { $in: [RideStatus.searching, RideStatus.accepted, RideStatus.arrived] } },
     { $set: { status: RideStatus.cancelled, cancellation: { by: "passenger", reason, at: new Date() } } },
     { returnDocument: "after" },
   );
-  if (!cancelled) throw new AppError(httpStatus.CONFLICT, "This ride was just updated. Please refresh.");
+  if (!cancelled) throw new AppError(httpStatus.CONFLICT, "RIDE_CHANGED");
   const riderUser = cancelled.riderId ? (await RiderProfile.findById(cancelled.riderId).select("userId").lean())?.userId : undefined;
   if (riderUser) RideNotify.cancelledForRider(riderUser, cancelled, "passenger");
   RideNotify.changed(cancelled, [passengerId, riderUser]);
@@ -319,14 +320,14 @@ const cancelByPassenger = async (passengerId: string, id: string, reason?: strin
 
 const rateRide = async (passengerId: string, id: string, payload: { stars: number; comment?: string }) => {
   const ride = Types.ObjectId.isValid(id) ? await Ride.findOne({ _id: id, passengerId }) : null;
-  if (!ride) throw new AppError(httpStatus.NOT_FOUND, "Ride not found");
-  if (ride.status !== RideStatus.completed) throw new AppError(httpStatus.BAD_REQUEST, "You can rate a ride once it is finished");
+  if (!ride) throw new AppError(httpStatus.NOT_FOUND, "RIDE_NOT_FOUND");
+  if (ride.status !== RideStatus.completed) throw new AppError(httpStatus.BAD_REQUEST, "RIDE_RATE_TOO_EARLY");
   const rated = await Ride.findOneAndUpdate(
     { _id: ride._id, "rating.stars": { $exists: false } },
     { $set: { rating: { stars: payload.stars, comment: payload.comment, at: new Date() } } },
     { returnDocument: "after" },
   );
-  if (!rated) throw new AppError(httpStatus.CONFLICT, "You already rated this ride");
+  if (!rated) throw new AppError(httpStatus.CONFLICT, "RIDE_ALREADY_RATED");
   if (rated.riderId) {
     // Running average, one atomic update
     await RiderProfile.updateOne({ _id: rated.riderId }, [
@@ -355,7 +356,7 @@ const rateRide = async (passengerId: string, id: string, payload: { stars: numbe
 
 const myRiderProfile = async (riderUserId: string) => {
   const rider = await RiderProfile.findOne({ userId: riderUserId }).select(RIDER_FIELDS).lean<RiderLite>();
-  if (!rider) throw new AppError(httpStatus.FORBIDDEN, "Rider profile not found");
+  if (!rider) throw new AppError(httpStatus.FORBIDDEN, "RIDER_PROFILE_NOT_FOUND");
   return rider;
 };
 
@@ -397,20 +398,20 @@ const acceptRide = async (riderUserId: string, id: string) => {
   const blocker = await riderBlocker(rider);
   if (blocker) throw new AppError(httpStatus.BAD_REQUEST, blocker);
   const ride = Types.ObjectId.isValid(id) ? await Ride.findById(id).select("+offerSkippedBy") : null;
-  if (!ride) throw new AppError(httpStatus.NOT_FOUND, "Ride not found");
-  if (ride.status !== RideStatus.searching) throw new AppError(httpStatus.CONFLICT, "Another rider has already taken this ride");
-  if (String(ride.passengerId) === riderUserId) throw new AppError(httpStatus.BAD_REQUEST, "You cannot take your own ride");
+  if (!ride) throw new AppError(httpStatus.NOT_FOUND, "RIDE_NOT_FOUND");
+  if (ride.status !== RideStatus.searching) throw new AppError(httpStatus.CONFLICT, "RIDE_ALREADY_TAKEN");
+  if (String(ride.passengerId) === riderUserId) throw new AppError(httpStatus.BAD_REQUEST, "RIDE_OWN");
   const coords = rider.lastLocation?.coordinates;
   const km = coords ? calculateDistanceKm(ride.pickup.location.coordinates, coords) : Infinity;
   if (km > radiusAt(ride.searchStartedAt) || (ride.offerSkippedBy ?? []).some((r) => String(r) === String(rider._id))) {
-    throw new AppError(httpStatus.BAD_REQUEST, "This ride is not offered to you");
+    throw new AppError(httpStatus.BAD_REQUEST, "RIDE_NOT_FOR_YOU");
   }
   const taken = await Ride.findOneAndUpdate(
     { _id: ride._id, status: RideStatus.searching },
     { $set: { status: RideStatus.accepted, riderId: rider._id, acceptedAt: new Date() } },
     { returnDocument: "after" },
   );
-  if (!taken) throw new AppError(httpStatus.CONFLICT, "Another rider has already taken this ride");
+  if (!taken) throw new AppError(httpStatus.CONFLICT, "RIDE_ALREADY_TAKEN");
   const me = await User.findById(riderUserId).select("name").lean();
   RideNotify.accepted(taken.passengerId, taken, me?.name ?? "Rider");
   RideNotify.changed(taken, [taken.passengerId, riderUserId]);
@@ -430,7 +431,7 @@ const getRiderAccess = async (riderUserId: string) => {
 const skipRide = async (riderUserId: string, id: string) => {
   const rider = await myRiderProfile(riderUserId);
   const result = Types.ObjectId.isValid(id) ? await Ride.updateOne({ _id: id }, { $addToSet: { offerSkippedBy: rider._id } }) : null;
-  if (!result?.matchedCount) throw new AppError(httpStatus.NOT_FOUND, "Ride not found");
+  if (!result?.matchedCount) throw new AppError(httpStatus.NOT_FOUND, "RIDE_NOT_FOUND");
   return { skipped: true };
 };
 
@@ -453,8 +454,8 @@ const riderStep = async (riderUserId: string, id: string, step: keyof typeof STE
     : null;
   if (!moved) {
     const exists = Types.ObjectId.isValid(id) && (await Ride.exists({ _id: id, riderId: rider._id }));
-    if (!exists) throw new AppError(httpStatus.NOT_FOUND, "Ride not found");
-    throw new AppError(httpStatus.CONFLICT, "This ride was just updated. Please refresh.");
+    if (!exists) throw new AppError(httpStatus.NOT_FOUND, "RIDE_NOT_FOUND");
+    throw new AppError(httpStatus.CONFLICT, "RIDE_CHANGED");
   }
   const me = await User.findById(riderUserId).select("name").lean();
   if (to === RideStatus.arrived) RideNotify.arrived(moved.passengerId, moved, me?.name ?? "Rider");
@@ -480,7 +481,7 @@ const releaseByRider = async (riderUserId: string, id: string, reason?: string) 
         { returnDocument: "after" },
       )
     : null;
-  if (!released) throw new AppError(httpStatus.BAD_REQUEST, "You can only drop a ride before it starts");
+  if (!released) throw new AppError(httpStatus.BAD_REQUEST, "RIDE_DROP_TOO_LATE");
   logger.info("Rider dropped a ride", { rideId: String(released._id), riderId: String(rider._id), reason });
   RideNotify.riderLeft(released.passengerId, released);
   RideNotify.changed(released, [released.passengerId, riderUserId]);
@@ -623,7 +624,7 @@ const cancelByAdmin = async (adminUserId: string, id: string, reason: string) =>
         { returnDocument: "after" },
       )
     : null;
-  if (!cancelled) throw new AppError(httpStatus.BAD_REQUEST, "Only a ride in progress can be cancelled");
+  if (!cancelled) throw new AppError(httpStatus.BAD_REQUEST, "RIDE_NOT_IN_PROGRESS");
   const riderUser = cancelled.riderId ? (await RiderProfile.findById(cancelled.riderId).select("userId").lean())?.userId : undefined;
   if (riderUser) RideNotify.cancelledForRider(riderUser, cancelled, "admin");
   RideNotify.cancelledForPassenger(cancelled.passengerId, cancelled);

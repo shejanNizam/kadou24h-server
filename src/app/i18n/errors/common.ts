@@ -164,4 +164,54 @@ export const commonErrors = {
     en: "Rider profile not found.",
     fr: "Profil livreur introuvable.",
   },
+  STORE_NOT_FOUND: {
+    en: "Store not found.",
+    fr: "Boutique introuvable.",
+  },
+
+  // Files, email and SMS
+  FILE_REQUIRED: {
+    en: "No file provided.",
+    fr: "Aucun fichier fourni.",
+  },
+  UPLOAD_FAILED: {
+    en: "The file could not be uploaded. Please try again.",
+    fr: "Le fichier n'a pas pu être envoyé. Veuillez réessayer.",
+  },
+  FILE_DELETE_FAILED: {
+    en: "The file could not be deleted.",
+    fr: "Le fichier n'a pas pu être supprimé.",
+  },
+  EMAIL_NOT_SENT: {
+    en: "The email could not be sent. Please try again.",
+    fr: "L'e-mail n'a pas pu être envoyé. Veuillez réessayer.",
+  },
+  SMS_NOT_CONFIGURED: {
+    en: "Sending SMS is not configured.",
+    fr: "L'envoi de SMS n'est pas configuré.",
+  },
+
+  // Sessions and Google / Apple sign-in
+  REFRESH_TOKEN_INVALID: {
+    en: "Your session is invalid or has expired. Please log in again.",
+    fr: "Votre session est invalide ou a expiré. Veuillez vous reconnecter.",
+  },
+  OAUTH_UNREACHABLE: {
+    en: "Could not reach {provider, select, google {Google} apple {Apple} other {{provider}}} to verify sign-in. Please try again.",
+    fr: "Impossible de joindre {provider, select, google {Google} apple {Apple} other {{provider}}} pour vérifier la connexion. Veuillez réessayer.",
+  },
+  OAUTH_NOT_CONFIGURED: {
+    en: "{provider, select, google {Google} apple {Apple} other {{provider}}} sign-in is not configured.",
+    fr: "La connexion avec {provider, select, google {Google} apple {Apple} other {{provider}}} n'est pas configurée.",
+  },
+  OAUTH_TOKEN_INVALID: {
+    en: "Invalid or expired sign-in. Please try again.",
+    fr: "Connexion invalide ou expirée. Veuillez réessayer.",
+  },
+
+  // Query strings
+  QUERY_VALUE_INVALID: {
+    en: 'Invalid {name} "{value}". Allowed: {allowed}.',
+    fr: "Valeur « {value} » invalide pour {name}. Valeurs permises : {allowed}.",
+  },
 } satisfies LocalizedMessages;

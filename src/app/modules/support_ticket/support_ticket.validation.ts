@@ -8,7 +8,7 @@ const createTicketZodSchema = z.object({
     userMode: z.nativeEnum(AppMode).optional(),
     subject: z.string().optional(),
     urgency: z.nativeEnum(TicketUrgency).default(TicketUrgency.medium),
-    description: z.string().min(5, "Description must be at least 5 characters"),
+    description: z.string().min(5, "TEXT_TOO_SHORT"),
     attachments: z.array(z.string().url()).optional(),
   }),
 });
@@ -22,7 +22,7 @@ const updateTicketStatusZodSchema = z.object({
 
 const assignTicketZodSchema = z.object({
   body: z.object({
-    assignedTo: z.string().min(1, "Assigned user ID is required"),
+    assignedTo: z.string().min(1, "FIELD_REQUIRED"),
   }),
 });
 

@@ -36,7 +36,7 @@ const createProduct = async (
     if (payload.vendorId) {
       vendorProfile = await VendorProfile.findById(payload.vendorId);
       if (!vendorProfile) {
-        throw new AppError(httpStatus.NOT_FOUND, "Specified vendor profile not found.");
+        throw new AppError(httpStatus.NOT_FOUND, "VENDOR_PROFILE_NOT_FOUND");
       }
     } else {
       // Use or find platform store
@@ -44,7 +44,7 @@ const createProduct = async (
       if (!vendorProfile) {
         throw new AppError(
           httpStatus.BAD_REQUEST,
-          "No vendorId provided and no platform store exists. Please specify vendorId.",
+          "PLATFORM_STORE_MISSING",
         );
       }
     }
@@ -52,12 +52,12 @@ const createProduct = async (
     // Regular vendor flow
     vendorProfile = await VendorProfile.findOne({ userId });
     if (!vendorProfile) {
-      throw new AppError(httpStatus.FORBIDDEN, "You do not have a vendor profile.");
+      throw new AppError(httpStatus.FORBIDDEN, "VENDOR_PROFILE_NOT_FOUND");
     }
     if (vendorProfile.approvalStatus !== ApprovalStatus.approved) {
       throw new AppError(
         httpStatus.FORBIDDEN,
-        `Vendor profile is ${vendorProfile.approvalStatus}. You cannot publish products until approved.`,
+        "STORE_NOT_APPROVED_TO_PUBLISH",
       );
     }
   }
@@ -65,7 +65,7 @@ const createProduct = async (
   // Validate category
   const category = await Category.findById(payload.categoryId);
   if (!category || !category.isActive) {
-    throw new AppError(httpStatus.BAD_REQUEST, "Valid active category is required.");
+    throw new AppError(httpStatus.BAD_REQUEST, "CATEGORY_REQUIRED");
   }
 
   if (payload.subcategoryId) {
@@ -77,7 +77,7 @@ const createProduct = async (
     if (!subcategory) {
       throw new AppError(
         httpStatus.BAD_REQUEST,
-        "Subcategory must belong to the selected category and be active.",
+        "SUBCATEGORY_MISMATCH",
       );
     }
   }
@@ -114,20 +114,20 @@ const updateProduct = async (
   const product = await Product.findOne({ _id: productId, isDeleted: false });
 
   if (!product) {
-    throw new AppError(httpStatus.NOT_FOUND, "Product not found.");
+    throw new AppError(httpStatus.NOT_FOUND, "PRODUCT_NOT_FOUND");
   }
 
   if (!isAdmin) {
     const vendorProfile = await VendorProfile.findOne({ userId });
     if (!vendorProfile || String(product.vendorId) !== String(vendorProfile._id)) {
-      throw new AppError(httpStatus.FORBIDDEN, "You can only edit products belonging to your store.");
+      throw new AppError(httpStatus.FORBIDDEN, "PRODUCT_NOT_YOURS");
     }
   }
 
   if (payload.categoryId) {
     const category = await Category.findById(payload.categoryId);
     if (!category || !category.isActive) {
-      throw new AppError(httpStatus.BAD_REQUEST, "Valid category is required.");
+      throw new AppError(httpStatus.BAD_REQUEST, "CATEGORY_REQUIRED");
     }
   }
 
@@ -139,7 +139,7 @@ const updateProduct = async (
       isActive: true,
     });
     if (!subcategory) {
-      throw new AppError(httpStatus.BAD_REQUEST, "Subcategory must belong to the selected category.");
+      throw new AppError(httpStatus.BAD_REQUEST, "SUBCATEGORY_MISMATCH");
     }
   }
 
@@ -164,7 +164,7 @@ const updateProduct = async (
   });
 
   if (!updatedProduct) {
-    throw new AppError(httpStatus.NOT_FOUND, "Product not found after update.");
+    throw new AppError(httpStatus.NOT_FOUND, "PRODUCT_NOT_FOUND");
   }
 
   return updatedProduct;
@@ -188,13 +188,13 @@ const deleteProduct = async (
   const product = await Product.findOne({ _id: productId, isDeleted: false });
 
   if (!product) {
-    throw new AppError(httpStatus.NOT_FOUND, "Product not found.");
+    throw new AppError(httpStatus.NOT_FOUND, "PRODUCT_NOT_FOUND");
   }
 
   if (!isAdmin) {
     const vendorProfile = await VendorProfile.findOne({ userId });
     if (!vendorProfile || String(product.vendorId) !== String(vendorProfile._id)) {
-      throw new AppError(httpStatus.FORBIDDEN, "You can only delete products belonging to your store.");
+      throw new AppError(httpStatus.FORBIDDEN, "PRODUCT_NOT_YOURS");
     }
   }
 
@@ -215,7 +215,7 @@ const reviewProductApproval = async (
 ): Promise<IProduct> => {
   const product = await Product.findOne({ _id: productId, isDeleted: false });
   if (!product) {
-    throw new AppError(httpStatus.NOT_FOUND, "Product not found.");
+    throw new AppError(httpStatus.NOT_FOUND, "PRODUCT_NOT_FOUND");
   }
 
   product.approvalStatus = payload.approvalStatus;
@@ -245,7 +245,7 @@ const getProductByIdOrSlug = async (
     .populate("subcategoryId", "name slug");
 
   if (!product) {
-    throw new AppError(httpStatus.NOT_FOUND, "Product not found.");
+    throw new AppError(httpStatus.NOT_FOUND, "PRODUCT_NOT_FOUND");
   }
 
   // Not approved yet (or rejected): only its store and admins may open it
@@ -254,7 +254,7 @@ const getProductByIdOrSlug = async (
     const owner = currentUserId
       ? await VendorProfile.exists({ _id: store?._id ?? product.vendorId, userId: currentUserId })
       : null;
-    if (!owner) throw new AppError(httpStatus.NOT_FOUND, "Product not found.");
+    if (!owner) throw new AppError(httpStatus.NOT_FOUND, "PRODUCT_NOT_FOUND");
   }
 
   let isFavorite = false;
@@ -375,7 +375,7 @@ const getVendorProducts = async (
 ) => {
   const vendorProfile = await VendorProfile.findOne({ userId });
   if (!vendorProfile) {
-    throw new AppError(httpStatus.FORBIDDEN, "Vendor profile not found.");
+    throw new AppError(httpStatus.FORBIDDEN, "VENDOR_PROFILE_NOT_FOUND");
   }
 
   const page = Math.max(1, Number(query.page) || 1);

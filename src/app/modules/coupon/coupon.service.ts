@@ -11,8 +11,6 @@ import { AuditLogServices } from "../audit_log/audit_log.service";
 import { CouponType, ICoupon, RedemptionStatus } from "./coupon.interface";
 import { Coupon, CouponRedemption } from "./coupon.model";
 
-const gnf = (n: number) => `${n.toLocaleString("fr-FR")} GNF`;
-
 export const normalizeCode = (code: string) => code.trim().toUpperCase().replace(/\s+/g, "");
 
 /** What this code takes off a products subtotal */
@@ -31,16 +29,16 @@ const evaluate = async (rawCode: string, customerId: string, subtotal: number) =
   const code = normalizeCode(rawCode);
   const now = new Date();
   const coupon = await Coupon.findOne({ code });
-  if (!coupon || !coupon.isActive) throw new AppError(httpStatus.BAD_REQUEST, "This promo code is not valid");
-  if (coupon.startsAt && coupon.startsAt > now) throw new AppError(httpStatus.BAD_REQUEST, "This promo code is not valid yet");
-  if (coupon.expiresAt <= now) throw new AppError(httpStatus.BAD_REQUEST, "This promo code has expired");
+  if (!coupon || !coupon.isActive) throw new AppError(httpStatus.BAD_REQUEST, "COUPON_INVALID");
+  if (coupon.startsAt && coupon.startsAt > now) throw new AppError(httpStatus.BAD_REQUEST, "COUPON_NOT_YET");
+  if (coupon.expiresAt <= now) throw new AppError(httpStatus.BAD_REQUEST, "COUPON_EXPIRED");
   if (coupon.usageLimit && coupon.usedCount >= coupon.usageLimit) {
-    throw new AppError(httpStatus.BAD_REQUEST, "This promo code has been fully used");
+    throw new AppError(httpStatus.BAD_REQUEST, "COUPON_FULLY_USED");
   }
   const used = await CouponRedemption.exists({ couponId: coupon._id, customerId, status: RedemptionStatus.active });
-  if (used) throw new AppError(httpStatus.BAD_REQUEST, "You have already used this promo code");
+  if (used) throw new AppError(httpStatus.BAD_REQUEST, "COUPON_ALREADY_USED");
   if (subtotal < coupon.minOrder) {
-    throw new AppError(httpStatus.BAD_REQUEST, `This promo code needs a minimum order of ${gnf(coupon.minOrder)}`);
+    throw new AppError(httpStatus.BAD_REQUEST, "COUPON_MIN_ORDER", { minOrder: coupon.minOrder });
   }
   return { coupon, discount: discountFor(coupon, subtotal) };
 };
@@ -62,7 +60,7 @@ const redeem = async (
     },
     { $inc: { usedCount: 1, discountGiven: params.amount } },
   );
-  if (!counted) throw new AppError(httpStatus.CONFLICT, "This promo code has just been fully used");
+  if (!counted) throw new AppError(httpStatus.CONFLICT, "COUPON_JUST_FULLY_USED");
   try {
     const redemption = await CouponRedemption.create({
       couponId: coupon._id,
@@ -75,7 +73,7 @@ const redeem = async (
     return { couponId: coupon._id as Types.ObjectId, redemptionId: redemption._id as Types.ObjectId, amount: params.amount };
   } catch (error) {
     await Coupon.updateOne({ _id: coupon._id }, { $inc: { usedCount: -1, discountGiven: -params.amount } });
-    if ((error as { code?: number }).code === 11000) throw new AppError(httpStatus.BAD_REQUEST, "You have already used this promo code");
+    if ((error as { code?: number }).code === 11000) throw new AppError(httpStatus.BAD_REQUEST, "COUPON_ALREADY_USED");
     throw error;
   }
 };
@@ -104,17 +102,17 @@ type CouponInput = Partial<Omit<ICoupon, "code">> & { code?: string };
 
 const validateShape = (c: CouponInput) => {
   if (c.type === CouponType.percent && c.value !== undefined && c.value > 100) {
-    throw new AppError(httpStatus.BAD_REQUEST, "A percentage can't be more than 100");
+    throw new AppError(httpStatus.BAD_REQUEST, "COUPON_PERCENT_MAX");
   }
   if (c.startsAt && c.expiresAt && new Date(c.startsAt) >= new Date(c.expiresAt)) {
-    throw new AppError(httpStatus.BAD_REQUEST, "The end date must be after the start date");
+    throw new AppError(httpStatus.BAD_REQUEST, "END_DATE_BEFORE_START");
   }
 };
 
 const createCoupon = async (payload: CouponInput & { code: string }, actorId: string) => {
   validateShape(payload);
   const code = normalizeCode(payload.code);
-  if (await Coupon.exists({ code })) throw new AppError(httpStatus.CONFLICT, "This code already exists");
+  if (await Coupon.exists({ code })) throw new AppError(httpStatus.CONFLICT, "COUPON_CODE_TAKEN");
   const coupon = await Coupon.create({ ...payload, code, createdBy: new Types.ObjectId(actorId) });
   await AuditLogServices.record({ actorId, action: "coupon.create", targetType: "coupon", targetId: String(coupon._id), after: { code, type: coupon.type, value: coupon.value } });
   return coupon;
@@ -123,19 +121,19 @@ const createCoupon = async (payload: CouponInput & { code: string }, actorId: st
 /** Once used, the code, type and value are locked (customers already got that deal). */
 const updateCoupon = async (id: string, payload: CouponInput, actorId: string) => {
   const coupon = Types.ObjectId.isValid(id) ? await Coupon.findById(id) : null;
-  if (!coupon) throw new AppError(httpStatus.NOT_FOUND, "Promo code not found");
+  if (!coupon) throw new AppError(httpStatus.NOT_FOUND, "COUPON_NOT_FOUND");
   const locked = coupon.usedCount > 0;
   if (locked && (payload.code !== undefined || payload.type !== undefined || payload.value !== undefined)) {
     const changed =
       (payload.code !== undefined && normalizeCode(payload.code) !== coupon.code) ||
       (payload.type !== undefined && payload.type !== coupon.type) ||
       (payload.value !== undefined && payload.value !== coupon.value);
-    if (changed) throw new AppError(httpStatus.BAD_REQUEST, "This code was already used: its code, type and value can't change. Create a new code instead.");
+    if (changed) throw new AppError(httpStatus.BAD_REQUEST, "COUPON_LOCKED");
   }
   validateShape({ ...coupon.toObject(), ...payload });
   if (payload.code !== undefined) {
     const code = normalizeCode(payload.code);
-    if (code !== coupon.code && (await Coupon.exists({ code }))) throw new AppError(httpStatus.CONFLICT, "This code already exists");
+    if (code !== coupon.code && (await Coupon.exists({ code }))) throw new AppError(httpStatus.CONFLICT, "COUPON_CODE_TAKEN");
     payload.code = code;
   }
   const before = { isActive: coupon.isActive, expiresAt: coupon.expiresAt, usageLimit: coupon.usageLimit };
@@ -200,7 +198,7 @@ const listCoupons = async (query: { status?: string; search?: string; page?: num
 
 const getCoupon = async (id: string) => {
   const coupon = Types.ObjectId.isValid(id) ? await Coupon.findById(id).lean() : null;
-  if (!coupon) throw new AppError(httpStatus.NOT_FOUND, "Promo code not found");
+  if (!coupon) throw new AppError(httpStatus.NOT_FOUND, "COUPON_NOT_FOUND");
   const redemptions = await CouponRedemption.find({ couponId: coupon._id })
     .populate("customerId", "name phone")
     .sort({ createdAt: -1 })

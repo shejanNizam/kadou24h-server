@@ -7,6 +7,7 @@
 import httpStatus from "http-status";
 import { Types } from "mongoose";
 import AppError from "../../errorHelpers/AppError";
+import type { ErrorCode } from "../../i18n/errors";
 import { Delivery } from "../delivery/delivery.model";
 import { Job } from "../job/job.model";
 import { JobApplication } from "../job/job_application.model";
@@ -55,7 +56,7 @@ export interface ResolvedConversation {
 export const voiceAllowedFor = (type: ConversationType | string) => type !== ConversationType.job_application;
 
 const oid = (id: unknown) => new Types.ObjectId(String(id));
-const notFound = (what: string) => new AppError(httpStatus.NOT_FOUND, `${what} not found`);
+const notFound = (code: ErrorCode) => new AppError(httpStatus.NOT_FOUND, code);
 
 export const resolveConversation = async (
   userId: string,
@@ -65,9 +66,9 @@ export const resolveConversation = async (
 
   if (input.type === ConversationType.buyer_seller) {
     const vendor = await VendorProfile.findOne({ _id: input.vendorId, approvalStatus: ApprovalStatus.approved }).select("userId");
-    if (!vendor) throw notFound("Store");
+    if (!vendor) throw notFound("STORE_NOT_FOUND");
     if (String(vendor.userId) === userId) {
-      throw new AppError(httpStatus.BAD_REQUEST, "You cannot start a conversation with yourself");
+      throw new AppError(httpStatus.BAD_REQUEST, "CHAT_SELF");
     }
     return {
       type: input.type,
@@ -81,11 +82,11 @@ export const resolveConversation = async (
   // A booking: the customer and the worker can write to each other whatever the listing
   if (input.type === ConversationType.worker && input.bookingId) {
     const booking = await Booking.findById(input.bookingId).select("customerId workerId workerProfileId");
-    if (!booking) throw notFound("Booking");
+    if (!booking) throw notFound("BOOKING_NOT_FOUND");
     const parties = [booking.customerId, booking.workerId];
     const other = parties.find((p) => String(p) !== userId);
     if (!parties.some((p) => String(p) === userId) || !other) {
-      throw new AppError(httpStatus.FORBIDDEN, "You are not part of this booking");
+      throw new AppError(httpStatus.FORBIDDEN, "NOT_PART_OF_BOOKING");
     }
     return {
       type: input.type,
@@ -97,12 +98,12 @@ export const resolveConversation = async (
   }
 
   if (input.type === ConversationType.worker) {
-    if (!input.workerProfileId) throw new AppError(httpStatus.BAD_REQUEST, "workerProfileId or bookingId is required");
+    if (!input.workerProfileId) throw new AppError(httpStatus.BAD_REQUEST, "CHAT_TARGET_REQUIRED");
     // Only workers customers can see right now (approved, visibility paid, not suspended)
     const profile = await ProfessionalProfile.findOne({ _id: input.workerProfileId, ...publicWorkerFilter() }).select("userId");
-    if (!profile) throw notFound("Worker");
+    if (!profile) throw notFound("WORKER_NOT_FOUND");
     if (String(profile.userId) === userId) {
-      throw new AppError(httpStatus.BAD_REQUEST, "You cannot start a conversation with yourself");
+      throw new AppError(httpStatus.BAD_REQUEST, "CHAT_SELF");
     }
     return {
       type: input.type,
@@ -115,10 +116,10 @@ export const resolveConversation = async (
 
   if (input.type === ConversationType.order) {
     const subOrder = await SubOrder.findById(input.subOrderId).select("orderId customerId vendorId currentRiderId status");
-    if (!subOrder) throw notFound("Order");
+    if (!subOrder) throw notFound("ORDER_NOT_FOUND");
     // The store only receives an online order once it is paid
     if (subOrder.status === SubOrderStatus.pending_payment) {
-      throw new AppError(httpStatus.BAD_REQUEST, "Pay for this order first — the store receives it once paid");
+      throw new AppError(httpStatus.BAD_REQUEST, "CHAT_ORDER_UNPAID");
     }
     const [vendor, legs, myRider] = await Promise.all([
       VendorProfile.findById(subOrder.vendorId).select("userId"),
@@ -132,28 +133,28 @@ export const resolveConversation = async (
     if (vendor && String(vendor.userId) === userId) myModes.push(AppMode.vendor);
     if (myRider && legs.some((l) => l.riderId && String(l.riderId) === String(myRider._id))) myModes.push(AppMode.rider);
     if (!myModes.length) {
-      throw new AppError(httpStatus.FORBIDDEN, "You are not part of this order");
+      throw new AppError(httpStatus.FORBIDDEN, "NOT_PART_OF_ORDER");
     }
 
     let other: Party;
     if (input.with === "customer") {
       other = { userId: subOrder.customerId, mode: AppMode.customer };
     } else if (input.with === "vendor") {
-      if (!vendor) throw notFound("Store");
+      if (!vendor) throw notFound("STORE_NOT_FOUND");
       other = { userId: vendor.userId, mode: AppMode.vendor };
     } else {
       const rider = subOrder.currentRiderId
         ? await RiderProfile.findById(subOrder.currentRiderId).select("userId")
         : null;
       if (!rider) {
-        throw new AppError(httpStatus.BAD_REQUEST, "No rider is assigned to this order yet");
+        throw new AppError(httpStatus.BAD_REQUEST, "NO_RIDER_YET");
       }
       other = { userId: rider.userId, mode: AppMode.rider };
     }
 
     const myMode = myModes.find((m) => m !== other.mode);
     if (!myMode || String(other.userId) === userId) {
-      throw new AppError(httpStatus.BAD_REQUEST, "You cannot start a conversation with yourself");
+      throw new AppError(httpStatus.BAD_REQUEST, "CHAT_SELF");
     }
     return {
       type: input.type,
@@ -166,7 +167,7 @@ export const resolveConversation = async (
 
   // job_application: the applicant ↔ whoever posted the job (or the store, for a spontaneous application)
   const application = await JobApplication.findById(input.applicationId).select("applicantId jobId targetVendorId");
-  if (!application) throw notFound("Application");
+  if (!application) throw notFound("JOB_APPLICATION_NOT_FOUND");
   let poster: Party | null = null;
   if (application.jobId) {
     const job = await Job.findById(application.jobId).select("postedBy postedByMode");
@@ -175,11 +176,11 @@ export const resolveConversation = async (
     const vendor = await VendorProfile.findById(application.targetVendorId).select("userId");
     if (vendor) poster = { userId: vendor.userId, mode: AppMode.vendor };
   }
-  if (!poster) throw notFound("Job");
+  if (!poster) throw notFound("JOB_NOT_FOUND");
   const applicant: Party = { userId: application.applicantId, mode: AppMode.customer };
   const iAmApplicant = String(applicant.userId) === userId;
   if (!iAmApplicant && String(poster.userId) !== userId) {
-    throw new AppError(httpStatus.FORBIDDEN, "You are not part of this application");
+    throw new AppError(httpStatus.FORBIDDEN, "NOT_PART_OF_APPLICATION");
   }
   return {
     type: ConversationType.job_application,
@@ -193,5 +194,5 @@ export const resolveConversation = async (
 /** The other person must still exist (deleted accounts can't be messaged). */
 export const assertReachable = async (userId: Types.ObjectId) => {
   const user = await User.findById(userId).select("isDeleted");
-  if (!user || user.isDeleted) throw notFound("Recipient user");
+  if (!user || user.isDeleted) throw notFound("ACCOUNT_NOT_FOUND");
 };

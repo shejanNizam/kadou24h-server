@@ -5,18 +5,18 @@ import { ProductApprovalStatus } from "./product.interface";
 const createProductZodSchema = z.object({
   body: z
     .object({
-      name: z.string({ error: "Product name is required" }).min(2, "Name must be at least 2 characters").trim(),
+      name: z.string().min(2, "TEXT_TOO_SHORT").trim(),
       categoryId: objectIdSchema,
       subcategoryId: objectIdSchema.optional(),
       vendorId: objectIdSchema.optional(), // Only admin can specify a different vendorId
       description: z.string().optional(),
-      price: z.number({ error: "Price is required" }).min(0, "Price cannot be negative"),
-      discountPrice: z.number().min(0, "Discount price cannot be negative").optional(),
+      price: z.number().min(0, "NUMBER_TOO_LOW"),
+      discountPrice: z.number().min(0, "NUMBER_TOO_LOW").optional(),
       images: z.array(fileRefZodSchema).default([]),
       features: z.array(z.string().trim()).default([]),
       inTheBox: z.array(z.string().trim()).default([]),
       tags: z.array(z.string().trim()).default([]),
-      stockQty: z.number().int().min(0, "Stock cannot be negative").default(0),
+      stockQty: z.number().int().min(0, "NUMBER_TOO_LOW").default(0),
       minStockAlert: z.number().int().min(0).default(0),
       prepTimeMinutes: z.number().int().min(0).default(15),
       isAvailable: z.boolean().default(true),
@@ -29,7 +29,7 @@ const createProductZodSchema = z.object({
         return true;
       },
       {
-        message: "Discount price must be less than the regular price",
+        message: "DISCOUNT_PRICE_TOO_HIGH",
         path: ["discountPrice"],
       },
     ),
@@ -66,7 +66,7 @@ const updateProductZodSchema = z.object({
         return true;
       },
       {
-        message: "Discount price must be less than the regular price",
+        message: "DISCOUNT_PRICE_TOO_HIGH",
         path: ["discountPrice"],
       },
     ),

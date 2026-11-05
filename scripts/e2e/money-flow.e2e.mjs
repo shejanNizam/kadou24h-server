@@ -653,7 +653,9 @@ const run = async () => {
   r = await book(K.token, { description: "Court" });
   check("booking: a description is required", r.status === 400, brief(r));
   r = await book(C.token);
-  check("booking: a worker cannot book themselves", r.status === 400 && /yourself/i.test(r.body.message ?? ""), brief(r));
+  check("booking: a worker cannot book themselves", r.status === 400 && r.body.code === "BOOK_SELF" && /yourself/i.test(r.body.message ?? ""), brief(r));
+  r = await call("POST", "/bookings", { workerProfileId: workerId, scheduledAt: at(26), description: job }, C.token, { "Accept-Language": "fr" });
+  check("i18n: …said in French", r.body.message === "Vous ne pouvez pas vous réserver vous-même.", brief(r));
   r = await book(K.token);
   const bk1 = r.body.data;
   const respondHours = (new Date(bk1?.respondBy).getTime() - Date.now()) / 3_600_000;
@@ -856,7 +858,13 @@ const run = async () => {
   r = await call("POST", "/orders/checkout-summary", cart({ couponCode: "nope" }), P.token);
   check("promo: an unknown code is reported, the summary still works", ok(r) && r.body.data?.coupon?.valid === false && r.body.data?.pricing?.discount === 0, JSON.stringify(r.body.data?.coupon ?? brief(r)));
   r = await call("POST", "/orders/checkout-summary", cart({ couponCode: "OLD5" }), P.token);
-  check("promo: an expired code is reported", r.body.data?.coupon?.valid === false && /expired/i.test(r.body.data?.coupon?.message ?? ""), JSON.stringify(r.body.data?.coupon));
+  check(
+    "promo: an expired code is reported, with its reason",
+    r.body.data?.coupon?.valid === false && r.body.data.coupon.reason === "COUPON_EXPIRED" && /expired/i.test(r.body.data.coupon.message ?? ""),
+    JSON.stringify(r.body.data?.coupon),
+  );
+  r = await call("POST", "/orders/checkout-summary", cart({ couponCode: "OLD5" }), P.token, { "Accept-Language": "fr" });
+  check("i18n: the refused promo code is explained in French", r.body.data?.coupon?.message === "Ce code promo a expiré.", JSON.stringify(r.body.data?.coupon));
   r = await call("POST", "/orders/checkout-summary", { ...cart({ couponCode: "kadou10" }), items: [{ productId: oilId, qty: 1 }] }, P.token);
   check("promo: below the minimum order it is refused", r.body.data?.coupon?.valid === false && /minimum/i.test(r.body.data?.coupon?.message ?? ""), JSON.stringify(r.body.data?.coupon));
   r = await call("POST", "/orders/checkout-summary", cart({ couponCode: " kadou10 " }), P.token);

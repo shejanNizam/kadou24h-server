@@ -35,8 +35,8 @@ export const deliveryErrors = {
     fr: `Impossible d'attribuer un livreur : la livraison est ${status.fr}.`,
   },
   PARTNER_NOT_FOUND: {
-    en: "Approved delivery partner not found.",
-    fr: "Livreur approuvé introuvable.",
+    en: "Delivery partner not found.",
+    fr: "Livreur introuvable.",
   },
   ASSIGN_SELF: {
     en: "You cannot assign yourself as the delivery partner.",

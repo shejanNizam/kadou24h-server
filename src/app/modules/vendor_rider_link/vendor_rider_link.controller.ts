@@ -9,11 +9,11 @@ import { VendorRiderLinkServices } from "./vendor_rider_link.service";
 const getMyLinks = catchAsync(async (req: Request, res: Response) => {
   const as = req.query.as as "vendor" | "rider";
   if (as !== "vendor" && as !== "rider") {
-    throw new AppError(httpStatus.BAD_REQUEST, "Query `as` must be vendor or rider");
+    throw new AppError(httpStatus.BAD_REQUEST, "LINK_SIDE_INVALID");
   }
   const status = req.query.status as LinkStatus | undefined;
   if (status && !Object.values(LinkStatus).includes(status)) {
-    throw new AppError(httpStatus.BAD_REQUEST, "Invalid status");
+    throw new AppError(httpStatus.BAD_REQUEST, "STATUS_INVALID");
   }
 
   const result = await VendorRiderLinkServices.getMyLinks(req.user._id, as, status);

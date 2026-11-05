@@ -5,9 +5,9 @@ import { WorkerReviewStatus } from "./booking.interface";
 
 export const createBookingZodSchema = z.object({
   workerProfileId: objectIdSchema,
-  scheduledAt: z.coerce.date({ error: "Choose the date and time" }),
+  scheduledAt: z.coerce.date({ error: "BOOKING_DATE_REQUIRED" }),
   addressId: objectIdSchema.optional(),
-  description: z.string().trim().min(10, "Describe the job (at least 10 characters)").max(1000),
+  description: z.string().trim().min(10, "BOOKING_DESCRIPTION_TOO_SHORT").max(1000),
   photos: z.array(fileRefZodSchema).max(BOOKING.maxPhotos).optional(),
 });
 
@@ -35,7 +35,7 @@ export const createWorkerReviewZodSchema = z.object({
 });
 
 export const adminCancelBookingZodSchema = z.object({
-  reason: z.string().trim().min(3, "Give a reason").max(300),
+  reason: z.string().trim().min(3, "REASON_TOO_SHORT").max(300),
 });
 
 export const changeStrikeZodSchema = z.object({

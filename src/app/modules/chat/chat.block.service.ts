@@ -38,12 +38,12 @@ const FINISHED_ORDER = [SubOrderStatus.delivered, SubOrderStatus.cancelled];
 /** The other person in a conversation I'm part of */
 const peerOf = async (userId: string, conversationId: string) => {
   const conversation = Types.ObjectId.isValid(conversationId) ? await Conversation.findById(conversationId).select("participants") : null;
-  if (!conversation) throw new AppError(httpStatus.NOT_FOUND, "Conversation not found");
+  if (!conversation) throw new AppError(httpStatus.NOT_FOUND, "CONVERSATION_NOT_FOUND");
   if (!conversation.participants.some((p) => String(p.userId) === userId)) {
-    throw new AppError(httpStatus.FORBIDDEN, "You are not a participant in this conversation");
+    throw new AppError(httpStatus.FORBIDDEN, "NOT_CONVERSATION_PARTICIPANT");
   }
   const other = conversation.participants.find((p) => String(p.userId) !== userId);
-  if (!other) throw new AppError(httpStatus.BAD_REQUEST, "There is nobody to block in this conversation");
+  if (!other) throw new AppError(httpStatus.BAD_REQUEST, "NOBODY_TO_BLOCK");
   return other.userId;
 };
 
@@ -60,7 +60,7 @@ const unblock = async (userId: string, conversationId: string) => {
 };
 
 const unblockUser = async (userId: string, otherId: string) => {
-  if (!Types.ObjectId.isValid(otherId)) throw new AppError(httpStatus.NOT_FOUND, "User not found");
+  if (!Types.ObjectId.isValid(otherId)) throw new AppError(httpStatus.NOT_FOUND, "ACCOUNT_NOT_FOUND");
   await ChatBlock.deleteOne({ blockerId: userId, blockedId: otherId });
   return { blocked: false, userId: otherId };
 };

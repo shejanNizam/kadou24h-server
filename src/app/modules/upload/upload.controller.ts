@@ -15,7 +15,7 @@ const uploadFiles = catchAsync(async (req: Request, res: Response) => {
   const files = req.files as CloudinaryFile[] | undefined;
 
   if (!files || files.length === 0) {
-    throw new AppError(httpStatus.BAD_REQUEST, "No file provided");
+    throw new AppError(httpStatus.BAD_REQUEST, "FILE_REQUIRED");
   }
 
   const data =

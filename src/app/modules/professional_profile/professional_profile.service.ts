@@ -116,7 +116,7 @@ const toggleWorkerListing = async (
   const profile = await getMyProfile(userId);
 
   if (payload.isWorkerListed && profile.approvalStatus !== ApprovalStatus.approved) {
-    throw new AppError(httpStatus.BAD_REQUEST, "Your worker profile must be approved before it can be listed");
+    throw new AppError(httpStatus.BAD_REQUEST, "WORKER_LIST_NOT_APPROVED");
   }
   profile.isWorkerListed = payload.isWorkerListed;
   if (payload.hourlyRate !== undefined) profile.hourlyRate = payload.hourlyRate;
@@ -227,7 +227,7 @@ const getWorkerById = async (profileId: string) => {
     .populate("serviceCategoryId", "name slug");
 
   if (!profile) {
-    throw new AppError(httpStatus.NOT_FOUND, "Worker profile not found");
+    throw new AppError(httpStatus.NOT_FOUND, "WORKER_NOT_FOUND");
   }
 
   return profile;
@@ -298,10 +298,10 @@ const submitWorkerApplication = async (userId: string) => {
     !profile.idDocument?.url && "idDocument",
   ].filter(Boolean);
   if (missing.length) {
-    throw new AppError(httpStatus.BAD_REQUEST, `Complete your worker profile first: ${missing.join(", ")}`);
+    throw new AppError(httpStatus.BAD_REQUEST, "WORKER_PROFILE_INCOMPLETE", { fields: missing.join(", ") });
   }
   if (profile.approvalStatus === ApprovalStatus.approved) {
-    throw new AppError(httpStatus.CONFLICT, "Your worker profile is already approved");
+    throw new AppError(httpStatus.CONFLICT, "WORKER_ALREADY_APPROVED");
   }
   // Throws while pending or suspended
   markSubmitted(profile, userId);
@@ -461,16 +461,16 @@ const getWorkerForAdmin = async (id: string) => {
     .populate("serviceCategoryId", "name")
     .populate("applicationHistory.byUserId", "name");
   if (!profile || profile.approvalStatus === ApprovalStatus.draft) {
-    throw new AppError(httpStatus.NOT_FOUND, "Worker application not found");
+    throw new AppError(httpStatus.NOT_FOUND, "WORKER_NOT_FOUND");
   }
   return profile;
 };
 
 const reviewWorker = async (id: string, payload: { action: ReviewAction; note?: string }, actorId: string) => {
   const profile = await ProfessionalProfile.findById(id);
-  if (!profile) throw new AppError(httpStatus.NOT_FOUND, "Worker application not found");
+  if (!profile) throw new AppError(httpStatus.NOT_FOUND, "WORKER_NOT_FOUND");
   const owner = await User.findOne({ _id: profile.userId, isDeleted: false }).select("_id");
-  if (!owner) throw new AppError(httpStatus.BAD_REQUEST, "The applicant's account no longer exists");
+  if (!owner) throw new AppError(httpStatus.BAD_REQUEST, "APPLICANT_ACCOUNT_GONE");
 
   const before = profile.approvalStatus;
   const status = applyReview(profile, payload.action, payload.note, actorId);

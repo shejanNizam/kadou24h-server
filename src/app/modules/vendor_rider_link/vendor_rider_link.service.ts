@@ -10,13 +10,13 @@ import { VendorRiderLink } from "./vendor_rider_link.model";
 
 const approvedVendorOf = async (userId: string) => {
   const vendor = await VendorProfile.findOne({ userId, approvalStatus: ApprovalStatus.approved });
-  if (!vendor) throw new AppError(httpStatus.FORBIDDEN, "You need an approved store");
+  if (!vendor) throw new AppError(httpStatus.FORBIDDEN, "STORE_NOT_APPROVED_YET");
   return vendor;
 };
 
 const approvedRiderOf = async (userId: string) => {
   const rider = await RiderProfile.findOne({ userId, approvalStatus: ApprovalStatus.approved });
-  if (!rider) throw new AppError(httpStatus.FORBIDDEN, "You need an approved delivery partner account");
+  if (!rider) throw new AppError(httpStatus.FORBIDDEN, "RIDER_NOT_APPROVED");
   return rider;
 };
 
@@ -31,11 +31,11 @@ const createOrReopen = async (vendorId: string, riderId: string, by: LinkInitiat
   const existing = await VendorRiderLink.findOne({ vendorId, riderId });
 
   if (existing?.status === LinkStatus.active) {
-    throw new AppError(httpStatus.CONFLICT, "You are already connected");
+    throw new AppError(httpStatus.CONFLICT, "LINK_ALREADY_CONNECTED");
   }
   if (existing?.status === LinkStatus.invited) {
     if (existing.initiatedBy === by) {
-      throw new AppError(httpStatus.CONFLICT, "Invitation already sent — waiting for an answer");
+      throw new AppError(httpStatus.CONFLICT, "LINK_INVITE_PENDING");
     }
     existing.status = LinkStatus.active;
     existing.respondedAt = new Date();
@@ -56,9 +56,9 @@ const inviteRider = async (vendorUserId: string, riderId: string) => {
     approvalStatus: ApprovalStatus.approved,
     partnerType: PartnerType.moto,
   });
-  if (!rider) throw new AppError(httpStatus.NOT_FOUND, "Delivery partner not found");
+  if (!rider) throw new AppError(httpStatus.NOT_FOUND, "PARTNER_NOT_FOUND");
   if (String(rider.userId) === vendorUserId) {
-    throw new AppError(httpStatus.BAD_REQUEST, "You cannot link your own delivery account to your store");
+    throw new AppError(httpStatus.BAD_REQUEST, "LINK_SELF");
   }
 
   const link = await createOrReopen(String(vendor._id), riderId, LinkInitiator.vendor);
@@ -69,12 +69,12 @@ const inviteRider = async (vendorUserId: string, riderId: string) => {
 const requestVendor = async (riderUserId: string, vendorId: string) => {
   const rider = await approvedRiderOf(riderUserId);
   if (rider.partnerType !== PartnerType.moto) {
-    throw new AppError(httpStatus.BAD_REQUEST, "Only local delivery partners can join a store network");
+    throw new AppError(httpStatus.BAD_REQUEST, "LINK_ONLY_MOTO");
   }
   const vendor = await VendorProfile.findOne({ _id: vendorId, approvalStatus: ApprovalStatus.approved });
-  if (!vendor) throw new AppError(httpStatus.NOT_FOUND, "Store not found");
+  if (!vendor) throw new AppError(httpStatus.NOT_FOUND, "STORE_NOT_FOUND");
   if (String(vendor.userId) === riderUserId) {
-    throw new AppError(httpStatus.BAD_REQUEST, "You cannot link your own store to your delivery account");
+    throw new AppError(httpStatus.BAD_REQUEST, "LINK_SELF");
   }
 
   const link = await createOrReopen(vendorId, String(rider._id), LinkInitiator.rider);
@@ -85,7 +85,7 @@ const requestVendor = async (riderUserId: string, vendorId: string) => {
 /** Loads a link and the caller's side of it (throws if the caller is not part of it). */
 const loadForParty = async (linkId: string, userId: string) => {
   const link = await VendorRiderLink.findById(linkId);
-  if (!link) throw new AppError(httpStatus.NOT_FOUND, "Connection not found");
+  if (!link) throw new AppError(httpStatus.NOT_FOUND, "LINK_NOT_FOUND");
 
   const [vendor, rider] = await Promise.all([
     VendorProfile.findById(link.vendorId).select("userId"),
@@ -97,7 +97,7 @@ const loadForParty = async (linkId: string, userId: string) => {
       : String(rider?.userId) === userId
         ? LinkInitiator.rider
         : null;
-  if (!side) throw new AppError(httpStatus.NOT_FOUND, "Connection not found");
+  if (!side) throw new AppError(httpStatus.NOT_FOUND, "LINK_NOT_FOUND");
 
   const otherUserId = side === LinkInitiator.vendor ? rider?.userId : vendor?.userId;
   return { link, side, otherUserId };
@@ -107,10 +107,10 @@ const respond = async (linkId: string, userId: string, accept: boolean) => {
   const { link, side, otherUserId } = await loadForParty(linkId, userId);
 
   if (link.status !== LinkStatus.invited) {
-    throw new AppError(httpStatus.CONFLICT, "This invitation is no longer pending");
+    throw new AppError(httpStatus.CONFLICT, "LINK_NOT_PENDING");
   }
   if (link.initiatedBy === side) {
-    throw new AppError(httpStatus.FORBIDDEN, "Only the invited party can answer");
+    throw new AppError(httpStatus.FORBIDDEN, "LINK_ONLY_INVITEE");
   }
 
   link.status = accept ? LinkStatus.active : LinkStatus.declined;

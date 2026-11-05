@@ -68,10 +68,6 @@ export const orderErrors = {
     en: 'Item "{name}" ran out of stock during checkout. Please try again.',
     fr: "L'article « {name} » vient d'être épuisé pendant votre commande. Veuillez réessayer.",
   },
-  STORE_NOT_FOUND: {
-    en: "The store of this product was not found.",
-    fr: "La boutique de ce produit est introuvable.",
-  },
   STORE_NOT_APPROVED: {
     en: 'Store "{store}" is not currently approved to accept orders.',
     fr: "La boutique « {store} » n'est pas autorisée à recevoir des commandes pour le moment.",

@@ -134,10 +134,10 @@ describe("AppError", () => {
     expect(isErrorCode(error.code)).toBe(true);
   });
 
-  it("still accepts a legacy text message (no code)", () => {
-    const error = new AppError(httpStatus.BAD_REQUEST, "Some old message");
-    expect(error.code).toBeUndefined();
-    expect(error.message).toBe("Some old message");
+  it("only accepts codes from the catalog (checked by the compiler)", () => {
+    // @ts-expect-error -- English text is not an ErrorCode: every reason lives in the catalog
+    const withText = () => new AppError(httpStatus.BAD_REQUEST, "Some old message");
+    expect(typeof withText).toBe("function");
   });
 });
 
@@ -154,8 +154,9 @@ describe("Error answers", () => {
   testApp.get("/coded", () => {
     throw new AppError(httpStatus.FORBIDDEN, "ACCOUNT_BANNED", { reason: "Spam" });
   });
-  testApp.get("/legacy", () => {
-    throw new AppError(httpStatus.CONFLICT, "Old English text");
+  testApp.get("/dated", () => {
+    // 23:30 UTC on 2 March is still 2 March in Conakry (UTC+0), whatever the server's zone
+    throw new AppError(httpStatus.FORBIDDEN, "CHAT_RESTRICTED", { until: new Date("2026-03-02T23:30:00Z") });
   });
   testApp.get("/crash", () => {
     throw new Error("database exploded");
@@ -182,10 +183,12 @@ describe("Error answers", () => {
     expect(res.body.message).toBe("Your account is banned: Spam");
   });
 
-  it("gives a legacy text error the generic code of its status", async () => {
-    const res = await request(testApp).get("/legacy");
-    expect(res.status).toBe(409);
-    expect(res.body).toMatchObject({ code: "CONFLICT", message: "Old English text" });
+  it("writes dates in the language, in Guinea's time", async () => {
+    const fr = await request(testApp).get("/dated");
+    expect(fr.body.message).toMatch(/jusqu'au 2 mars (à )?23:30 /);
+    expect(fr.body.params).toEqual({ until: "2026-03-02T23:30:00.000Z" });
+    const en = await request(testApp).get("/dated").set("Accept-Language", "en");
+    expect(en.body.message).toMatch(/until (March 2|2 March),? (at )?11:30\sPM due/);
   });
 
   it("translates Zod's own messages and names the first field", async () => {

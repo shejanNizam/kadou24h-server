@@ -140,14 +140,14 @@ const listStrikes = async (query: { role?: string; active?: string; search?: str
  */
 const changeStrike = async (id: string, payload: { action: "lift" | "soften"; note?: string }, actorId: string) => {
   const strike = await BookingStrike.findById(id);
-  if (!strike) throw new AppError(httpStatus.NOT_FOUND, "Penalty not found");
-  if (strike.liftedAt) throw new AppError(httpStatus.BAD_REQUEST, "This penalty was already lifted");
+  if (!strike) throw new AppError(httpStatus.NOT_FOUND, "PENALTY_NOT_FOUND");
+  if (strike.liftedAt) throw new AppError(httpStatus.BAD_REQUEST, "PENALTY_ALREADY_LIFTED");
   const before = { penalty: strike.penalty, suspendedUntil: strike.suspendedUntil, limitedUntil: strike.limitedUntil, lessVisibleUntil: strike.lessVisibleUntil };
   const now = new Date();
 
   if (payload.action === "soften") {
     if (strike.role !== StrikeRole.worker || strike.penalty !== PenaltyType.suspension) {
-      throw new AppError(httpStatus.BAD_REQUEST, "Only a worker's suspension can be softened");
+      throw new AppError(httpStatus.BAD_REQUEST, "PENALTY_SOFTEN_ONLY_SUSPENSION");
     }
     strike.penalty = PenaltyType.less_visible;
     strike.set("suspendedUntil", undefined);

@@ -36,7 +36,7 @@ const updatePlan = async (
   const plan = await SubscriptionPlan.findByIdAndUpdate(planId, payload, {
     new: true,
   });
-  if (!plan) throw new AppError(httpStatus.NOT_FOUND, "Subscription plan not found");
+  if (!plan) throw new AppError(httpStatus.NOT_FOUND, "SUBSCRIPTION_PLAN_NOT_FOUND");
   return plan;
 };
 
@@ -66,13 +66,13 @@ const subscribe = async (
 ) => {
   const plan = await SubscriptionPlan.findById(payload.planId);
   if (!plan || !plan.isActive) {
-    throw new AppError(httpStatus.NOT_FOUND, "Active subscription plan not found");
+    throw new AppError(httpStatus.NOT_FOUND, "SUBSCRIPTION_PLAN_NOT_FOUND");
   }
 
   // A moto-driver plan only makes sense for an approved moto rider
   if (plan.audience === PlanAudience.moto_driver) {
     const rider = await RiderProfile.exists({ userId, partnerType: PartnerType.moto, approvalStatus: ApprovalStatus.approved });
-    if (!rider) throw new AppError(httpStatus.BAD_REQUEST, "Only approved moto riders can take a moto-taxi plan");
+    if (!rider) throw new AppError(httpStatus.BAD_REQUEST, "RIDE_PLAN_ONLY_MOTO");
   }
 
   // 1. Process subscription payment

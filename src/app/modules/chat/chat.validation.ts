@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { ConversationType, MessageType } from "./chat.interface";
 
-const objectId = z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid id");
+const objectId = z.string().regex(/^[0-9a-fA-F]{24}$/, "INVALID_ID");
 
 // The app says what the chat is about; the server finds the other person
 const startConversationZodSchema = z.object({
@@ -40,7 +40,7 @@ const sendMessageZodSchema = z.object({
         return true;
       },
       {
-        message: "Text is required for text messages, mediaUrl is required for voice/image messages.",
+        message: "MESSAGE_CONTENT_REQUIRED",
       },
     ),
 });

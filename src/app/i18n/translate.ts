@@ -6,6 +6,17 @@ import type { Locale } from "./locale";
 /** Values for a message's {placeholders}. Numbers and dates are formatted for the language. */
 export type MessageParams = Record<string, string | number | Date>;
 
+/**
+ * Named date styles for messages: "{until, date, day}" → "12 mars" / "12 March".
+ * Dates are shown in Guinea's time, where the app runs, whatever the server's zone.
+ */
+const FORMATS = {
+  date: {
+    day: { day: "numeric", month: "long", timeZone: "Africa/Conakry" },
+    dayTime: { day: "numeric", month: "long", hour: "2-digit", minute: "2-digit", timeZone: "Africa/Conakry" },
+  },
+} satisfies ConstructorParameters<typeof IntlMessageFormat>[2];
+
 // Parsing an ICU message is the costly part: each (language, text) is compiled once
 const compiled = new Map<string, IntlMessageFormat>();
 
@@ -19,7 +30,7 @@ export function formatMessage(template: string, locale: Locale, params?: Message
   try {
     let format = compiled.get(key);
     if (!format) {
-      format = new IntlMessageFormat(template, locale);
+      format = new IntlMessageFormat(template, locale, FORMATS);
       compiled.set(key, format);
     }
     return String(format.format(params));

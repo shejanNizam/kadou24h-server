@@ -43,19 +43,23 @@ export const createNewAccessTokenWithRefreshToken = async (
       configs.jwt_refresh_secret,
     ) as JwtPayload;
   } catch {
-    throw new AppError(httpStatus.UNAUTHORIZED, "Invalid or expired refresh token");
+    throw new AppError(httpStatus.UNAUTHORIZED, "REFRESH_TOKEN_INVALID");
   }
 
   const user = await User.findById(verifiedRefreshToken._id);
 
   if (!user || user.isDeleted) {
-    throw new AppError(httpStatus.UNAUTHORIZED, "User does not exist");
+    throw new AppError(httpStatus.UNAUTHORIZED, "ACCOUNT_NOT_FOUND");
   }
   if (user.status === UserStatus.suspended || user.status === UserStatus.banned) {
-    throw new AppError(httpStatus.FORBIDDEN, `Account is ${user.status}`);
+    throw new AppError(
+      httpStatus.FORBIDDEN,
+      user.status === UserStatus.banned ? "ACCOUNT_BANNED" : "ACCOUNT_SUSPENDED",
+      { reason: user.statusReason || "none" },
+    );
   }
   if ((verifiedRefreshToken.tokenVersion ?? 0) !== user.tokenVersion) {
-    throw new AppError(httpStatus.UNAUTHORIZED, "Session expired. Please log in again.");
+    throw new AppError(httpStatus.UNAUTHORIZED, "SESSION_EXPIRED");
   }
 
   return generateToken(

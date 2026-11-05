@@ -17,12 +17,13 @@ export const sendSms = async ({ to, message }: SendSmsOptions) => {
     case "log": {
       // Never print OTPs to production logs — there is simply no SMS channel yet.
       if (configs.node_env === "production") {
-        throw new AppError(503, "SMS provider is not configured");
+        throw new AppError(503, "SMS_NOT_CONFIGURED");
       }
       logger.info(`[SMS:log] to ${to}: ${message}`);
       return;
     }
     default:
-      throw new AppError(503, `SMS provider "${configs.SMS.provider}" is not supported`);
+      logger.error("SMS provider is not supported", { provider: configs.SMS.provider });
+      throw new AppError(503, "SMS_NOT_CONFIGURED");
   }
 };

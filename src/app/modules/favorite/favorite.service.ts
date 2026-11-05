@@ -6,12 +6,12 @@ import { Favorite } from "./favorite.model";
 
 const toggleFavorite = async (userId: string, productId: string) => {
   if (!Types.ObjectId.isValid(productId)) {
-    throw new AppError(httpStatus.BAD_REQUEST, "Invalid product ID.");
+    throw new AppError(httpStatus.BAD_REQUEST, "INVALID_ID");
   }
 
   const product = await Product.findOne({ _id: productId, isDeleted: false });
   if (!product) {
-    throw new AppError(httpStatus.NOT_FOUND, "Product not found.");
+    throw new AppError(httpStatus.NOT_FOUND, "PRODUCT_NOT_FOUND");
   }
 
   const existing = await Favorite.findOne({ userId, productId });

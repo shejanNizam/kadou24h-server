@@ -6,13 +6,13 @@ const fileRefZod = z.object({
 });
 
 const educationZod = z.object({
-  degree: z.string().trim().min(1, "Degree is required"),
-  institution: z.string().trim().min(1, "Institution is required"),
+  degree: z.string().trim().min(1, "FIELD_REQUIRED"),
+  institution: z.string().trim().min(1, "FIELD_REQUIRED"),
   year: z.string().trim().min(4).max(10),
 });
 
 const experienceZod = z.object({
-  title: z.string().trim().min(1, "Job title is required"),
+  title: z.string().trim().min(1, "FIELD_REQUIRED"),
   company: z.string().trim().optional(),
   location: z.string().trim().optional(),
   startDate: z.string().or(z.date()).optional(),
@@ -45,19 +45,19 @@ export const upsertProfileSchema = z.object({
   experienceYears: z.number().min(0).max(60).optional(),
   serviceCategoryId: z
     .string()
-    .regex(/^[0-9a-fA-F]{24}$/, "Valid categoryId required")
+    .regex(/^[0-9a-fA-F]{24}$/, "INVALID_ID")
     .optional(),
   // Worker profile: null clears it
   workingHours: z
     .object({
       days: z.array(z.number().int().min(0).max(6)).max(7),
-      from: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Use HH:mm"),
-      to: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Use HH:mm"),
+      from: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "TIME_FORMAT"),
+      to: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "TIME_FORMAT"),
     })
     .nullable()
     .optional(),
   idDocument: fileRefZod.nullable().optional(),
-  workPhotos: z.array(fileRefZod).max(10, "Up to 10 work photos").optional(),
+  workPhotos: z.array(fileRefZod).max(10, "WORK_PHOTOS_TOO_MANY").optional(),
 });
 
 export const toggleWorkerListingSchema = z.object({
@@ -66,7 +66,7 @@ export const toggleWorkerListingSchema = z.object({
   experienceYears: z.number().min(0).max(60).optional(),
   serviceCategoryId: z
     .string()
-    .regex(/^[0-9a-fA-F]{24}$/, "Valid categoryId required")
+    .regex(/^[0-9a-fA-F]{24}$/, "INVALID_ID")
     .optional(),
 });
 
