@@ -11,6 +11,7 @@ import { swaggerSpec } from "./app/config/swagger.config";
 import { globalErrorHandler } from "./app/middlewares/globalErrorHandler";
 import { sanitizeInput } from "./app/middlewares/sanitizeInput";
 import notFound from "./app/middlewares/notFound";
+import { resolveLocale } from "./app/middlewares/locale";
 import { globalLimiter } from "./app/middlewares/rateLimiter";
 import { requestId } from "./app/middlewares/requestId";
 import { HealthRoutes } from "./app/modules/health/health.route";
@@ -22,6 +23,8 @@ const app: Application = express();
 
 // Assign a correlation ID to every request before anything else
 app.use(requestId);
+// The answer language (Accept-Language), read before anything can fail
+app.use(resolveLocale);
 
 // Security & performance — must come before body parsers
 app.use(helmet());

@@ -134,6 +134,8 @@ const call = async (method, url, body, token, headers = {}) => {
     headers: {
       "Content-Type": "application/json",
       "X-Forwarded-For": ipFor(token),
+      // The checks below read English messages; the i18n checks ask for other languages
+      "Accept-Language": "en",
       ...(token && { Authorization: `Bearer ${token}` }),
       ...headers,
     },
@@ -1596,7 +1598,7 @@ const run = async () => {
     return { status: res.status, body: await res.json().catch(() => ({})) };
   };
   r = await upload("page.html", "text/html", "<script>alert(1)</script>");
-  check("security: uploading a web page is refused", r.status === 415, brief(r));
+  check("security: uploading a web page is refused", r.status === 415 && r.body.code === "FILE_TYPE_NOT_ALLOWED", brief(r));
   r = await upload("photo.html", "image/jpeg", "<html></html>");
   check("security: a page disguised as a photo is refused", r.status === 415, brief(r));
 
@@ -1604,7 +1606,7 @@ const run = async () => {
   check("security: public lists are capped (100 per page)", ok(r) && r.body.meta?.limit === 100, JSON.stringify(r.body.meta ?? brief(r)));
 
   const broken = await fetch(`${BASE}/auth/login`, { method: "POST", headers: { "Content-Type": "application/json", "X-Forwarded-For": "10.202.0.1" }, body: "{not json" });
-  check("security: a broken JSON body is a 400, not a server error", broken.status === 400, String(broken.status));
+  check("security: a broken JSON body is a 400, not a server error", broken.status === 400 && (await broken.json().catch(() => ({}))).code === "INVALID_JSON", String(broken.status));
 
   // Someone guesses one account's password from many phones (many IPs): the account locks
   const victimPhone = `+22466${stamp}9`;
@@ -1617,6 +1619,22 @@ const run = async () => {
   r = await call("POST", "/auth/login", { identifier: victimPhone, password: "kadou2026" }, null, { "X-Forwarded-For": "10.201.0.1" });
   check("security: …even the right password waits until the lock ends", r.status === 429, brief(r));
   check("security: …the owner's existing session keeps working", ok(await call("GET", "/user/me", null, victim.token)));
+
+  // Error answers: a stable code, and the message in the client's language
+  r = await call("GET", "/no-such-route", null, null, { "Accept-Language": "fr" });
+  check("i18n: an unknown route answers ROUTE_NOT_FOUND in French", r.status === 404 && r.body.code === "ROUTE_NOT_FOUND" && /n'existe pas/.test(r.body.message ?? ""), brief(r));
+  r = await call("GET", "/user/me", null, null, { "Accept-Language": "en-GB,en;q=0.9" });
+  check("i18n: no token → TOKEN_MISSING in English", r.status === 401 && r.body.code === "TOKEN_MISSING" && r.body.message === "Please log in to continue.", brief(r));
+  r = await call("GET", "/user/me", null, null, { "Accept-Language": "*" });
+  check("i18n: no usable language → French", r.body.code === "TOKEN_MISSING" && r.body.message === "Veuillez vous connecter pour continuer.", brief(r));
+  r = await call("PATCH", "/user/me", { language: "en" }, victim.token);
+  check("i18n: a user can choose English", ok(r) && r.body.data?.language === "en", brief(r));
+  r = await call("GET", "/wallets/admin/cod-settlements", null, victim.token, { "Accept-Language": "*" });
+  check("i18n: without a language in the request, the user's own is used", r.status === 403 && r.body.code === "ROLE_NOT_ALLOWED" && r.body.message === "You are not permitted to access this route.", brief(r));
+  r = await call("GET", "/wallets/admin/cod-settlements", null, victim.token, { "Accept-Language": "fr" });
+  check("i18n: …but the request's language wins", r.body.code === "ROLE_NOT_ALLOWED" && /n'avez pas accès/.test(r.body.message ?? ""), brief(r));
+  r = await call("POST", "/auth/login", {}, null, { "Accept-Language": "fr", "X-Forwarded-For": "10.203.0.1" });
+  check("i18n: validation errors are coded and list the fields", r.status === 400 && r.body.code === "VALIDATION_FAILED" && r.body.errorSources?.length > 0, brief(r));
 };
 
 run().then(() => finish(), finish);

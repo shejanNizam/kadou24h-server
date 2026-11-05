@@ -2,6 +2,9 @@ import type { Request } from "express";
 import rateLimit, { ipKeyGenerator } from "express-rate-limit";
 import { JwtPayload } from "jsonwebtoken";
 import { configs } from "../config/index";
+import type { ErrorCode } from "../i18n/errors";
+import { localeOf } from "../i18n/locale";
+import { translateError } from "../i18n/translate";
 import { verifyToken } from "../utils/jwt";
 
 /**
@@ -34,6 +37,14 @@ const subjectOf = (req: Request): string => {
   return typeof raw === "string" ? raw.replace(/[\s-]/g, "").toLowerCase() : "";
 };
 
+/** The 429 answer, in the same shape and language as every other error */
+const limitedAnswer = (code: ErrorCode) => (req: Request) => ({
+  success: false,
+  code,
+  message: translateError(code, localeOf(req)),
+  errorSources: [],
+});
+
 const common = {
   standardHeaders: "draft-8" as const,
   legacyHeaders: false,
@@ -50,7 +61,7 @@ export const globalLimiter = rateLimit({
     const account = accountOf(req);
     return account ? `u:${account}` : `ip:${ipKey(req)}`;
   },
-  message: { success: false, message: "Too many requests, please try again later." },
+  message: limitedAnswer("TOO_MANY_REQUESTS"),
 });
 
 const authPerAccount = rateLimit({
@@ -58,14 +69,14 @@ const authPerAccount = rateLimit({
   windowMs: WINDOW_15_MIN,
   limit: 10,
   keyGenerator: (req: Request) => `auth:${ipKey(req)}:${subjectOf(req)}`,
-  message: { success: false, message: "Too many auth attempts, please try again later." },
+  message: limitedAnswer("TOO_MANY_AUTH_ATTEMPTS"),
 });
 const authPerIp = rateLimit({
   ...common,
   windowMs: WINDOW_15_MIN,
   limit: 300,
   keyGenerator: (req: Request) => `auth-ip:${ipKey(req)}`,
-  message: { success: false, message: "Too many auth attempts, please try again later." },
+  message: limitedAnswer("TOO_MANY_AUTH_ATTEMPTS"),
 });
 // For login, refresh-token, change/set/reset-password, social sign-in, code checks
 export const authLimiter = [authPerIp, authPerAccount];
@@ -77,14 +88,14 @@ const otpPerTarget = rateLimit({
   windowMs: HOUR,
   limit: 8,
   keyGenerator: (req: Request) => `otp:${ipKey(req)}:${subjectOf(req)}`,
-  message: { success: false, message: "Too many code requests, please try again later." },
+  message: limitedAnswer("TOO_MANY_CODE_REQUESTS"),
 });
 const otpPerIp = rateLimit({
   ...common,
   windowMs: HOUR,
   limit: 120,
   keyGenerator: (req: Request) => `otp-ip:${ipKey(req)}`,
-  message: { success: false, message: "Too many code requests, please try again later." },
+  message: limitedAnswer("TOO_MANY_CODE_REQUESTS"),
 });
 export const otpLimiter = [otpPerIp, otpPerTarget];
 
@@ -97,7 +108,7 @@ export const uploadLimiter = rateLimit({
     const account = accountOf(req);
     return account ? `up:${account}` : `up-ip:${ipKey(req)}`;
   },
-  message: { success: false, message: "Too many uploads, please try again later." },
+  message: limitedAnswer("TOO_MANY_UPLOADS"),
 });
 
 /** Crash reports from the app: a phone stuck in a crash loop must not flood the database */
@@ -109,5 +120,5 @@ export const appErrorLimiter = rateLimit({
     const account = accountOf(req);
     return account ? `err:${account}` : `err-ip:${ipKey(req)}`;
   },
-  message: { success: false, message: "Too many reports" },
+  message: limitedAnswer("TOO_MANY_REPORTS"),
 });

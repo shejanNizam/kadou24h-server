@@ -3,6 +3,7 @@ import httpStatus from "http-status";
 import { JwtPayload } from "jsonwebtoken";
 import { configs } from "../config/index";
 import AppError from "../errorHelpers/AppError";
+import { isLocale } from "../i18n/locale";
 import { UserStatus } from "../modules/user/user.interface";
 import { User } from "../modules/user/user.model";
 import { verifyToken } from "../utils/jwt";
@@ -12,7 +13,8 @@ import { verifyToken } from "../utils/jwt";
  * `authRoles`. The user is re-read from the database so role changes,
  * suspensions and "log out everywhere" (tokenVersion) apply immediately.
  *
- * Sets `req.user = { _id, roles, mode }`.
+ * Sets `req.user = { _id, roles, mode }`, and `req.locale` to the user's saved
+ * language when the request did not ask for one.
  */
 export const checkAuth =
   (...authRoles: string[]) =>
@@ -22,39 +24,42 @@ export const checkAuth =
         req.headers.authorization?.split(" ")[1] ?? req.cookies?.accessToken;
 
       if (!accessToken) {
-        throw new AppError(httpStatus.UNAUTHORIZED, "Please provide a valid access token.");
+        throw new AppError(httpStatus.UNAUTHORIZED, "TOKEN_MISSING");
       }
 
       let verifiedToken: JwtPayload;
       try {
         verifiedToken = verifyToken(accessToken, configs.jwt_access_secret) as JwtPayload;
       } catch {
-        throw new AppError(httpStatus.UNAUTHORIZED, "Invalid or expired access token.");
+        throw new AppError(httpStatus.UNAUTHORIZED, "TOKEN_INVALID");
       }
 
       const user = await User.findById(verifiedToken._id)
-        .select("roles status statusReason tokenVersion isDeleted isPhoneVerified isEmailVerified lastActiveMode")
+        .select("roles status statusReason tokenVersion isDeleted isPhoneVerified isEmailVerified lastActiveMode language")
         .lean();
 
+      if (user && !req.locale && isLocale(user.language)) {
+        req.locale = user.language;
+      }
+
       if (!user || user.isDeleted) {
-        throw new AppError(httpStatus.UNAUTHORIZED, "User does not exist");
+        throw new AppError(httpStatus.UNAUTHORIZED, "ACCOUNT_NOT_FOUND");
       }
       if ((verifiedToken.tokenVersion ?? 0) !== user.tokenVersion) {
-        throw new AppError(httpStatus.UNAUTHORIZED, "Session expired. Please log in again.");
+        throw new AppError(httpStatus.UNAUTHORIZED, "SESSION_EXPIRED");
       }
       if (!user.isPhoneVerified && !user.isEmailVerified) {
-        throw new AppError(httpStatus.FORBIDDEN, "Account is not verified");
+        throw new AppError(httpStatus.FORBIDDEN, "ACCOUNT_NOT_VERIFIED");
       }
       if (user.status === UserStatus.suspended || user.status === UserStatus.banned) {
         throw new AppError(
           httpStatus.FORBIDDEN,
-          user.statusReason
-            ? `Account is ${user.status}: ${user.statusReason}`
-            : `Account is ${user.status}`,
+          user.status === UserStatus.banned ? "ACCOUNT_BANNED" : "ACCOUNT_SUSPENDED",
+          { reason: user.statusReason || "none" },
         );
       }
       if (!user.roles.some((role) => authRoles.includes(role))) {
-        throw new AppError(httpStatus.FORBIDDEN, "You are not permitted to access this route.");
+        throw new AppError(httpStatus.FORBIDDEN, "ROLE_NOT_ALLOWED");
       }
 
       req.user = {
@@ -77,18 +82,18 @@ export const checkResetToken = async (
   try {
     const token = req.headers.authorization?.split(" ")[1];
     if (!token) {
-      throw new AppError(httpStatus.UNAUTHORIZED, "No reset token provided.");
+      throw new AppError(httpStatus.UNAUTHORIZED, "RESET_TOKEN_MISSING");
     }
 
     let decoded: JwtPayload;
     try {
       decoded = verifyToken(token, configs.jwt_reset_secret) as JwtPayload;
     } catch {
-      throw new AppError(httpStatus.UNAUTHORIZED, "Reset token is invalid or expired.");
+      throw new AppError(httpStatus.UNAUTHORIZED, "RESET_TOKEN_INVALID");
     }
 
     if (decoded.purpose !== "reset_password") {
-      throw new AppError(httpStatus.UNAUTHORIZED, "Invalid reset token.");
+      throw new AppError(httpStatus.UNAUTHORIZED, "RESET_TOKEN_INVALID");
     }
 
     req.user = decoded;

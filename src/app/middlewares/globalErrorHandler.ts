@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-unused-vars */
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import express from "express";
 import { configs } from "../config/index";
@@ -9,17 +8,75 @@ import { handleCastError } from "../helpers/handleCastError";
 import { handlerDuplicateError } from "../helpers/handlerDuplicateError";
 import { handlerValidationError } from "../helpers/handlerValidationError";
 import { handlerZodError } from "../helpers/handlerZodError";
-import { TErrorSources } from "../interfaces/error.types";
+import type { ErrorCode } from "../i18n/errors";
+import { localeOf } from "../i18n/locale";
+import { translateError } from "../i18n/translate";
+import { TGenericErrorResponse } from "../interfaces/error.types";
 
-const swallowError = (_err: unknown): void => undefined;
+const swallowError = (): void => undefined;
 
+const MAX_UPLOAD_MB = 10;
+const MAX_UPLOAD_FILES = 10;
+
+/** The code answered when an error has none of its own (legacy text errors, unknown failures) */
+const GENERIC_CODES: Partial<Record<number, ErrorCode>> = {
+  400: "BAD_REQUEST",
+  401: "UNAUTHORIZED",
+  403: "FORBIDDEN",
+  404: "NOT_FOUND",
+  409: "CONFLICT",
+  413: "BODY_TOO_LARGE",
+  422: "UNPROCESSABLE",
+  429: "TOO_MANY_REQUESTS",
+  503: "SERVICE_UNAVAILABLE",
+};
+
+export const genericCodeFor = (statusCode: number): ErrorCode =>
+  GENERIC_CODES[statusCode] ?? (statusCode >= 500 ? "INTERNAL_ERROR" : "BAD_REQUEST");
+
+/** Turns any thrown value into a status, a code and (optionally) a final text. */
+function classify(err: any): TGenericErrorResponse {
+  if (err?.code === 11000) return handlerDuplicateError(err);
+  if (err?.name === "CastError") return handleCastError();
+  if (err?.name === "ZodError") return handlerZodError(err);
+  if (err?.name === "ValidationError") return handlerValidationError(err);
+
+  if (err instanceof AppError) {
+    return err.code
+      ? { statusCode: err.statusCode, code: err.code, params: err.params }
+      : // Legacy text error: its English text is kept until the throw gets a code
+        { statusCode: err.statusCode, code: genericCodeFor(err.statusCode), message: err.message };
+  }
+
+  if (err?.name === "MulterError") {
+    if (err.code === "LIMIT_FILE_SIZE") return { statusCode: 413, code: "FILE_TOO_LARGE", params: { maxMb: MAX_UPLOAD_MB } };
+    if (err.code === "LIMIT_FILE_COUNT") return { statusCode: 400, code: "TOO_MANY_FILES", params: { max: MAX_UPLOAD_FILES } };
+    return { statusCode: 400, code: "INVALID_UPLOAD" };
+  }
+  if (err?.type === "entity.parse.failed") return { statusCode: 400, code: "INVALID_JSON" };
+  if (err?.type === "entity.too.large") return { statusCode: 413, code: "BODY_TOO_LARGE" };
+
+  // Unexpected: the details stay in the server log, never in a production answer
+  return {
+    statusCode: 500,
+    code: "INTERNAL_ERROR",
+    message: configs.node_env !== "production" && err instanceof Error ? err.message : undefined,
+  };
+}
+
+/**
+ * Every error answer has the same shape:
+ *   { success: false, code, message, errorSources, params? }
+ * `code` is stable for clients to branch on; `message` is in the request's language.
+ */
 export const globalErrorHandler = async (
   err: any,
   req: express.Request,
   res: express.Response,
+  // Express recognises an error handler by its four parameters
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   _next: express.NextFunction,
 ) => {
-
   // Delete any files uploaded to Cloudinary if the request failed
   if (req.file) {
     await deleteFromCloudinary(req.file.path).catch(swallowError);
@@ -35,50 +92,8 @@ export const globalErrorHandler = async (
     );
   }
 
-  let errorSources: TErrorSources[] = [];
-  let statusCode = 500;
-  let message = "Something went wrong!";
-
-  if (err.code === 11000) {
-    const simplified = handlerDuplicateError(err);
-    statusCode = simplified.statusCode;
-    message = simplified.message;
-  } else if (err.name === "CastError") {
-    const simplified = handleCastError(err);
-    statusCode = simplified.statusCode;
-    message = simplified.message;
-  } else if (err.name === "ZodError") {
-    const simplified = handlerZodError(err);
-    statusCode = simplified.statusCode;
-    message = simplified.message;
-    errorSources = simplified.errorSources as TErrorSources[];
-  } else if (err.name === "ValidationError") {
-    const simplified = handlerValidationError(err);
-    statusCode = simplified.statusCode;
-    message = simplified.message;
-    errorSources = simplified.errorSources as TErrorSources[];
-  } else if (err instanceof AppError) {
-    statusCode = err.statusCode;
-    message = err.message;
-  } else if (err?.name === "MulterError") {
-    // Upload limits (size, number of files)
-    statusCode = err.code === "LIMIT_FILE_SIZE" ? 413 : 400;
-    message =
-      err.code === "LIMIT_FILE_SIZE"
-        ? "File too large (10 MB maximum)"
-        : err.code === "LIMIT_FILE_COUNT"
-          ? "Too many files (10 maximum)"
-          : "Invalid upload";
-  } else if (err?.type === "entity.parse.failed") {
-    statusCode = 400;
-    message = "Invalid JSON body";
-  } else if (err?.type === "entity.too.large") {
-    statusCode = 413;
-    message = "Request body too large";
-  } else if (err instanceof Error) {
-    // Unexpected: the details stay in the server log, never in the answer
-    message = configs.node_env === "production" ? "Something went wrong!" : err.message;
-  }
+  const { statusCode, code, params, message, errorSources = [] } = classify(err);
+  const locale = localeOf(req);
 
   // Every server-side failure is logged (with the request id to find it)
   if (statusCode >= 500) {
@@ -87,15 +102,22 @@ export const globalErrorHandler = async (
       method: req.method,
       path: req.originalUrl?.split("?")[0],
       status: statusCode,
+      code,
       error: err?.message,
       stack: err?.stack,
     });
   }
 
-  const response: Record<string, unknown> = { success: false, message, errorSources };
+  const response: Record<string, unknown> = {
+    success: false,
+    code,
+    message: message ?? translateError(code, locale, params),
+    errorSources,
+  };
+  if (params) response.params = params;
   if (configs.node_env === "development") {
     response.err = err;
-    response.stack = err.stack;
+    response.stack = err?.stack;
   }
-  res.status(statusCode).json(response);
+  res.status(statusCode).set("Content-Language", locale).json(response);
 };

@@ -1,12 +1,7 @@
-﻿/* eslint-disable @typescript-eslint/no-unused-vars */
-import mongoose from "mongoose";
-import { TGenericErrorResponse } from "../interfaces/error.types";
+﻿import { TGenericErrorResponse } from "../interfaces/error.types";
 
-export const handleCastError = (
-  err: mongoose.Error.CastError,
-): TGenericErrorResponse => {
-  return {
-    statusCode: 400,
-    message: "Invalid MongoDB ObjectID. Please provide a valid id",
-  };
-};
+/** A malformed id in a query (e.g. GET /orders/abc) */
+export const handleCastError = (): TGenericErrorResponse => ({
+  statusCode: 400,
+  code: "INVALID_ID",
+});

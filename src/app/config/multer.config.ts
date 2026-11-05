@@ -62,6 +62,6 @@ export const multerUpload = multer({
   limits: { fileSize: MAX_FILE_SIZE, files: MAX_FILES, fields: 20 },
   fileFilter: (_req, file, cb) => {
     if (uploadKind(file)) return cb(null, true);
-    cb(new AppError(httpStatus.UNSUPPORTED_MEDIA_TYPE, "Only photos (JPG, PNG, WebP, HEIC), voice messages and PDF files can be uploaded"));
+    cb(new AppError(httpStatus.UNSUPPORTED_MEDIA_TYPE, "FILE_TYPE_NOT_ALLOWED"));
   },
 });

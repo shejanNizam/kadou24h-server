@@ -56,7 +56,21 @@ const options: swaggerJsdoc.Options = {
           type: "object",
           properties: {
             success: { type: "boolean", example: false },
-            message: { type: "string", example: "Something went wrong" },
+            code: {
+              type: "string",
+              example: "TOKEN_MISSING",
+              description: "Stable reason to branch on (see src/app/i18n/errors). Never renamed.",
+            },
+            message: {
+              type: "string",
+              example: "Veuillez vous connecter pour continuer.",
+              description: "For people, in the Accept-Language language (fr or en; French by default).",
+            },
+            params: {
+              type: "object",
+              additionalProperties: true,
+              description: "Values in the message (e.g. { count: 2 }), when it has any.",
+            },
             errorSources: {
               type: "array",
               items: {
