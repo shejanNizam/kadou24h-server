@@ -147,10 +147,10 @@ const TRANSITIONS: Record<ReviewAction, { from: ApprovalStatus[]; to: ApprovalSt
 
 export const assertEditable = (profile: IReviewable) => {
   if (profile.approvalStatus === ApprovalStatus.pending) {
-    throw new AppError(httpStatus.CONFLICT, "Your application is under review and cannot be edited now");
+    throw new AppError(httpStatus.CONFLICT, "APPLICATION_UNDER_REVIEW");
   }
   if (!EDITABLE_STATUSES.includes(profile.approvalStatus)) {
-    throw new AppError(httpStatus.CONFLICT, `Application is already ${profile.approvalStatus}`);
+    throw new AppError(httpStatus.CONFLICT, "APPLICATION_LOCKED", { status: profile.approvalStatus });
   }
 };
 
@@ -176,10 +176,7 @@ export const applyReview = (
 ) => {
   const transition = TRANSITIONS[action];
   if (!transition.from.includes(profile.approvalStatus)) {
-    throw new AppError(
-      httpStatus.CONFLICT,
-      `Cannot ${action.replace("_", " ")} an application that is ${profile.approvalStatus}`,
-    );
+    throw new AppError(httpStatus.CONFLICT, "APPLICATION_REVIEW_NOT_ALLOWED", { status: profile.approvalStatus });
   }
 
   profile.approvalStatus = transition.to;

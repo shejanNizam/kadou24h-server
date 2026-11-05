@@ -65,19 +65,13 @@ const issueOtp = async (
     if (codeTtl > 0) return { expiresIn: codeTtl, resendIn: cooldownLeft };
   }
   if (cooldownLeft > 0) {
-    throw new AppError(
-      httpStatus.TOO_MANY_REQUESTS,
-      `Please wait ${cooldownLeft}s before requesting a new code.`,
-    );
+    throw new AppError(httpStatus.TOO_MANY_REQUESTS, "OTP_COOLDOWN", { seconds: cooldownLeft });
   }
 
   const abroad = Boolean(recipient.phone && !recipient.phone.startsWith(HOME_PREFIX));
   const sentToday = Number(await redisClient.get(k.daily));
   if (sentToday >= (abroad ? OTP_DAILY_LIMIT_ABROAD : OTP_DAILY_LIMIT)) {
-    throw new AppError(
-      httpStatus.TOO_MANY_REQUESTS,
-      "Daily code limit reached. Please try again tomorrow or contact support.",
-    );
+    throw new AppError(httpStatus.TOO_MANY_REQUESTS, "OTP_DAILY_LIMIT");
   }
 
   // Daily SMS budget: once spent, codes go by email only (or wait until tomorrow)
@@ -93,7 +87,7 @@ const issueOtp = async (
     }
   }
   if (!smsAllowed && !recipient.email) {
-    throw new AppError(httpStatus.SERVICE_UNAVAILABLE, "Codes are temporarily unavailable. Please try again later or contact support.");
+    throw new AppError(httpStatus.SERVICE_UNAVAILABLE, "OTP_SERVICE_PAUSED");
   }
 
   // Atomic: two requests at the same moment can't both pass the cooldown
@@ -102,7 +96,7 @@ const issueOtp = async (
     expiration: { type: "EX", value: OTP_RESEND_COOLDOWN },
   });
   if (slot === null) {
-    throw new AppError(httpStatus.TOO_MANY_REQUESTS, `Please wait ${OTP_RESEND_COOLDOWN}s before requesting a new code.`);
+    throw new AppError(httpStatus.TOO_MANY_REQUESTS, "OTP_COOLDOWN", { seconds: OTP_RESEND_COOLDOWN });
   }
 
   const otp = generateOtp();
@@ -147,7 +141,7 @@ const issueOtp = async (
 
   if (delivered === 0) {
     await redisClient.del([k.code, k.cooldown]);
-    throw new AppError(httpStatus.BAD_GATEWAY, "Could not send the verification code. Please try again.");
+    throw new AppError(httpStatus.BAD_GATEWAY, "OTP_SEND_FAILED");
   }
 
   const count = await redisClient.incr(k.daily);
@@ -167,15 +161,12 @@ const verifyOtp = async (purpose: OtpPurpose, target: string, otp: string) => {
 
   const attempts = Number(await redisClient.get(k.attempts));
   if (attempts >= OTP_MAX_ATTEMPTS) {
-    throw new AppError(
-      httpStatus.TOO_MANY_REQUESTS,
-      "Too many failed attempts. Please request a new code.",
-    );
+    throw new AppError(httpStatus.TOO_MANY_REQUESTS, "OTP_TOO_MANY_ATTEMPTS");
   }
 
   const savedHash = await redisClient.get(k.code);
   if (!savedHash) {
-    throw new AppError(httpStatus.BAD_REQUEST, "Code expired or not found. Please request a new one.");
+    throw new AppError(httpStatus.BAD_REQUEST, "OTP_EXPIRED");
   }
 
   const isMatch = crypto.timingSafeEqual(
@@ -187,12 +178,9 @@ const verifyOtp = async (purpose: OtpPurpose, target: string, otp: string) => {
     const newAttempts = await redisClient.incr(k.attempts);
     if (newAttempts === 1) await redisClient.expire(k.attempts, OTP_LOCKOUT_WINDOW);
     const remaining = OTP_MAX_ATTEMPTS - newAttempts;
-    throw new AppError(
-      httpStatus.BAD_REQUEST,
-      remaining > 0
-        ? `Invalid code. ${remaining} attempt${remaining === 1 ? "" : "s"} remaining.`
-        : "Too many failed attempts. Please request a new code.",
-    );
+    throw remaining > 0
+      ? new AppError(httpStatus.BAD_REQUEST, "OTP_INVALID", { remaining })
+      : new AppError(httpStatus.BAD_REQUEST, "OTP_TOO_MANY_ATTEMPTS");
   }
 
   // A used code no longer blocks a new one

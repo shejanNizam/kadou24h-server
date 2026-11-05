@@ -33,9 +33,8 @@ const assertCanSignIn = (user: IUser) => {
   if (user.status === UserStatus.suspended || user.status === UserStatus.banned) {
     throw new AppError(
       httpStatus.FORBIDDEN,
-      user.statusReason
-        ? `Your account is ${user.status}: ${user.statusReason}`
-        : `Your account is ${user.status}`,
+      user.status === UserStatus.banned ? "ACCOUNT_BANNED" : "ACCOUNT_SUSPENDED",
+      { reason: user.statusReason || "none" },
     );
   }
 };
@@ -74,10 +73,7 @@ const register = async (payload: {
 }) => {
   const existing = await User.findOne({ phone: payload.phone, isDeleted: false });
   if (existing?.isPhoneVerified) {
-    throw new AppError(
-      httpStatus.CONFLICT,
-      "An account with this phone number already exists. Please log in.",
-    );
+    throw new AppError(httpStatus.CONFLICT, "PHONE_ALREADY_REGISTERED");
   }
 
   if (payload.email) {
@@ -86,13 +82,13 @@ const register = async (payload: {
       isDeleted: false,
       ...(existing && { _id: { $ne: existing._id } }),
     });
-    if (emailOwner) throw new AppError(httpStatus.CONFLICT, "Email is already in use");
+    if (emailOwner) throw new AppError(httpStatus.CONFLICT, "EMAIL_TAKEN");
   }
 
   let referredBy;
   if (payload.referralCode) {
     const referrer = await User.findOne({ referralCode: payload.referralCode, isDeleted: false });
-    if (!referrer) throw new AppError(httpStatus.BAD_REQUEST, "Invalid referral code");
+    if (!referrer) throw new AppError(httpStatus.BAD_REQUEST, "REFERRAL_CODE_INVALID");
     referredBy = referrer._id;
   }
 
@@ -126,9 +122,9 @@ const register = async (payload: {
 
 const verifyAccount = async (phone: string, otp: string) => {
   const user = await User.findOne({ phone, isDeleted: false });
-  if (!user) throw new AppError(httpStatus.NOT_FOUND, "Account not found");
+  if (!user) throw new AppError(httpStatus.NOT_FOUND, "ACCOUNT_NOT_FOUND");
   if (user.isPhoneVerified) {
-    throw new AppError(httpStatus.BAD_REQUEST, "Account is already verified. Please log in.");
+    throw new AppError(httpStatus.BAD_REQUEST, "ACCOUNT_ALREADY_VERIFIED");
   }
 
   await OTPService.verifyOtp(OtpPurpose.verify_account, phone, otp);
@@ -141,11 +137,11 @@ const resendOtp = async (identifier: string, purpose: OtpPurpose) => {
   if (purpose === OtpPurpose.reset_password) return forgotPassword(identifier);
 
   const user = await User.findOne(identifierFilter(identifier));
-  if (!user) throw new AppError(httpStatus.NOT_FOUND, "Account not found");
+  if (!user) throw new AppError(httpStatus.NOT_FOUND, "ACCOUNT_NOT_FOUND");
   if (user.isPhoneVerified) {
-    throw new AppError(httpStatus.BAD_REQUEST, "Account is already verified. Please log in.");
+    throw new AppError(httpStatus.BAD_REQUEST, "ACCOUNT_ALREADY_VERIFIED");
   }
-  if (!user.phone) throw new AppError(httpStatus.BAD_REQUEST, "This account has no phone number");
+  if (!user.phone) throw new AppError(httpStatus.BAD_REQUEST, "ACCOUNT_HAS_NO_PHONE");
 
   const otp = await sendAccountCode(user);
   return { phone: maskPhone(user.phone), email: maskEmail(user.email), ...otp };
@@ -162,26 +158,23 @@ const loginFailKey = (userId: unknown) => `login:fail:${String(userId)}`;
 
 const login = async (identifier: string, password: string) => {
   const user = await User.findOne(identifierFilter(identifier)).select("+password");
-  if (!user) throw new AppError(httpStatus.UNAUTHORIZED, "Invalid phone/email or password");
+  if (!user) throw new AppError(httpStatus.UNAUTHORIZED, "INVALID_CREDENTIALS");
 
   const fails = Number(await redisClient.get(loginFailKey(user._id)));
   if (fails >= LOGIN_MAX_FAILS) {
     const wait = Math.max(1, Math.ceil((await redisClient.ttl(loginFailKey(user._id))) / 60));
-    throw new AppError(httpStatus.TOO_MANY_REQUESTS, `Too many wrong passwords. Try again in ${wait} min or reset your password.`);
+    throw new AppError(httpStatus.TOO_MANY_REQUESTS, "LOGIN_LOCKED", { minutes: wait });
   }
 
   if (!user.password) {
-    throw new AppError(
-      httpStatus.BAD_REQUEST,
-      "This account uses Google or Apple sign-in. Continue with it, or reset your password.",
-    );
+    throw new AppError(httpStatus.BAD_REQUEST, "SOCIAL_ACCOUNT_NO_PASSWORD");
   }
 
   const isPasswordMatch = await bcrypt.compare(password, user.password);
   if (!isPasswordMatch) {
     const count = await redisClient.incr(loginFailKey(user._id));
     if (count === 1) await redisClient.expire(loginFailKey(user._id), LOGIN_LOCK_SECONDS);
-    throw new AppError(httpStatus.UNAUTHORIZED, "Invalid phone/email or password");
+    throw new AppError(httpStatus.UNAUTHORIZED, "INVALID_CREDENTIALS");
   }
   await redisClient.del([loginFailKey(user._id)]);
 
@@ -220,10 +213,9 @@ const socialLogin = async (payload: {
 
   if (!user) {
     if (!profile.email || !profile.emailVerified) {
-      throw new AppError(
-        httpStatus.BAD_REQUEST,
-        `Your ${profile.provider} account has no verified email. Please sign up with your phone number.`,
-      );
+      throw new AppError(httpStatus.BAD_REQUEST, "SOCIAL_EMAIL_NOT_VERIFIED", {
+        provider: profile.provider === "apple" ? "Apple" : "Google",
+      });
     }
 
     // Same verified email → link to the existing account
@@ -278,13 +270,13 @@ const logoutAll = async (userId: string) => {
 
 const changePassword = async (userId: string, oldPassword: string, newPassword: string) => {
   const user = await User.findById(userId).select("+password");
-  if (!user) throw new AppError(httpStatus.NOT_FOUND, "User not found");
+  if (!user) throw new AppError(httpStatus.NOT_FOUND, "ACCOUNT_NOT_FOUND");
   if (!user.password) {
-    throw new AppError(httpStatus.BAD_REQUEST, "No password set yet. Use set-password instead.");
+    throw new AppError(httpStatus.BAD_REQUEST, "PASSWORD_NOT_SET");
   }
 
   const isMatch = await bcrypt.compare(oldPassword, user.password);
-  if (!isMatch) throw new AppError(httpStatus.UNAUTHORIZED, "Old password does not match");
+  if (!isMatch) throw new AppError(httpStatus.UNAUTHORIZED, "OLD_PASSWORD_WRONG");
 
   user.password = await hashPassword(newPassword);
   user.tokenVersion += 1; // signs out other devices
@@ -309,9 +301,9 @@ const ensureLocalIdentity = async (user: IUser) => {
 // For Google / Apple accounts that want a password as well
 const setPassword = async (userId: string, password: string) => {
   const user = await User.findById(userId).select("+password");
-  if (!user) throw new AppError(httpStatus.NOT_FOUND, "User not found");
+  if (!user) throw new AppError(httpStatus.NOT_FOUND, "ACCOUNT_NOT_FOUND");
   if (user.password) {
-    throw new AppError(httpStatus.BAD_REQUEST, "Password already set. Use change-password instead.");
+    throw new AppError(httpStatus.BAD_REQUEST, "PASSWORD_ALREADY_SET");
   }
 
   user.password = await hashPassword(password);
@@ -344,7 +336,7 @@ async function forgotPassword(identifier: string) {
 const verifyResetOtp = async (identifier: string, otp: string) => {
   const target = normalizeIdentifier(identifier);
   const user = await User.findOne(identifierFilter(identifier));
-  if (!user) throw new AppError(httpStatus.BAD_REQUEST, "Code expired or not found. Please request a new one.");
+  if (!user) throw new AppError(httpStatus.BAD_REQUEST, "OTP_EXPIRED");
 
   await OTPService.verifyOtp(OtpPurpose.reset_password, target, otp);
 
@@ -359,9 +351,9 @@ const verifyResetOtp = async (identifier: string, otp: string) => {
 
 const resetPassword = async (decodedToken: JwtPayload, newPassword: string) => {
   const user = await User.findOne({ _id: decodedToken._id, isDeleted: false });
-  if (!user) throw new AppError(httpStatus.NOT_FOUND, "User not found");
+  if (!user) throw new AppError(httpStatus.NOT_FOUND, "ACCOUNT_NOT_FOUND");
   if (user.tokenVersion !== decodedToken.tokenVersion) {
-    throw new AppError(httpStatus.UNAUTHORIZED, "This reset code was already used. Please start again.");
+    throw new AppError(httpStatus.UNAUTHORIZED, "RESET_CODE_USED");
   }
 
   user.password = await hashPassword(newPassword);

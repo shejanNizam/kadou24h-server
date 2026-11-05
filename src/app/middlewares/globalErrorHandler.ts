@@ -9,7 +9,7 @@ import { handlerDuplicateError } from "../helpers/handlerDuplicateError";
 import { handlerValidationError } from "../helpers/handlerValidationError";
 import { handlerZodError } from "../helpers/handlerZodError";
 import type { ErrorCode } from "../i18n/errors";
-import { localeOf } from "../i18n/locale";
+import { localeOf, type Locale } from "../i18n/locale";
 import { translateError } from "../i18n/translate";
 import { TGenericErrorResponse } from "../interfaces/error.types";
 
@@ -35,10 +35,10 @@ export const genericCodeFor = (statusCode: number): ErrorCode =>
   GENERIC_CODES[statusCode] ?? (statusCode >= 500 ? "INTERNAL_ERROR" : "BAD_REQUEST");
 
 /** Turns any thrown value into a status, a code and (optionally) a final text. */
-function classify(err: any): TGenericErrorResponse {
+function classify(err: any, locale: Locale): TGenericErrorResponse {
   if (err?.code === 11000) return handlerDuplicateError(err);
   if (err?.name === "CastError") return handleCastError();
-  if (err?.name === "ZodError") return handlerZodError(err);
+  if (err?.name === "ZodError") return handlerZodError(err, locale);
   if (err?.name === "ValidationError") return handlerValidationError(err);
 
   if (err instanceof AppError) {
@@ -92,8 +92,8 @@ export const globalErrorHandler = async (
     );
   }
 
-  const { statusCode, code, params, message, errorSources = [] } = classify(err);
   const locale = localeOf(req);
+  const { statusCode, code, params, message, errorSources = [] } = classify(err, locale);
 
   // Every server-side failure is logged (with the request id to find it)
   if (statusCode >= 500) {

@@ -31,7 +31,7 @@ import { maskPhone, toPublicUser } from "./user.utils";
 
 const findActiveUser = async (userId: string) => {
   const user = await User.findOne({ _id: userId, isDeleted: false });
-  if (!user) throw new AppError(httpStatus.NOT_FOUND, "User not found");
+  if (!user) throw new AppError(httpStatus.NOT_FOUND, "ACCOUNT_NOT_FOUND");
   return user;
 };
 
@@ -96,7 +96,7 @@ const updateMe = async (
     { $set: payload },
     { returnDocument: "after", runValidators: true },
   );
-  if (!user) throw new AppError(httpStatus.NOT_FOUND, "User not found");
+  if (!user) throw new AppError(httpStatus.NOT_FOUND, "ACCOUNT_NOT_FOUND");
   return toPublicUser(user);
 };
 
@@ -105,12 +105,9 @@ const switchMode = async (userId: string, mode: AppMode) => {
 
   // A role is only added after the admin approves the vendor / rider application
   if (!user.roles.includes(mode as unknown as UserRole)) {
-    throw new AppError(
-      httpStatus.FORBIDDEN,
-      mode === AppMode.customer
-        ? "This account cannot use customer mode"
-        : `You are not an approved ${mode} yet`,
-    );
+    throw mode === AppMode.customer
+      ? new AppError(httpStatus.FORBIDDEN, "MODE_CUSTOMER_NOT_ALLOWED")
+      : new AppError(httpStatus.FORBIDDEN, "MODE_NOT_APPROVED", { mode });
   }
 
   user.lastActiveMode = mode;
@@ -130,7 +127,7 @@ const updateNotificationPrefs = async (
     { $set },
     { returnDocument: "after" },
   );
-  if (!user) throw new AppError(httpStatus.NOT_FOUND, "User not found");
+  if (!user) throw new AppError(httpStatus.NOT_FOUND, "ACCOUNT_NOT_FOUND");
   return user.notificationPrefs;
 };
 
@@ -141,7 +138,7 @@ const assertPhoneAvailable = async (phone: string, userId?: string) => {
     ...(userId && { _id: { $ne: userId } }),
   });
   if (owner) {
-    throw new AppError(httpStatus.CONFLICT, "This phone number is already used by another account");
+    throw new AppError(httpStatus.CONFLICT, "PHONE_TAKEN");
   }
 };
 
@@ -149,7 +146,7 @@ const assertPhoneAvailable = async (phone: string, userId?: string) => {
 const requestPhoneChange = async (userId: string, phone: string) => {
   const user = await findActiveUser(userId);
   if (user.phone === phone && user.isPhoneVerified) {
-    throw new AppError(httpStatus.BAD_REQUEST, "This is already your verified phone number");
+    throw new AppError(httpStatus.BAD_REQUEST, "PHONE_UNCHANGED");
   }
   await assertPhoneAvailable(phone, userId);
 
@@ -171,7 +168,7 @@ const verifyPhoneChange = async (userId: string, phone: string, otp: string) => 
     { $set: { phone, isPhoneVerified: true } },
     { returnDocument: "after" },
   );
-  if (!user) throw new AppError(httpStatus.NOT_FOUND, "User not found");
+  if (!user) throw new AppError(httpStatus.NOT_FOUND, "ACCOUNT_NOT_FOUND");
 
   await AuthIdentity.updateOne({ userId, provider: "local" }, { providerId: phone });
   return toPublicUser(user);
@@ -187,7 +184,7 @@ const assertNothingPending = async (userId: string) => {
   const OPEN_LEG = [DeliveryStatus.assigned, DeliveryStatus.accepted, DeliveryStatus.going_to_pickup, DeliveryStatus.picked_up, DeliveryStatus.in_transit];
 
   if (await Order.exists({ customerId: userId, status: OrderStatus.active })) {
-    throw new AppError(httpStatus.CONFLICT, "You have orders in progress. Wait until they are delivered or cancel them before deleting your account.");
+    throw new AppError(httpStatus.CONFLICT, "DELETE_BLOCKED_ORDERS");
   }
   const [vendor, rider, wallets] = await Promise.all([
     VendorProfile.findOne({ userId }).select("_id").lean(),
@@ -195,23 +192,23 @@ const assertNothingPending = async (userId: string) => {
     Wallet.find({ ownerId: userId }).select("ownerMode heldBalance availableBalance cashOwed").lean(),
   ]);
   if (vendor && (await SubOrder.exists({ vendorId: vendor._id, status: { $in: OPEN_SUB_ORDER } }))) {
-    throw new AppError(httpStatus.CONFLICT, "Your store has orders in progress. Finish or cancel them before deleting your account.");
+    throw new AppError(httpStatus.CONFLICT, "DELETE_BLOCKED_STORE_ORDERS");
   }
   if (rider && (await Delivery.exists({ riderId: rider._id, status: { $in: OPEN_LEG } }))) {
-    throw new AppError(httpStatus.CONFLICT, "You have deliveries in progress. Finish them before deleting your account.");
+    throw new AppError(httpStatus.CONFLICT, "DELETE_BLOCKED_DELIVERIES");
   }
   if (wallets.some((w) => (w.cashOwed ?? 0) > 0)) {
-    throw new AppError(httpStatus.CONFLICT, "You still hold cash on delivery money. Hand it over before deleting your account.");
+    throw new AppError(httpStatus.CONFLICT, "DELETE_BLOCKED_CASH");
   }
   if (wallets.some((w) => (w.heldBalance ?? 0) > 0 || (w.availableBalance ?? 0) > 0)) {
-    throw new AppError(httpStatus.CONFLICT, "Your wallet still has money. Withdraw your balance before deleting your account.");
+    throw new AppError(httpStatus.CONFLICT, "DELETE_BLOCKED_WALLET");
   }
 };
 
 const deleteMe = async (userId: string) => {
   const user = await findActiveUser(userId);
   if (user.roles.includes(UserRole.super_admin)) {
-    throw new AppError(httpStatus.FORBIDDEN, "The super admin account cannot be deleted");
+    throw new AppError(httpStatus.FORBIDDEN, "SUPER_ADMIN_UNDELETABLE");
   }
   await assertNothingPending(userId);
   await softDelete(user);
@@ -243,13 +240,13 @@ const getSingleUser = async (id: string) => toPublicUser(await findActiveUser(id
 /** Guards shared by every admin action on another account. */
 const assertCanManage = (target: IUser, actorId: string, actorRoles: UserRole[]) => {
   if (String(target._id) === actorId) {
-    throw new AppError(httpStatus.FORBIDDEN, "You cannot perform this action on your own account");
+    throw new AppError(httpStatus.FORBIDDEN, "SELF_ACTION_FORBIDDEN");
   }
   if (target.roles.includes(UserRole.super_admin)) {
-    throw new AppError(httpStatus.FORBIDDEN, "The super admin account cannot be modified");
+    throw new AppError(httpStatus.FORBIDDEN, "SUPER_ADMIN_PROTECTED");
   }
   if (isAdminAccount(target) && !actorRoles.includes(UserRole.super_admin)) {
-    throw new AppError(httpStatus.FORBIDDEN, "Only the super admin can manage team members");
+    throw new AppError(httpStatus.FORBIDDEN, "SUPER_ADMIN_ONLY");
   }
 };
 
@@ -324,7 +321,7 @@ const createTeamMember = async (
   actorId: string,
 ) => {
   const emailTaken = await User.exists({ email: payload.email, isDeleted: false });
-  if (emailTaken) throw new AppError(httpStatus.CONFLICT, "Email is already in use");
+  if (emailTaken) throw new AppError(httpStatus.CONFLICT, "EMAIL_TAKEN");
   if (payload.phone) await assertPhoneAvailable(payload.phone);
 
   const member = await User.create({
@@ -356,7 +353,7 @@ const updateTeamMember = async (
 ) => {
   const member = await findActiveUser(id);
   if (!isAdminAccount(member)) {
-    throw new AppError(httpStatus.BAD_REQUEST, "This user is not a team member");
+    throw new AppError(httpStatus.BAD_REQUEST, "NOT_TEAM_MEMBER");
   }
   assertCanManage(member, actor._id, actor.roles);
 

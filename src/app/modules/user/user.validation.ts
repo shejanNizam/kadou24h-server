@@ -2,43 +2,45 @@ import z from "zod";
 import { AppMode, Language, UserRole, UserStatus } from "./user.interface";
 
 // ── Shared field schemas (also used by the auth module) ──
+// Messages are error codes (i18n/errors/validation.ts), translated per request.
+// A missing field gets FIELD_REQUIRED from zodErrorMap.
 
 export const phoneSchema = z
-  .string({ error: "Phone must be string" })
+  .string()
   .trim()
   .transform((v) => v.replace(/[\s-]/g, ""))
   .pipe(
     z.string().regex(/^\+[1-9]\d{6,14}$/, {
-      message: "Phone must be in international format, e.g. +224620123456",
+      message: "PHONE_FORMAT",
     }),
   );
 
 export const emailSchema = z
-  .string({ error: "Email must be string" })
+  .string()
   .trim()
   .toLowerCase()
-  .email({ message: "Invalid email address format." });
+  .email({ message: "EMAIL_INVALID" });
 
 // Kept simple on purpose: many users type on basic phones.
 export const passwordSchema = z
-  .string({ error: "Password must be string" })
-  .min(8, { message: "Password must be at least 8 characters long." })
-  .max(64, { message: "Password cannot exceed 64 characters." })
-  .regex(/[A-Za-z]/, { message: "Password must contain at least 1 letter." })
-  .regex(/\d/, { message: "Password must contain at least 1 number." });
+  .string()
+  .min(8, { message: "PASSWORD_TOO_SHORT" })
+  .max(64, { message: "PASSWORD_TOO_LONG" })
+  .regex(/[A-Za-z]/, { message: "PASSWORD_NEEDS_LETTER" })
+  .regex(/\d/, { message: "PASSWORD_NEEDS_NUMBER" });
 
 export const otpSchema = z
-  .string({ error: "OTP must be a string" })
-  .regex(/^\d{6}$/, { message: "OTP must be exactly 6 digits." });
+  .string()
+  .regex(/^\d{6}$/, { message: "OTP_FORMAT" });
 
 export const nameSchema = z
-  .string({ error: "Name must be string" })
+  .string()
   .trim()
-  .min(2, { message: "Name must be at least 2 characters long." })
-  .max(50, { message: "Name cannot exceed 50 characters." });
+  .min(2, { message: "NAME_TOO_SHORT" })
+  .max(50, { message: "NAME_TOO_LONG" });
 
 const avatarSchema = z.object({
-  url: z.string().url({ message: "Avatar url must be a valid URL" }),
+  url: z.string().url({ message: "URL_INVALID" }),
   publicId: z.string(),
 });
 
@@ -49,14 +51,14 @@ export const updateMeZodSchema = z
     name: nameSchema,
     avatar: avatarSchema,
     language: z.enum(Object.values(Language) as [string, ...string[]]),
-    country: z.string().length(2, { message: "Country must be an ISO-2 code, e.g. GN" }).toUpperCase(),
+    country: z.string().length(2, { message: "COUNTRY_CODE_INVALID" }).toUpperCase(),
   })
   .partial()
   .strict();
 
 export const switchModeZodSchema = z.object({
   mode: z.enum(Object.values(AppMode) as [string, ...string[]], {
-    error: "Mode must be customer, vendor or rider",
+    error: "MODE_INVALID",
   }),
 });
 
@@ -91,7 +93,7 @@ export const updateUserStatusZodSchema = z
   .refine(
     (v) =>
       !(v.status === UserStatus.suspended || v.status === UserStatus.banned) || !!v.reason,
-    { message: "A reason is required when suspending or banning", path: ["reason"] },
+    { message: "STATUS_REASON_REQUIRED", path: ["reason"] },
   );
 
 export const createTeamMemberZodSchema = z.object({
@@ -100,7 +102,7 @@ export const createTeamMemberZodSchema = z.object({
   phone: phoneSchema.optional(),
   password: passwordSchema,
   role: z.enum([UserRole.staff, UserRole.admin], {
-    error: "Role must be staff or admin",
+    error: "ROLE_INVALID",
   }),
 });
 

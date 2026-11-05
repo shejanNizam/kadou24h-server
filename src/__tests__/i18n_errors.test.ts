@@ -11,6 +11,7 @@ import { translateError } from "../app/i18n/translate";
 import { globalErrorHandler } from "../app/middlewares/globalErrorHandler";
 import { resolveLocale } from "../app/middlewares/locale";
 import validateRequest from "../app/middlewares/validateRequest";
+import { passwordSchema } from "../app/modules/user/user.validation";
 
 /** Every {argument} a message uses, including those inside plural/select branches */
 type AstNode = { type: number; value?: unknown; options?: Record<string, { value: AstNode[] }>; children?: AstNode[] };
@@ -61,6 +62,9 @@ describe("Error catalog", () => {
     expect(translateError("FILE_TOO_LARGE", "fr", { maxMb: 10 })).toBe("Fichier trop volumineux (10 Mo maximum).");
     expect(translateError("ACCOUNT_SUSPENDED", "en", { reason: "none" })).toBe("Your account is suspended.");
     expect(translateError("ACCOUNT_SUSPENDED", "fr", { reason: "Fraude" })).toBe("Votre compte est suspendu : Fraude");
+    expect(translateError("OTP_INVALID", "fr", { remaining: 1 })).toBe("Code invalide. 1 tentative restante.");
+    expect(translateError("OTP_INVALID", "en", { remaining: 3 })).toBe("Invalid code. 3 attempts remaining.");
+    expect(translateError("MODE_NOT_APPROVED", "fr", { mode: "rider" })).toBe("Vous n'êtes pas encore un livreur approuvé.");
   });
 
   it("never throws on a missing value (the error answer must always be built)", () => {
@@ -106,6 +110,9 @@ describe("Error answers", () => {
   testApp.use(express.json());
   testApp.use(resolveLocale);
   testApp.post("/validated", validateRequest(z.object({ name: z.string(), age: z.number().min(18) })), (_req, res) => {
+    res.json({ success: true });
+  });
+  testApp.post("/password", validateRequest(z.object({ password: passwordSchema })), (_req, res) => {
     res.json({ success: true });
   });
   testApp.get("/coded", () => {
@@ -155,6 +162,17 @@ describe("Error answers", () => {
     const en = await request(testApp).post("/validated").set("Accept-Language", "en").send({ age: 12 });
     expect(en.body.message).toBe("name: This field is required.");
     expect(en.body.errorSources[1].message).toMatch(/too small/i);
+  });
+
+  it("translates codes written on a schema, with the check's limits", async () => {
+    const fr = await request(testApp).post("/password").send({ password: "abc" });
+    expect(fr.body.code).toBe("VALIDATION_FAILED");
+    expect(fr.body.errorSources.map((e: { message: string }) => e.message)).toEqual([
+      "Le mot de passe doit contenir au moins 8 caractères.",
+      "Le mot de passe doit contenir au moins 1 chiffre.",
+    ]);
+    const en = await request(testApp).post("/password").set("Accept-Language", "en").send({ password: "abc" });
+    expect(en.body.message).toBe("password: Password must be at least 8 characters long.");
   });
 
   it("answers a broken JSON body with its own code", async () => {

@@ -11,12 +11,12 @@ import {
 
 // Phone (+224...) or email
 const identifierSchema = z
-  .string({ error: "Phone or email is required" })
+  .string()
   .trim()
-  .min(3)
+  .min(3, { message: "IDENTIFIER_INVALID" })
   .refine(
     (v) => (v.includes("@") ? emailSchema.safeParse(v).success : phoneSchema.safeParse(v).success),
-    { message: "Enter a valid phone number (e.g. +224620123456) or email" },
+    { message: "IDENTIFIER_INVALID" },
   );
 
 const languageSchema = z.enum(Object.values(Language) as [string, ...string[]]);
@@ -44,16 +44,16 @@ export const loginZodSchema = z
   .object({
     identifier: identifierSchema.optional(),
     email: emailSchema.optional(),
-    password: z.string({ error: "Password is required" }).min(1),
+    password: z.string().min(1, { message: "FIELD_REQUIRED" }),
   })
   .refine((data) => Boolean(data.identifier || data.email), {
-    message: "Enter a valid phone number (e.g. +224620123456) or email",
+    message: "IDENTIFIER_INVALID",
     path: ["identifier"],
   });
 
 export const socialLoginZodSchema = z.object({
   provider: z.enum(["google", "apple"]),
-  idToken: z.string({ error: "idToken is required" }).min(20),
+  idToken: z.string().min(20),
   // Apple only sends the user's name on the very first sign-in, to the app
   name: nameSchema.optional(),
   language: languageSchema.optional(),
@@ -69,11 +69,11 @@ export const logoutZodSchema = z.object({
 
 export const changePasswordZodSchema = z
   .object({
-    oldPassword: z.string({ error: "Old password is required" }).min(1),
+    oldPassword: z.string().min(1, { message: "FIELD_REQUIRED" }),
     newPassword: passwordSchema,
   })
   .refine((v) => v.oldPassword !== v.newPassword, {
-    message: "New password cannot be the same as the old password",
+    message: "PASSWORD_SAME_AS_OLD",
     path: ["newPassword"],
   });
 

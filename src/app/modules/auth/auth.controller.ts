@@ -85,7 +85,7 @@ const getNewAccessToken = catchAsync(async (req: Request, res: Response) => {
   // Mobile apps send it in the body; the admin panel relies on the cookie
   const refreshToken = req.body?.refreshToken ?? req.cookies?.refreshToken;
   if (!refreshToken) {
-    throw new AppError(httpStatus.BAD_REQUEST, "Refresh token is required");
+    throw new AppError(httpStatus.BAD_REQUEST, "REFRESH_TOKEN_REQUIRED");
   }
 
   const result = await AuthServices.getNewAccessToken(refreshToken as string);

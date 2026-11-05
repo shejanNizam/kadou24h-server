@@ -1635,6 +1635,16 @@ const run = async () => {
   check("i18n: …but the request's language wins", r.body.code === "ROLE_NOT_ALLOWED" && /n'avez pas accès/.test(r.body.message ?? ""), brief(r));
   r = await call("POST", "/auth/login", {}, null, { "Accept-Language": "fr", "X-Forwarded-For": "10.203.0.1" });
   check("i18n: validation errors are coded and list the fields", r.status === 400 && r.body.code === "VALIDATION_FAILED" && r.body.errorSources?.length > 0, brief(r));
+  // Auth answers: coded, in French by default, with the values a client needs
+  const fresh = `+22465${stamp}8`;
+  await call("POST", "/auth/register", { name: "Langue", phone: fresh, password: "kadou2026" }, null, { "X-Forwarded-For": "10.204.0.1" });
+  r = await call("POST", "/auth/verify-account", { phone: fresh, otp: "000000" === lastOtp(fresh) ? "111111" : "000000" }, null, { "Accept-Language": "fr", "X-Forwarded-For": "10.204.0.1" });
+  check("i18n: a wrong code says how many tries are left, in French", r.status === 400 && r.body.code === "OTP_INVALID" && r.body.params?.remaining > 0 && /tentatives? restantes?/.test(r.body.message ?? ""), brief(r));
+  // (an unverified number may register again: it just gets a new code)
+  r = await call("POST", "/auth/register", { name: "Langue", phone: victimPhone, password: "kadou2026" }, null, { "Accept-Language": "fr", "X-Forwarded-For": "10.204.0.1" });
+  check("i18n: a verified phone number answers PHONE_ALREADY_REGISTERED answers PHONE_ALREADY_REGISTERED", r.status === 409 && r.body.code === "PHONE_ALREADY_REGISTERED" && /existe déjà/.test(r.body.message ?? ""), brief(r));
+  r = await call("POST", "/auth/register", { name: "Langue", phone: "12", password: "abc" }, null, { "Accept-Language": "fr", "X-Forwarded-For": "10.204.0.2" });
+  check("i18n: schema messages are translated (password length from the rule)", r.status === 400 && r.body.errorSources?.some((e) => e.message === "Le mot de passe doit contenir au moins 8 caractères."), brief(r));
 };
 
 run().then(() => finish(), finish);
