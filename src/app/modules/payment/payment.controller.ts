@@ -36,7 +36,7 @@ const initiatePayment = catchAsync(async (req: Request, res: Response) => {
 const handleWebhook = catchAsync(async (req: Request, res: Response) => {
   const expected = configs.payment_webhook_secret;
   if (!expected) {
-    throw new AppError(httpStatus.SERVICE_UNAVAILABLE, "Payment webhook is not configured");
+    throw new AppError(httpStatus.SERVICE_UNAVAILABLE, "PAYMENT_WEBHOOK_NOT_CONFIGURED");
   }
 
   const received = req.headers["x-webhook-secret"];
@@ -47,7 +47,7 @@ const handleWebhook = catchAsync(async (req: Request, res: Response) => {
     crypto.timingSafeEqual(Buffer.from(received), Buffer.from(expected));
 
   if (!isValid) {
-    throw new AppError(httpStatus.UNAUTHORIZED, "Invalid webhook secret");
+    throw new AppError(httpStatus.UNAUTHORIZED, "WEBHOOK_SECRET_INVALID");
   }
 
   const result = await PaymentServices.handleWebhook(req.body);
@@ -203,7 +203,7 @@ const getMyPayment = catchAsync(async (req: Request, res: Response) => {
 const devConfirmPayment = catchAsync(async (req: Request, res: Response) => {
   // Real gateway connected: only the gateway confirms payments
   if (configs.node_env === "production" && !demoPayments()) {
-    throw new AppError(httpStatus.NOT_FOUND, "Route not found");
+    throw new AppError(httpStatus.NOT_FOUND, "ROUTE_NOT_FOUND");
   }
   const result = await PaymentServices.devConfirmPayment(req.user._id, String(req.params.id), req.body.status);
   sendResponse(res, {

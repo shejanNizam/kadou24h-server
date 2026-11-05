@@ -70,4 +70,20 @@ export const validationErrors = {
     en: "A reason is required when suspending or banning.",
     fr: "Un motif est obligatoire pour suspendre ou bannir.",
   },
+  STATUS_INVALID: {
+    en: "Invalid status.",
+    fr: "Statut invalide.",
+  },
+  REASON_TOO_SHORT: {
+    en: "The reason must be at least {minimum} characters.",
+    fr: "Le motif doit contenir au moins {minimum} caractères.",
+  },
+  AMOUNT_TOO_LOW: {
+    en: "The amount must be at least {minimum, number} GNF.",
+    fr: "Le montant doit être d'au moins {minimum, number} GNF.",
+  },
+  PIN_FORMAT: {
+    en: "The code must be exactly 4 digits.",
+    fr: "Le code doit contenir exactement 4 chiffres.",
+  },
 } satisfies LocalizedMessages;

@@ -123,7 +123,7 @@ const recordTransaction = async (params: {
     [{ $set: { ...changes[params.type], ...(params.countsAsEarned && { totalEarned: add("totalEarned", absAmount) }) } }],
     { returnDocument: "after", updatePipeline: true },
   );
-  if (!wallet) throw new AppError(httpStatus.NOT_FOUND, "Wallet not found");
+  if (!wallet) throw new AppError(httpStatus.NOT_FOUND, "WALLET_NOT_FOUND");
 
 
   const txn = await WalletTransaction.create({
@@ -161,7 +161,7 @@ const releaseVendorEarning = async (subOrder: ISubOrder, actorId?: string) => {
 
   const vendor = await VendorProfile.findById(claimed.vendorId);
   if (!vendor) {
-    throw new AppError(httpStatus.NOT_FOUND, `Vendor of ${claimed.subOrderNumber} not found`);
+    throw new AppError(httpStatus.NOT_FOUND, "VENDOR_PROFILE_NOT_FOUND");
   }
   const vendorWallet = await ensureWallet(vendor.userId, WalletMode.vendor);
 
@@ -253,7 +253,7 @@ const payLegFee = async (legId: Types.ObjectId | string, actorId?: string) => {
  */
 const releaseEscrowForSubOrder = async (subOrderId: string, actorId?: string) => {
   const subOrder = await SubOrder.findById(subOrderId);
-  if (!subOrder) throw new AppError(httpStatus.NOT_FOUND, "Sub-order not found");
+  if (!subOrder) throw new AppError(httpStatus.NOT_FOUND, "SUB_ORDER_NOT_FOUND");
 
   if (subOrder.settlement !== SettlementStatus.held) {
     return { subOrder, message: `Settlement already ${subOrder.settlement}` };
@@ -399,7 +399,7 @@ const addPayoutMethod = async (
   if (methods.length >= MAX_PAYOUT_METHODS) {
     throw new AppError(
       httpStatus.BAD_REQUEST,
-      `You can save up to ${MAX_PAYOUT_METHODS} payout methods`,
+      "PAYOUT_METHODS_LIMIT", { max: MAX_PAYOUT_METHODS },
     );
   }
 
@@ -419,7 +419,7 @@ const updatePayoutMethod = async (
 ) => {
   const wallet = await getMyWallet(ownerId, ownerMode);
   const method = wallet.payoutMethods.id(methodId);
-  if (!method) throw new AppError(httpStatus.NOT_FOUND, "Payout method not found");
+  if (!method) throw new AppError(httpStatus.NOT_FOUND, "PAYOUT_METHOD_NOT_FOUND");
 
   const { isDefault, ...rest } = payload;
   method.set(rest);
@@ -427,7 +427,7 @@ const updatePayoutMethod = async (
     wallet.payoutMethods.forEach((m) => (m.isDefault = String(m._id) === methodId));
   }
   if (method.type === "bank" && !method.bankName) {
-    throw new AppError(httpStatus.BAD_REQUEST, "bankName is required for bank accounts");
+    throw new AppError(httpStatus.BAD_REQUEST, "BANK_NAME_REQUIRED");
   }
 
   await wallet.save();
@@ -441,7 +441,7 @@ const deletePayoutMethod = async (
 ) => {
   const wallet = await getMyWallet(ownerId, ownerMode);
   const method = wallet.payoutMethods.id(methodId);
-  if (!method) throw new AppError(httpStatus.NOT_FOUND, "Payout method not found");
+  if (!method) throw new AppError(httpStatus.NOT_FOUND, "PAYOUT_METHOD_NOT_FOUND");
 
   const wasDefault = method.isDefault;
   method.deleteOne();
@@ -470,7 +470,7 @@ const requestWithdrawal = async (
   if (wallet.availableBalance < payload.amount) {
     throw new AppError(
       httpStatus.BAD_REQUEST,
-      `Insufficient available balance. Available: ${wallet.availableBalance} GNF, requested: ${payload.amount} GNF`,
+      "INSUFFICIENT_BALANCE", { available: wallet.availableBalance, requested: payload.amount },
     );
   }
 
@@ -480,14 +480,14 @@ const requestWithdrawal = async (
     if (payload.amount > maxWithdrawable) {
       throw new AppError(
         httpStatus.BAD_REQUEST,
-        `Cannot withdraw ${payload.amount.toLocaleString()} GNF: you owe ${wallet.cashOwed.toLocaleString()} GNF in unremitted COD cash. Maximum withdrawable: ${maxWithdrawable.toLocaleString()} GNF`,
+        "WITHDRAW_CASH_OWED", { amount: payload.amount, owed: wallet.cashOwed, max: maxWithdrawable },
       );
     }
   }
 
   const payoutMethod = wallet.payoutMethods.id(payload.payoutMethodId);
   if (!payoutMethod) {
-    throw new AppError(httpStatus.NOT_FOUND, "Selected payout method not found");
+    throw new AppError(httpStatus.NOT_FOUND, "PAYOUT_METHOD_NOT_FOUND");
   }
 
   // Calculate withdrawal fee
@@ -547,7 +547,7 @@ const requestWithdrawal = async (
     await Withdrawal.findByIdAndDelete(withdrawal._id);
     throw new AppError(
       httpStatus.BAD_REQUEST,
-      `Insufficient available balance or concurrent withdrawal in progress.`,
+      "WITHDRAWAL_CONCURRENT",
     );
   }
 
@@ -599,12 +599,12 @@ const processWithdrawal = async (
   },
 ) => {
   const withdrawal = await Withdrawal.findById(withdrawalId);
-  if (!withdrawal) throw new AppError(httpStatus.NOT_FOUND, "Withdrawal request not found");
+  if (!withdrawal) throw new AppError(httpStatus.NOT_FOUND, "WITHDRAWAL_NOT_FOUND");
 
   if (withdrawal.status !== WithdrawalStatus.pending) {
     throw new AppError(
       httpStatus.BAD_REQUEST,
-      `Withdrawal has already been ${withdrawal.status}`,
+      "WITHDRAWAL_ALREADY_HANDLED", { status: withdrawal.status },
     );
   }
 
@@ -630,7 +630,7 @@ const processWithdrawal = async (
     { returnDocument: "after" },
   );
   if (!processed) {
-    throw new AppError(httpStatus.CONFLICT, "Withdrawal was just processed by someone else");
+    throw new AppError(httpStatus.CONFLICT, "WITHDRAWAL_CONFLICT");
   }
 
   if (payload.status === "completed") {
@@ -679,7 +679,7 @@ const submitCodSettlement = async (
   },
 ) => {
   const rider = await RiderProfile.findOne({ userId: riderUserId });
-  if (!rider) throw new AppError(httpStatus.FORBIDDEN, "Rider profile not found");
+  if (!rider) throw new AppError(httpStatus.FORBIDDEN, "RIDER_PROFILE_NOT_FOUND");
 
   const wallet = await getMyWallet(riderUserId, WalletMode.rider);
 
@@ -692,7 +692,7 @@ const submitCodSettlement = async (
   if (payload.amount > outstanding) {
     throw new AppError(
       httpStatus.BAD_REQUEST,
-      `Settlement amount cannot exceed the cash you still owe (${Math.max(0, outstanding)} GNF)`,
+      "SETTLEMENT_ABOVE_OWED", { owed: Math.max(0, outstanding) },
     );
   }
 
@@ -710,7 +710,7 @@ const submitCodSettlement = async (
     if (!updated) {
       throw new AppError(
         httpStatus.BAD_REQUEST,
-        `Insufficient available balance for offset. Available: ${wallet.availableBalance} GNF`,
+        "OFFSET_INSUFFICIENT", { available: wallet.availableBalance },
       );
     }
 
@@ -777,12 +777,12 @@ const confirmCodSettlement = async (
 
   if (!settlement) {
     const existing = await CodSettlement.findById(settlementId);
-    if (!existing) throw new AppError(httpStatus.NOT_FOUND, "Settlement not found");
-    throw new AppError(httpStatus.BAD_REQUEST, `Settlement is already ${existing.status}`);
+    if (!existing) throw new AppError(httpStatus.NOT_FOUND, "SETTLEMENT_NOT_FOUND");
+    throw new AppError(httpStatus.BAD_REQUEST, "SETTLEMENT_ALREADY_HANDLED", { status: existing.status });
   }
 
   const rider = await RiderProfile.findById(settlement.riderId);
-  if (!rider) throw new AppError(httpStatus.NOT_FOUND, "Rider profile not found");
+  if (!rider) throw new AppError(httpStatus.NOT_FOUND, "RIDER_PROFILE_NOT_FOUND");
 
   if (status !== "confirmed") {
     // The cash is still owed: the rider must declare it again (or explain)
@@ -859,7 +859,7 @@ const getMyCodSettlements = async (
   query: { page?: number; limit?: number; status?: CodSettlementStatus },
 ) => {
   const rider = await RiderProfile.findOne({ userId: riderUserId }).select("_id");
-  if (!rider) throw new AppError(httpStatus.FORBIDDEN, "Rider profile not found");
+  if (!rider) throw new AppError(httpStatus.FORBIDDEN, "RIDER_PROFILE_NOT_FOUND");
 
   const page = Math.max(1, Number(query.page) || 1);
   const limit = Math.max(1, Math.min(50, Number(query.limit) || 20));
@@ -962,7 +962,7 @@ const getAllCodSettlementsAdmin = async (query: {
   if (query.status) filter.status = query.status;
   // One rider's declarations (admin → rider details → Money)
   if (query.riderId) {
-    if (!Types.ObjectId.isValid(query.riderId)) throw new AppError(httpStatus.BAD_REQUEST, "Invalid riderId");
+    if (!Types.ObjectId.isValid(query.riderId)) throw new AppError(httpStatus.BAD_REQUEST, "INVALID_ID");
     filter.riderId = new Types.ObjectId(query.riderId);
   }
 

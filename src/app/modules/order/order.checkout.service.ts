@@ -69,7 +69,7 @@ const resolveAddress = async (
   }
 
   const user = await User.findById(customerId);
-  if (!user) throw new AppError(httpStatus.NOT_FOUND, "User not found");
+  if (!user) throw new AppError(httpStatus.NOT_FOUND, "ACCOUNT_NOT_FOUND");
 
   let address;
   if (input.addressId) {
@@ -84,7 +84,7 @@ const resolveAddress = async (
   if (!address) {
     throw new AppError(
       httpStatus.BAD_REQUEST,
-      "Please provide or select a delivery address",
+      "ADDRESS_REQUIRED",
     );
   }
 
@@ -124,11 +124,11 @@ const resolveStationRoute = async (
   destinationStationId?: string,
 ) => {
   if (!destinationStationId) {
-    throw new AppError(httpStatus.BAD_REQUEST, "Please choose a destination bus station");
+    throw new AppError(httpStatus.BAD_REQUEST, "STATION_REQUIRED");
   }
   const to = await TransitStation.findOne({ _id: destinationStationId, isActive: true });
   if (!to) {
-    throw new AppError(httpStatus.BAD_REQUEST, "This bus station is not available");
+    throw new AppError(httpStatus.BAD_REQUEST, "STATION_UNAVAILABLE");
   }
   const from =
     (await TransitStation.findOne({
@@ -138,13 +138,13 @@ const resolveStationRoute = async (
   if (!from) {
     throw new AppError(
       httpStatus.BAD_REQUEST,
-      "No active transit stations configured for intercity delivery",
+      "NO_TRANSIT_STATIONS",
     );
   }
   if (String(from._id) === String(to._id)) {
     throw new AppError(
       httpStatus.BAD_REQUEST,
-      "This station is in the store's own city — choose home delivery instead",
+      "STATION_SAME_CITY",
     );
   }
   return { from, to };
@@ -173,7 +173,7 @@ const calculateCheckout = async (
     if (!cart || cart.items.length === 0) {
       throw new AppError(
         httpStatus.BAD_REQUEST,
-        "Your cart is empty. Add items before checking out.",
+        "CART_EMPTY",
       );
     }
     itemInputs = cart.items.map((i) => ({
@@ -196,25 +196,25 @@ const calculateCheckout = async (
     if (!product) {
       throw new AppError(
         httpStatus.NOT_FOUND,
-        `Product with ID ${input.productId} not found`,
+        "PRODUCT_NOT_FOUND",
       );
     }
     if (product.approvalStatus !== ProductApprovalStatus.approved) {
       throw new AppError(
         httpStatus.BAD_REQUEST,
-        `Product "${product.name}" is not approved for sale`,
+        "PRODUCT_NOT_APPROVED", { name: product.name },
       );
     }
     if (!product.isAvailable) {
       throw new AppError(
         httpStatus.BAD_REQUEST,
-        `Product "${product.name}" is marked unavailable by vendor`,
+        "PRODUCT_UNAVAILABLE", { name: product.name },
       );
     }
     if (product.stockQty < input.qty) {
       throw new AppError(
         httpStatus.BAD_REQUEST,
-        `Insufficient stock for "${product.name}". Available: ${product.stockQty}, requested: ${input.qty}`,
+        "INSUFFICIENT_STOCK", { name: product.name, available: product.stockQty, requested: input.qty },
       );
     }
   }
@@ -269,27 +269,27 @@ const calculateCheckout = async (
     const storeName = vendorProfile?.storeName || "Vendor";
 
     if (!vendorProfile) {
-      throw new AppError(httpStatus.NOT_FOUND, `Vendor not found for product`);
+      throw new AppError(httpStatus.NOT_FOUND, "STORE_NOT_FOUND");
     }
 
     if (vendorProfile.approvalStatus !== ApprovalStatus.approved) {
       throw new AppError(
         httpStatus.BAD_REQUEST,
-        `Vendor "${storeName}" is not currently approved to accept orders`,
+        "STORE_NOT_APPROVED", { store: storeName },
       );
     }
 
     if (vendorProfile.isOpen === false) {
       throw new AppError(
         httpStatus.BAD_REQUEST,
-        `Store "${storeName}" is currently closed`,
+        "STORE_CLOSED", { store: storeName },
       );
     }
 
     if (String(vendorProfile.userId) === customerId) {
       throw new AppError(
         httpStatus.BAD_REQUEST,
-        `You cannot purchase items from your own store ("${storeName}")`,
+        "OWN_STORE_PURCHASE", { store: storeName },
       );
     }
 
@@ -465,7 +465,7 @@ const placeOrder = async (
   if (calculation.paymentMethod === PaymentMethod.cod && !calculation.cod.allowed) {
     throw new AppError(
       httpStatus.BAD_REQUEST,
-      `Cash on delivery is not available above ${calculation.cod.limit.toLocaleString("fr-FR")} GNF per store. Please pay online.`,
+      "COD_LIMIT", { limit: calculation.cod.limit },
     );
   }
 
@@ -554,7 +554,7 @@ const createOrderRecords = async (
       if (!updated) {
         throw new AppError(
           httpStatus.CONFLICT,
-          `Item "${item.name}" ran out of stock during checkout. Please try again.`,
+          "OUT_OF_STOCK_DURING_CHECKOUT", { name: item.name },
         );
       }
       done.stock.push({ productId: item.productId, qty: item.qty });
@@ -684,7 +684,7 @@ const holdEscrow = async (
 ) => {
   const vendor = await VendorProfile.findById(subOrder.vendorId);
   if (!vendor) {
-    throw new AppError(httpStatus.BAD_REQUEST, `The store of ${subOrder.subOrderNumber} is no longer available`);
+    throw new AppError(httpStatus.BAD_REQUEST, "STORE_NO_LONGER_AVAILABLE", { subOrderNumber: subOrder.subOrderNumber });
   }
   const vendorWallet = await WalletServices.ensureWallet(vendor.userId, WalletMode.vendor);
   await WalletServices.recordTransaction({

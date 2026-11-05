@@ -20,7 +20,7 @@ export const addPayoutMethodZodSchema = z
   .partial({ bankName: true, isDefault: true })
   .strict()
   .refine(requireBankName, {
-    message: "bankName is required for bank accounts",
+    message: "BANK_NAME_REQUIRED",
     path: ["bankName"],
   });
 
@@ -32,10 +32,10 @@ export const updatePayoutMethodZodSchema = z
 
 export const requestWithdrawalSchema = z.object({
   mode: modeSchema,
-  amount: z.number().int().min(5000, "Minimum withdrawal amount is 5,000 GNF"),
+  amount: z.number().int().min(5000, "WITHDRAWAL_TOO_LOW"),
   payoutMethodId: z
     .string()
-    .regex(/^[0-9a-fA-F]{24}$/, "Valid payoutMethodId is required"),
+    .regex(/^[0-9a-fA-F]{24}$/, "INVALID_ID"),
 });
 
 export const processWithdrawalSchema = z.object({
@@ -51,7 +51,7 @@ export const processWithdrawalSchema = z.object({
 });
 
 export const submitCodSettlementSchema = z.object({
-  amount: z.number().int().min(1, "Settlement amount must be at least 1 GNF"),
+  amount: z.number().int().min(1, "AMOUNT_TOO_LOW"),
   method: z.enum(Object.values(CodSettlementMethod) as [string, ...string[]]),
   reference: z.string().optional(),
   proofImage: z
@@ -68,6 +68,6 @@ export const confirmCodSettlementSchema = z
     rejectionReason: z.string().trim().max(300).optional(),
   })
   .refine((v) => v.status !== "rejected" || (v.rejectionReason?.length ?? 0) >= 3, {
-    message: "Tell the rider why the declaration is rejected",
+    message: "COD_REJECTION_REASON_REQUIRED",
     path: ["rejectionReason"],
   });

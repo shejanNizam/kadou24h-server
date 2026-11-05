@@ -154,4 +154,14 @@ export const commonErrors = {
     en: "The reset link is invalid or has expired. Please start again.",
     fr: "Le lien de réinitialisation est invalide ou a expiré. Veuillez recommencer.",
   },
+
+  // Profiles many modules look up
+  VENDOR_PROFILE_NOT_FOUND: {
+    en: "Vendor profile not found.",
+    fr: "Profil vendeur introuvable.",
+  },
+  RIDER_PROFILE_NOT_FOUND: {
+    en: "Rider profile not found.",
+    fr: "Profil livreur introuvable.",
+  },
 } satisfies LocalizedMessages;

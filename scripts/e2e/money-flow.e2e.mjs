@@ -373,6 +373,12 @@ const run = async () => {
 
   // ═════ 2. Withdrawal: two admins reject at once → refunded once ═════
   const payoutMethodId = vw.payoutMethods?.[0]?._id;
+  r = await call("POST", "/wallets/me/withdrawals", { mode: "vendor", amount: 100, payoutMethodId }, V.token, { "Accept-Language": "fr" });
+  check(
+    "i18n: the minimum withdrawal comes from the rule, in French",
+    r.status === 400 && r.body.errorSources?.some((e) => e.message === "Le montant minimum de retrait est de 5\u202f000 GNF."),
+    brief(r),
+  );
   r = await call("POST", "/wallets/me/withdrawals", { mode: "vendor", amount: 10000, payoutMethodId }, V.token);
   check("vendor requests a withdrawal", ok(r), brief(r));
   const withdrawalId = r.body.data?._id;
@@ -1073,7 +1079,9 @@ const run = async () => {
   check("pagination meta has totalPage (+ totalPages alias)", r.body.meta?.totalPage >= 1 && r.body.meta?.totalPages === r.body.meta?.totalPage, JSON.stringify(r.body.meta));
   // "Delete from my history": a finished order is hidden for the customer only
   r = await call("DELETE", `/orders/my-orders/${cancelOrder._id}`, null, W.token);
-  check("order history: nobody else can delete my order", r.status === 404, brief(r));
+  check("order history: nobody else can delete my order", r.status === 404 && r.body.code === "ORDER_NOT_FOUND", brief(r));
+  r = await call("DELETE", `/orders/my-orders/${cancelOrder._id}`, null, W.token, { "Accept-Language": "fr" });
+  check("i18n: ORDER_NOT_FOUND in French", r.body.message === "Commande introuvable.", brief(r));
   r = await call("DELETE", `/orders/my-orders/${cancelOrder._id}`, null, C.token);
   check("order history: the customer deletes a cancelled order", ok(r), brief(r));
   r = await call("GET", "/orders/my-orders?limit=50", null, C.token);
@@ -1154,7 +1162,9 @@ const run = async () => {
   await call("POST", `/deliveries/${leg3}/accept`, null, R.token);
   const lastView = (await call("GET", `/deliveries/${leg2}/track`, null, B.token)).body.data;
   r = await call("POST", `/deliveries/${leg3}/verify-pickup`, { pin: lastView.outgoingPickupPin }, R.token);
-  check("relay: next leg cannot start before the previous driver has the parcel", r.status === 400 && /previous driver/i.test(r.body.message), brief(r));
+  check("relay: next leg cannot start before the previous driver has the parcel", r.status === 400 && r.body.code === "PREVIOUS_DRIVER_NOT_ARRIVED" && /previous driver/i.test(r.body.message), brief(r));
+  r = await call("POST", `/deliveries/${leg3}/verify-pickup`, { pin: lastView.outgoingPickupPin }, R.token, { "Accept-Language": "fr" });
+  check("i18n: …the rider reads it in French", r.status === 400 && /^Le chauffeur précédent/.test(r.body.message ?? ""), brief(r));
 
   r = await call("POST", `/deliveries/${leg2}/verify-pickup`, { pin: riderView.outgoingPickupPin }, B.token);
   check("relay: bus driver picks up leg 2 with that PIN", r.status === 200, brief(r));
@@ -1642,7 +1652,7 @@ const run = async () => {
   check("i18n: a wrong code says how many tries are left, in French", r.status === 400 && r.body.code === "OTP_INVALID" && r.body.params?.remaining > 0 && /tentatives? restantes?/.test(r.body.message ?? ""), brief(r));
   // (an unverified number may register again: it just gets a new code)
   r = await call("POST", "/auth/register", { name: "Langue", phone: victimPhone, password: "kadou2026" }, null, { "Accept-Language": "fr", "X-Forwarded-For": "10.204.0.1" });
-  check("i18n: a verified phone number answers PHONE_ALREADY_REGISTERED answers PHONE_ALREADY_REGISTERED", r.status === 409 && r.body.code === "PHONE_ALREADY_REGISTERED" && /existe déjà/.test(r.body.message ?? ""), brief(r));
+  check("i18n: a verified phone number answers PHONE_ALREADY_REGISTERED", r.status === 409 && r.body.code === "PHONE_ALREADY_REGISTERED" && /existe déjà/.test(r.body.message ?? ""), brief(r));
   r = await call("POST", "/auth/register", { name: "Langue", phone: "12", password: "abc" }, null, { "Accept-Language": "fr", "X-Forwarded-For": "10.204.0.2" });
   check("i18n: schema messages are translated (password length from the rule)", r.status === 400 && r.body.errorSources?.some((e) => e.message === "Le mot de passe doit contenir au moins 8 caractères."), brief(r));
 };

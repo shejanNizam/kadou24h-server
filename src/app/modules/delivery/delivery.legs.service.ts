@@ -26,13 +26,13 @@ const createDeliveryLegsForSubOrder = async (
   subOrderId: string,
 ): Promise<IDelivery[]> => {
   const subOrder = await SubOrder.findById(subOrderId);
-  if (!subOrder) throw new AppError(httpStatus.NOT_FOUND, "Sub-order not found");
+  if (!subOrder) throw new AppError(httpStatus.NOT_FOUND, "SUB_ORDER_NOT_FOUND");
 
   const order = await Order.findById(subOrder.orderId);
-  if (!order) throw new AppError(httpStatus.NOT_FOUND, "Parent order not found");
+  if (!order) throw new AppError(httpStatus.NOT_FOUND, "ORDER_NOT_FOUND");
 
   const vendor = await VendorProfile.findById(subOrder.vendorId);
-  if (!vendor) throw new AppError(httpStatus.NOT_FOUND, "Vendor profile not found");
+  if (!vendor) throw new AppError(httpStatus.NOT_FOUND, "VENDOR_PROFILE_NOT_FOUND");
 
   // Check if legs already exist
   const existingLegs = await Delivery.find({ subOrderId: subOrder._id }).sort({

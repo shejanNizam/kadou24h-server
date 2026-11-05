@@ -31,7 +31,7 @@ const assertPinUnlocked = (delivery: IDelivery) => {
   if (minutesLeft > 0) {
     throw new AppError(
       httpStatus.TOO_MANY_REQUESTS,
-      `Too many wrong codes. Try again in ${minutesLeft} min.`,
+      "PIN_LOCKED", { minutes: minutesLeft },
     );
   }
   delivery.pinAttempts = 0;
@@ -88,7 +88,7 @@ const closeRelayLeg = async (prevLegId: Types.ObjectId, nextLeg: IDelivery, acto
  */
 const goingToPickup = async (riderUserId: string, deliveryId: string) => {
   const rider = await RiderProfile.findOne({ userId: riderUserId });
-  if (!rider) throw new AppError(httpStatus.FORBIDDEN, "Rider profile not found");
+  if (!rider) throw new AppError(httpStatus.FORBIDDEN, "RIDER_PROFILE_NOT_FOUND");
 
   const delivery = await Delivery.findOne({
     _id: deliveryId,
@@ -97,7 +97,7 @@ const goingToPickup = async (riderUserId: string, deliveryId: string) => {
   });
 
   if (!delivery) {
-    throw new AppError(httpStatus.NOT_FOUND, "Accepted delivery not found");
+    throw new AppError(httpStatus.NOT_FOUND, "DELIVERY_NOT_YOURS");
   }
 
   delivery.status = DeliveryStatus.going_to_pickup;
@@ -130,7 +130,7 @@ const verifyPickup = async (
   pin: string,
 ) => {
   const rider = await RiderProfile.findOne({ userId: riderUserId });
-  if (!rider) throw new AppError(httpStatus.FORBIDDEN, "Rider profile not found");
+  if (!rider) throw new AppError(httpStatus.FORBIDDEN, "RIDER_PROFILE_NOT_FOUND");
 
   const delivery = await Delivery.findOne({
     _id: deliveryId,
@@ -138,7 +138,7 @@ const verifyPickup = async (
   }).select("+pickupPinHash");
 
   if (!delivery) {
-    throw new AppError(httpStatus.NOT_FOUND, "Delivery not found");
+    throw new AppError(httpStatus.NOT_FOUND, "DELIVERY_NOT_FOUND");
   }
 
   if (
@@ -148,7 +148,7 @@ const verifyPickup = async (
   ) {
     throw new AppError(
       httpStatus.BAD_REQUEST,
-      `Cannot verify pickup while delivery is in status "${delivery.status}"`,
+      "PICKUP_WRONG_STATUS", { status: delivery.status },
     );
   }
 
@@ -160,7 +160,7 @@ const verifyPickup = async (
   if (prevLeg && ![DeliveryStatus.picked_up, DeliveryStatus.in_transit, DeliveryStatus.delivered].includes(prevLeg.status)) {
     throw new AppError(
       httpStatus.BAD_REQUEST,
-      "The previous driver doesn't have the parcel yet. Wait until they reach the station.",
+      "PREVIOUS_DRIVER_NOT_ARRIVED",
     );
   }
 
@@ -176,7 +176,7 @@ const verifyPickup = async (
     await delivery.save();
     throw new AppError(
       httpStatus.BAD_REQUEST,
-      `Invalid pickup PIN. ${Math.max(0, MAX_PIN_ATTEMPTS - delivery.pinAttempts)} attempts remaining.`,
+      "PICKUP_PIN_INVALID", { remaining: Math.max(0, MAX_PIN_ATTEMPTS - delivery.pinAttempts) },
     );
   }
 
@@ -194,7 +194,7 @@ const verifyPickup = async (
     { returnDocument: "after" },
   );
   if (!pickedUp) {
-    throw new AppError(httpStatus.CONFLICT, "This delivery was already updated. Please refresh.");
+    throw new AppError(httpStatus.CONFLICT, "DELIVERY_ALREADY_UPDATED");
   }
 
   // Progress sub-order to in_delivery
@@ -237,7 +237,7 @@ const verifyHandover = async (
   proofPhoto?: { url: string; publicId: string },
 ) => {
   const rider = await RiderProfile.findOne({ userId: riderUserId });
-  if (!rider) throw new AppError(httpStatus.FORBIDDEN, "Rider profile not found");
+  if (!rider) throw new AppError(httpStatus.FORBIDDEN, "RIDER_PROFILE_NOT_FOUND");
 
   const delivery = await Delivery.findOne({
     _id: deliveryId,
@@ -245,7 +245,7 @@ const verifyHandover = async (
   }).select("+handoverPinHash");
 
   if (!delivery) {
-    throw new AppError(httpStatus.NOT_FOUND, "Delivery not found");
+    throw new AppError(httpStatus.NOT_FOUND, "DELIVERY_NOT_FOUND");
   }
 
   if (
@@ -255,7 +255,7 @@ const verifyHandover = async (
   ) {
     throw new AppError(
       httpStatus.BAD_REQUEST,
-      `Cannot verify handover while delivery is in status "${delivery.status}"`,
+      "HANDOVER_WRONG_STATUS", { status: delivery.status },
     );
   }
 
@@ -271,7 +271,7 @@ const verifyHandover = async (
     await delivery.save();
     throw new AppError(
       httpStatus.BAD_REQUEST,
-      `Invalid handover PIN. ${Math.max(0, MAX_PIN_ATTEMPTS - delivery.pinAttempts)} attempts remaining.`,
+      "HANDOVER_PIN_INVALID", { remaining: Math.max(0, MAX_PIN_ATTEMPTS - delivery.pinAttempts) },
     );
   }
 
@@ -294,13 +294,13 @@ const verifyHandover = async (
     { returnDocument: "after" },
   );
   if (!delivered) {
-    throw new AppError(httpStatus.CONFLICT, "This delivery was already updated. Please refresh.");
+    throw new AppError(httpStatus.CONFLICT, "DELIVERY_ALREADY_UPDATED");
   }
 
   await countLegDone(rider._id as Types.ObjectId);
 
   const subOrder = await SubOrder.findById(delivery.subOrderId);
-  if (!subOrder) throw new AppError(httpStatus.NOT_FOUND, "Sub-order not found");
+  if (!subOrder) throw new AppError(httpStatus.NOT_FOUND, "SUB_ORDER_NOT_FOUND");
 
   // If COD collected by rider
   if (delivery.collectsCash) {

@@ -32,7 +32,7 @@ const getAllOrdersAdmin = async (query: {
   if (query.paymentMethod) filter.paymentMethod = query.paymentMethod;
   if (query.customerId) {
     if (!Types.ObjectId.isValid(query.customerId)) {
-      throw new AppError(httpStatus.BAD_REQUEST, "Invalid customerId");
+      throw new AppError(httpStatus.BAD_REQUEST, "INVALID_ID");
     }
     filter.customerId = new Types.ObjectId(query.customerId);
   }
@@ -69,18 +69,18 @@ const adminCancelSubOrder = async (
 ) => {
   const subOrder = await SubOrder.findById(subOrderId);
   if (!subOrder) {
-    throw new AppError(httpStatus.NOT_FOUND, "Sub-order not found");
+    throw new AppError(httpStatus.NOT_FOUND, "SUB_ORDER_NOT_FOUND");
   }
 
   if (subOrder.status === SubOrderStatus.cancelled) {
-    throw new AppError(httpStatus.BAD_REQUEST, "Sub-order is already cancelled");
+    throw new AppError(httpStatus.BAD_REQUEST, "SUB_ORDER_ALREADY_CANCELLED");
   }
 
   // Delivered goods are sold: money goes back through a refund, not a cancel
   if (subOrder.status === SubOrderStatus.delivered) {
     throw new AppError(
       httpStatus.BAD_REQUEST,
-      "Sub-order is already delivered — issue a refund instead of cancelling.",
+      "SUB_ORDER_DELIVERED_REFUND",
     );
   }
 

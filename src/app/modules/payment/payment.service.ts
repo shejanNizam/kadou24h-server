@@ -58,7 +58,7 @@ const initiatePayment = async (
       if (String(existing.payerId) !== String(payerId)) {
         throw new AppError(
           httpStatus.CONFLICT,
-          "Idempotency key belongs to another user account",
+          "IDEMPOTENCY_KEY_CONFLICT",
         );
       }
       return existing;
@@ -67,7 +67,7 @@ const initiatePayment = async (
 
   // Only goods are paid at the door: fees (job, CV, subscription…) are paid online
   if (payload.purpose !== PaymentPurpose.order && payload.method === PaymentMethod.cod) {
-    throw new AppError(httpStatus.BAD_REQUEST, "This payment can only be made online (Orange Money, Mobile Money or card)");
+    throw new AppError(httpStatus.BAD_REQUEST, "PAYMENT_ONLINE_ONLY");
   }
 
   const settings = await SettingsServices.getSettings();
@@ -75,31 +75,31 @@ const initiatePayment = async (
 
   if (payload.purpose === PaymentPurpose.order) {
     const order = await Order.findById(payload.refId);
-    if (!order) throw new AppError(httpStatus.NOT_FOUND, "Order not found");
+    if (!order) throw new AppError(httpStatus.NOT_FOUND, "ORDER_NOT_FOUND");
 
     if (String(order.customerId) !== String(payerId)) {
-      throw new AppError(httpStatus.FORBIDDEN, "Not authorized to pay for this order");
+      throw new AppError(httpStatus.FORBIDDEN, "ORDER_PAY_FORBIDDEN");
     }
 
     if (order.paymentStatus === OrderPaymentStatus.paid) {
-      throw new AppError(httpStatus.BAD_REQUEST, "Order is already paid");
+      throw new AppError(httpStatus.BAD_REQUEST, "ORDER_ALREADY_PAID");
     }
     const isCod = order.paymentMethod === "cod";
     // Older COD orders: everything is paid in cash
     if (isCod && !order.upfrontAmount) {
-      throw new AppError(httpStatus.BAD_REQUEST, "Cash on delivery orders are paid to the rider");
+      throw new AppError(httpStatus.BAD_REQUEST, "COD_PAID_TO_RIDER");
     }
     if (isCod && order.feesPaidAt) {
-      throw new AppError(httpStatus.BAD_REQUEST, "The fees of this order are already paid");
+      throw new AppError(httpStatus.BAD_REQUEST, "FEES_ALREADY_PAID");
     }
     if (isCod && payload.method === PaymentMethod.cod) {
-      throw new AppError(httpStatus.BAD_REQUEST, "Pay the fees online (Orange Money, Mobile Money or card)");
+      throw new AppError(httpStatus.BAD_REQUEST, "FEES_PAY_ONLINE");
     }
     if (order.status === "cancelled") {
-      throw new AppError(httpStatus.BAD_REQUEST, "This order was cancelled");
+      throw new AppError(httpStatus.BAD_REQUEST, "ORDER_WAS_CANCELLED");
     }
     if (order.paymentDueAt && order.paymentDueAt.getTime() <= Date.now()) {
-      throw new AppError(httpStatus.BAD_REQUEST, "The time to pay for this order is over. It will be cancelled and the items put back in your cart.");
+      throw new AppError(httpStatus.BAD_REQUEST, "PAYMENT_TIME_OVER");
     }
 
     // COD: the service fee, tax and delivery now; the products in cash to the riders
@@ -112,7 +112,7 @@ const initiatePayment = async (
   } else if (payload.purpose === PaymentPurpose.subscription) {
     const plan = await SubscriptionPlan.findById(payload.refId);
     if (!plan || !plan.isActive) {
-      throw new AppError(httpStatus.NOT_FOUND, "Active subscription plan not found");
+      throw new AppError(httpStatus.NOT_FOUND, "SUBSCRIPTION_PLAN_NOT_FOUND");
     }
     amount = plan.price;
   } else if (payload.purpose === PaymentPurpose.spontaneous_application) {
@@ -155,7 +155,7 @@ const initiatePayment = async (
     payment.status = PaymentStatus.failed;
     payment.raw = { rejectedReason: "checkout_failed", message: err instanceof Error ? err.message : String(err) };
     await payment.save();
-    throw new AppError(httpStatus.BAD_GATEWAY, "Online payment is not available right now. Please try again later");
+    throw new AppError(httpStatus.BAD_GATEWAY, "PAYMENT_UNAVAILABLE");
   }
 
   return payment;
@@ -180,12 +180,12 @@ const handleWebhook = async (payload: {
   else {
     throw new AppError(
       httpStatus.BAD_REQUEST,
-      "paymentId, idempotencyKey, or providerRef is required",
+      "PAYMENT_LOOKUP_REQUIRED",
     );
   }
 
   const payment = await Payment.findOne(filter);
-  if (!payment) throw new AppError(httpStatus.NOT_FOUND, "Payment record not found");
+  if (!payment) throw new AppError(httpStatus.NOT_FOUND, "PAYMENT_NOT_FOUND");
 
   if (payment.status === PaymentStatus.success) {
     return payment; // Already handled idempotently
@@ -206,7 +206,7 @@ const handleWebhook = async (payload: {
     await payment.save();
     throw new AppError(
       httpStatus.BAD_REQUEST,
-      `Amount mismatch: expected ${payment.amount} GNF, gateway reported ${payload.amount} GNF`,
+      "PAYMENT_AMOUNT_MISMATCH", { expected: payment.amount, reported: payload.amount },
     );
   }
 
@@ -343,10 +343,10 @@ const createDispute = async (
   },
 ) => {
   const order = await Order.findById(payload.orderId);
-  if (!order) throw new AppError(httpStatus.NOT_FOUND, "Order not found");
+  if (!order) throw new AppError(httpStatus.NOT_FOUND, "ORDER_NOT_FOUND");
 
   if (String(order.customerId) !== customerId) {
-    throw new AppError(httpStatus.FORBIDDEN, "Not authorized to dispute this order");
+    throw new AppError(httpStatus.FORBIDDEN, "DISPUTE_FORBIDDEN");
   }
 
   const dispute = await Dispute.create({
@@ -377,15 +377,15 @@ const resolveDispute = async (
   },
 ) => {
   const existing = await Dispute.findById(disputeId);
-  if (!existing) throw new AppError(httpStatus.NOT_FOUND, "Dispute not found");
+  if (!existing) throw new AppError(httpStatus.NOT_FOUND, "DISPUTE_NOT_FOUND");
   if (existing.status !== DisputeStatus.open) {
-    throw new AppError(httpStatus.BAD_REQUEST, `Dispute has already been ${existing.status}`);
+    throw new AppError(httpStatus.BAD_REQUEST, "DISPUTE_ALREADY_HANDLED", { status: existing.status });
   }
 
   const withRefund = payload.status === DisputeStatus.resolved && payload.issueRefund;
   const refundAmount = payload.refundAmount ?? existing.amount;
   if (withRefund && !refundAmount) {
-    throw new AppError(httpStatus.BAD_REQUEST, "Enter the refund amount");
+    throw new AppError(httpStatus.BAD_REQUEST, "REFUND_AMOUNT_REQUIRED");
   }
 
   // Claim it atomically — two admins cannot resolve (and refund) the same dispute
@@ -403,7 +403,7 @@ const resolveDispute = async (
     { returnDocument: "after" },
   );
   if (!dispute) {
-    throw new AppError(httpStatus.CONFLICT, "This dispute was just handled by someone else");
+    throw new AppError(httpStatus.CONFLICT, "DISPUTE_CONFLICT");
   }
 
   if (withRefund) {
@@ -464,10 +464,10 @@ const getMyPayments = async (
 /** One of my payments — the app polls it on the "payment pending" screen. */
 const getMyPayment = async (payerId: string, paymentId: string) => {
   if (!Types.ObjectId.isValid(paymentId)) {
-    throw new AppError(httpStatus.NOT_FOUND, "Payment record not found");
+    throw new AppError(httpStatus.NOT_FOUND, "PAYMENT_NOT_FOUND");
   }
   const payment = await Payment.findOne({ _id: paymentId, payerId }).select("-raw");
-  if (!payment) throw new AppError(httpStatus.NOT_FOUND, "Payment record not found");
+  if (!payment) throw new AppError(httpStatus.NOT_FOUND, "PAYMENT_NOT_FOUND");
   if (payment.status === PaymentStatus.pending && (await syncFromGateway(payment))) {
     return (await Payment.findById(payment._id).select("-raw")) ?? payment;
   }
@@ -500,7 +500,7 @@ const syncFromGateway = async (payment: { _id: unknown; providerRef?: string; pr
 /** POST /payments/webhook/:provider — the aggregator's own notification, signature checked by its gateway */
 const handleGatewayWebhook = async (provider: string, request: WebhookRequest) => {
   const gateway = gatewayForWebhook(provider);
-  if (!gateway) throw new AppError(httpStatus.NOT_FOUND, "Route not found");
+  if (!gateway) throw new AppError(httpStatus.NOT_FOUND, "ROUTE_NOT_FOUND");
   const event = await gateway.parseWebhook(request);
   if (!event || event.status === "pending") return { received: true };
   // Look the payment up by the aggregator's id, and only one of ours
@@ -509,7 +509,7 @@ const handleGatewayWebhook = async (provider: string, request: WebhookRequest) =
     : event.paymentId && Types.ObjectId.isValid(event.paymentId)
       ? await Payment.findOne({ _id: event.paymentId, provider: gateway.name }).select("_id")
       : null;
-  if (!payment) throw new AppError(httpStatus.NOT_FOUND, "Payment record not found");
+  if (!payment) throw new AppError(httpStatus.NOT_FOUND, "PAYMENT_NOT_FOUND");
   await handleWebhook({ paymentId: String(payment._id), status: event.status, amount: event.amount, raw: event.raw });
   return { received: true };
 };

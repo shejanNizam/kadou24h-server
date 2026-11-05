@@ -32,14 +32,14 @@ const getAvailableRiders = async (
   deliveryId: string,
 ): Promise<IAvailableRider[]> => {
   const vendor = await VendorProfile.findOne({ userId: vendorUserId });
-  if (!vendor) throw new AppError(httpStatus.FORBIDDEN, "Vendor profile not found");
+  if (!vendor) throw new AppError(httpStatus.FORBIDDEN, "VENDOR_PROFILE_NOT_FOUND");
 
   const delivery = await Delivery.findById(deliveryId);
-  if (!delivery) throw new AppError(httpStatus.NOT_FOUND, "Delivery leg not found");
+  if (!delivery) throw new AppError(httpStatus.NOT_FOUND, "DELIVERY_NOT_FOUND");
 
   // Only the store of this order may see who is online nearby (riders' positions)
   const ownsLeg = await SubOrder.exists({ _id: delivery.subOrderId, vendorId: vendor._id });
-  if (!ownsLeg) throw new AppError(httpStatus.NOT_FOUND, "Delivery leg not found");
+  if (!ownsLeg) throw new AppError(httpStatus.NOT_FOUND, "DELIVERY_NOT_FOUND");
 
   // Determine required partner type: bus drivers for line_haul, moto riders for local/first_mile/last_mile
   const requiredPartnerType =
@@ -129,17 +129,17 @@ const assignRider = async (
   riderId: string,
 ) => {
   const actor = await User.findById(actorUserId);
-  if (!actor) throw new AppError(httpStatus.UNAUTHORIZED, "User not found");
+  if (!actor) throw new AppError(httpStatus.UNAUTHORIZED, "ACCOUNT_NOT_FOUND");
 
   const isAdminOrStaff = actor.roles?.some((r) =>
     [UserRole.staff, UserRole.admin, UserRole.super_admin].includes(r),
   );
 
   const delivery = await Delivery.findById(deliveryId);
-  if (!delivery) throw new AppError(httpStatus.NOT_FOUND, "Delivery leg not found");
+  if (!delivery) throw new AppError(httpStatus.NOT_FOUND, "DELIVERY_NOT_FOUND");
 
   const subOrder = await SubOrder.findById(delivery.subOrderId);
-  if (!subOrder) throw new AppError(httpStatus.NOT_FOUND, "Sub-order not found");
+  if (!subOrder) throw new AppError(httpStatus.NOT_FOUND, "SUB_ORDER_NOT_FOUND");
 
   // Authorization check: Only staff/admin or the order's vendor can assign riders
   if (!isAdminOrStaff) {
@@ -147,7 +147,7 @@ const assignRider = async (
     if (!vendorProfile || !subOrder.vendorId.equals(vendorProfile._id)) {
       throw new AppError(
         httpStatus.FORBIDDEN,
-        "You are not authorized to assign riders for this order",
+        "ASSIGN_FORBIDDEN",
       );
     }
   }
@@ -159,7 +159,7 @@ const assignRider = async (
   ) {
     throw new AppError(
       httpStatus.BAD_REQUEST,
-      `Cannot assign rider while delivery is "${delivery.status}"`,
+      "ASSIGN_WRONG_STATUS", { status: delivery.status },
     );
   }
 
@@ -167,19 +167,19 @@ const assignRider = async (
     _id: riderId,
     approvalStatus: ApprovalStatus.approved,
   });
-  if (!rider) throw new AppError(httpStatus.NOT_FOUND, "Approved delivery partner not found");
+  if (!rider) throw new AppError(httpStatus.NOT_FOUND, "PARTNER_NOT_FOUND");
 
   if (String(rider.userId) === actorUserId) {
     throw new AppError(
       httpStatus.BAD_REQUEST,
-      "You cannot assign yourself as the delivery partner",
+      "ASSIGN_SELF",
     );
   }
 
   if (!rider.isOnline) {
     throw new AppError(
       httpStatus.BAD_REQUEST,
-      "Cannot assign delivery partner who is currently offline",
+      "PARTNER_OFFLINE",
     );
   }
 
@@ -199,7 +199,7 @@ const assignRider = async (
     { returnDocument: "after" },
   );
   if (!reserved) {
-    throw new AppError(httpStatus.CONFLICT, "A rider has just taken this delivery. Please refresh.");
+    throw new AppError(httpStatus.CONFLICT, "DELIVERY_JUST_TAKEN");
   }
   Object.assign(delivery, reserved.toObject());
 
@@ -236,7 +236,7 @@ const assignRider = async (
  */
 const acceptDelivery = async (riderUserId: string, deliveryId: string) => {
   const rider = await RiderProfile.findOne({ userId: riderUserId });
-  if (!rider) throw new AppError(httpStatus.FORBIDDEN, "Rider profile not found");
+  if (!rider) throw new AppError(httpStatus.FORBIDDEN, "RIDER_PROFILE_NOT_FOUND");
 
   const delivery = await Delivery.findOne({
     _id: deliveryId,
@@ -247,7 +247,7 @@ const acceptDelivery = async (riderUserId: string, deliveryId: string) => {
   if (!delivery) {
     throw new AppError(
       httpStatus.NOT_FOUND,
-      "No assigned delivery found awaiting your acceptance",
+      "DELIVERY_NOT_YOURS",
     );
   }
 
@@ -262,7 +262,7 @@ const acceptDelivery = async (riderUserId: string, deliveryId: string) => {
     if (totalCashRisk > maxCash) {
       throw new AppError(
         httpStatus.BAD_REQUEST,
-        `Cash on delivery amount (${totalCashRisk.toLocaleString()} GNF) exceeds authorized partner limit (${maxCash.toLocaleString()} GNF)`,
+        "RIDER_CASH_LIMIT", { total: totalCashRisk, limit: maxCash },
       );
     }
   }
@@ -274,7 +274,7 @@ const acceptDelivery = async (riderUserId: string, deliveryId: string) => {
     { returnDocument: "after" },
   );
   if (!accepted) {
-    throw new AppError(httpStatus.CONFLICT, "This delivery is no longer assigned to you");
+    throw new AppError(httpStatus.CONFLICT, "DELIVERY_NOT_YOURS");
   }
 
   await RiderProfile.updateOne({ _id: rider._id }, { $inc: { activeDeliveryCount: 1 } });
@@ -309,7 +309,7 @@ const declineDelivery = async (
   reason: string,
 ) => {
   const rider = await RiderProfile.findOne({ userId: riderUserId });
-  if (!rider) throw new AppError(httpStatus.FORBIDDEN, "Rider profile not found");
+  if (!rider) throw new AppError(httpStatus.FORBIDDEN, "RIDER_PROFILE_NOT_FOUND");
 
   // Atomic, so a leg cancelled meanwhile is not brought back to pending_assignment
   const delivery = await Delivery.findOneAndUpdate(
@@ -323,7 +323,7 @@ const declineDelivery = async (
   );
 
   if (!delivery) {
-    throw new AppError(httpStatus.NOT_FOUND, "Assigned delivery not found");
+    throw new AppError(httpStatus.NOT_FOUND, "DELIVERY_NOT_YOURS");
   }
 
   // Notify vendor that rider declined

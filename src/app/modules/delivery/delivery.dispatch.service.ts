@@ -13,6 +13,8 @@
 import httpStatus from "http-status";
 import { Types } from "mongoose";
 import AppError from "../../errorHelpers/AppError";
+import type { ErrorCode } from "../../i18n/errors";
+import type { MessageParams } from "../../i18n/translate";
 import { emitToDelivery, emitToUser } from "../../../socket/socket";
 import { logger } from "../../utils/logger";
 import { calculateDistanceKm } from "../delivery_rate/delivery_rate.service";
@@ -125,13 +127,24 @@ const storeOwners = async (legs: LegLite[]) => {
   return new Map(vendors.map((v) => [String(v._id), String(v.userId)]));
 };
 
+/** Why a rider can't take a parcel: `code` goes to the offer list, `error` is thrown on accept */
+interface Blocker {
+  code: "on_ride" | "too_many" | "cash_limit";
+  error: ErrorCode;
+  params?: MessageParams;
+}
+
 /** Can this rider take one more parcel (count, cash limit)? null = yes, else the reason. */
-const blockerFor = async (rider: RiderLite, leg: Pick<IDelivery, "legType" | "collectsCash">, cash: number) => {
+const blockerFor = async (
+  rider: RiderLite,
+  leg: Pick<IDelivery, "legType" | "collectsCash">,
+  cash: number,
+): Promise<Blocker | null> => {
   if (leg.legType !== LegType.line_haul && (await Ride.exists({ riderId: rider._id, status: { $in: ACTIVE_RIDE } }))) {
-    return { code: "on_ride" as const, message: "Finish your current ride first" };
+    return { code: "on_ride", error: "FINISH_CURRENT_RIDE" };
   }
   if (leg.legType !== LegType.line_haul && (rider.activeDeliveryCount ?? 0) >= DISPATCH.maxActiveMoto) {
-    return { code: "too_many" as const, message: `Finish your current deliveries first (at most ${DISPATCH.maxActiveMoto} at a time)` };
+    return { code: "too_many", error: "TOO_MANY_ACTIVE_DELIVERIES", params: { max: DISPATCH.maxActiveMoto } };
   }
   if (leg.collectsCash && cash > 0) {
     const settings = await SettingsServices.getSettings();
@@ -140,8 +153,9 @@ const blockerFor = async (rider: RiderLite, leg: Pick<IDelivery, "legType" | "co
     const total = (wallet.cashOwed || 0) + cash;
     if (total > maxCash) {
       return {
-        code: "cash_limit" as const,
-        message: `Cash on delivery amount (${total.toLocaleString()} GNF) exceeds authorized partner limit (${maxCash.toLocaleString()} GNF)`,
+        code: "cash_limit",
+        error: "RIDER_CASH_LIMIT",
+        params: { total, limit: maxCash },
       };
     }
   }
@@ -262,7 +276,7 @@ const getOffers = async (riderUserId: string) => {
   const rider = await RiderProfile.findOne({ userId: riderUserId, approvalStatus: ApprovalStatus.approved })
     .select(`${RIDER_FIELDS} isOnline partnerType`)
     .lean<RiderLite & { isOnline?: boolean; partnerType?: PartnerType }>();
-  if (!rider) throw new AppError(httpStatus.FORBIDDEN, "Rider profile not found");
+  if (!rider) throw new AppError(httpStatus.FORBIDDEN, "RIDER_PROFILE_NOT_FOUND");
   if (!rider.isOnline) return { isOnline: false, offers: [] };
 
   const legs = await Delivery.find({
@@ -332,20 +346,20 @@ const claimOffer = async (riderUserId: string, deliveryId: string) => {
   const rider = await RiderProfile.findOne({ userId: riderUserId, approvalStatus: ApprovalStatus.approved })
     .select(`${RIDER_FIELDS} isOnline partnerType`)
     .lean<RiderLite & { isOnline?: boolean; partnerType?: PartnerType }>();
-  if (!rider) throw new AppError(httpStatus.FORBIDDEN, "Rider profile not found");
-  if (!rider.isOnline) throw new AppError(httpStatus.BAD_REQUEST, "Go online to take deliveries");
+  if (!rider) throw new AppError(httpStatus.FORBIDDEN, "RIDER_PROFILE_NOT_FOUND");
+  if (!rider.isOnline) throw new AppError(httpStatus.BAD_REQUEST, "GO_ONLINE_FOR_DELIVERIES");
 
   const leg = await Delivery.findById(deliveryId).select("+offerSkippedBy");
-  if (!leg) throw new AppError(httpStatus.NOT_FOUND, "Delivery leg not found");
+  if (!leg) throw new AppError(httpStatus.NOT_FOUND, "DELIVERY_NOT_FOUND");
   const open = leg.status === DeliveryStatus.pending_assignment && Boolean(leg.offerOpenedAt);
   if (!open) {
     if (leg.riderId || leg.status !== DeliveryStatus.pending_assignment) {
-      throw new AppError(httpStatus.CONFLICT, "Another rider has already taken this delivery");
+      throw new AppError(httpStatus.CONFLICT, "DELIVERY_ALREADY_TAKEN");
     }
-    throw new AppError(httpStatus.BAD_REQUEST, "This delivery is not offered to riders yet");
+    throw new AppError(httpStatus.BAD_REQUEST, "OFFER_NOT_OPEN");
   }
   if (partnerTypeFor(leg.legType) !== rider.partnerType) {
-    throw new AppError(httpStatus.BAD_REQUEST, "This delivery is not offered to you");
+    throw new AppError(httpStatus.BAD_REQUEST, "OFFER_NOT_FOR_YOU");
   }
 
   const fromStore = leg.fromKind === EndpointKind.vendor;
@@ -354,12 +368,12 @@ const claimOffer = async (riderUserId: string, deliveryId: string) => {
     fromStore ? VendorRiderLink.exists({ vendorId: leg.fromRefId, riderId: rider._id, status: LinkStatus.active }) : null,
   ]);
   const seen = reach(leg, rider, { linked: Boolean(link), ownStore: owners.get(String(leg.fromRefId)) === riderUserId });
-  if (!seen.visible) throw new AppError(httpStatus.BAD_REQUEST, "This delivery is not offered to you");
+  if (!seen.visible) throw new AppError(httpStatus.BAD_REQUEST, "OFFER_NOT_FOR_YOU");
 
   const subOrder = await SubOrder.findById(leg.subOrderId).select("subOrderNumber codAmountToCollect vendorId").lean();
   const cash = leg.collectsCash ? subOrder?.codAmountToCollect ?? 0 : 0;
   const blocker = await blockerFor(rider, leg, cash);
-  if (blocker) throw new AppError(httpStatus.BAD_REQUEST, blocker.message);
+  if (blocker) throw new AppError(httpStatus.BAD_REQUEST, blocker.error, blocker.params);
 
   const now = new Date();
   const taken = await Delivery.findOneAndUpdate(
@@ -376,7 +390,7 @@ const claimOffer = async (riderUserId: string, deliveryId: string) => {
     },
     { returnDocument: "after" },
   );
-  if (!taken) throw new AppError(httpStatus.CONFLICT, "Another rider has already taken this delivery");
+  if (!taken) throw new AppError(httpStatus.CONFLICT, "DELIVERY_ALREADY_TAKEN");
 
   await RiderProfile.updateOne({ _id: rider._id }, { $inc: { activeDeliveryCount: 1 } });
   await SubOrder.findByIdAndUpdate(leg.subOrderId, {
@@ -408,9 +422,9 @@ const claimOffer = async (riderUserId: string, deliveryId: string) => {
 /** "Not for me": the offer leaves my list. */
 const skipOffer = async (riderUserId: string, deliveryId: string) => {
   const rider = await RiderProfile.findOne({ userId: riderUserId }).select("_id").lean();
-  if (!rider) throw new AppError(httpStatus.FORBIDDEN, "Rider profile not found");
+  if (!rider) throw new AppError(httpStatus.FORBIDDEN, "RIDER_PROFILE_NOT_FOUND");
   const result = await Delivery.updateOne({ _id: deliveryId }, { $addToSet: { offerSkippedBy: rider._id } });
-  if (!result.matchedCount) throw new AppError(httpStatus.NOT_FOUND, "Delivery leg not found");
+  if (!result.matchedCount) throw new AppError(httpStatus.NOT_FOUND, "DELIVERY_NOT_FOUND");
   return { skipped: true };
 };
 

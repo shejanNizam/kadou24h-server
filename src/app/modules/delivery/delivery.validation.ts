@@ -4,7 +4,7 @@ const assignRiderSchema = z.object({
   body: z.object({
     riderId: z
       .string()
-      .regex(/^[0-9a-fA-F]{24}$/, "Valid riderId is required"),
+      .regex(/^[0-9a-fA-F]{24}$/, "INVALID_ID"),
   }),
 });
 
@@ -12,7 +12,7 @@ const declineDeliverySchema = z.object({
   body: z.object({
     reason: z
       .string()
-      .min(3, "Decline reason must be at least 3 characters"),
+      .min(3, "REASON_TOO_SHORT"),
   }),
 });
 
@@ -20,8 +20,8 @@ const verifyPinSchema = z.object({
   body: z.object({
     pin: z
       .string()
-      .length(4, "PIN must be exactly 4 digits")
-      .regex(/^\d{4}$/, "PIN must consist of numbers only"),
+      .length(4, "PIN_FORMAT")
+      .regex(/^\d{4}$/, "PIN_FORMAT"),
     proofPhoto: z
       .object({
         url: z.string().url(),

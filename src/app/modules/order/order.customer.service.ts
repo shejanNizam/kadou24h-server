@@ -30,7 +30,7 @@ const getMyOrders = async (
     const statuses = String(query.status).split(",").filter((s): s is OrderStatus =>
       Object.values(OrderStatus).includes(s as OrderStatus),
     );
-    if (!statuses.length) throw new AppError(httpStatus.BAD_REQUEST, "Invalid order status");
+    if (!statuses.length) throw new AppError(httpStatus.BAD_REQUEST, "STATUS_INVALID");
     filter.status = { $in: statuses };
   }
 
@@ -83,7 +83,7 @@ const getOrderDetails = async (
   if (options.admin) orderQuery.populate("customerId", "name phone email avatar");
   const order = await orderQuery;
   if (!order) {
-    throw new AppError(httpStatus.NOT_FOUND, "Order not found");
+    throw new AppError(httpStatus.NOT_FOUND, "ORDER_NOT_FOUND");
   }
 
   const subOrders = await SubOrder.find({ orderId: order._id })
@@ -175,11 +175,11 @@ const cancelOrder = async (
 ) => {
   const order = await Order.findOne({ _id: orderId, customerId });
   if (!order) {
-    throw new AppError(httpStatus.NOT_FOUND, "Order not found");
+    throw new AppError(httpStatus.NOT_FOUND, "ORDER_NOT_FOUND");
   }
 
   if (order.status === OrderStatus.cancelled) {
-    throw new AppError(httpStatus.BAD_REQUEST, "Order is already cancelled");
+    throw new AppError(httpStatus.BAD_REQUEST, "ORDER_ALREADY_CANCELLED");
   }
 
   const subOrders = await SubOrder.find({ orderId: order._id });
@@ -197,7 +197,7 @@ const cancelOrder = async (
   if (cannotCancel) {
     throw new AppError(
       httpStatus.BAD_REQUEST,
-      "Cannot cancel order. One or more items are already being prepared or in delivery.",
+      "ORDER_CANCEL_TOO_LATE",
     );
   }
 
@@ -243,12 +243,12 @@ const cancelStorePart = async (orderId: string, subOrderId: string, customerId: 
   const valid = Types.ObjectId.isValid(orderId) && Types.ObjectId.isValid(subOrderId);
   const order = valid ? await Order.findOne({ _id: orderId, customerId }) : null;
   const part = order ? await SubOrder.findOne({ _id: subOrderId, orderId: order._id }) : null;
-  if (!order || !part) throw new AppError(httpStatus.NOT_FOUND, "Order not found");
+  if (!order || !part) throw new AppError(httpStatus.NOT_FOUND, "ORDER_NOT_FOUND");
   if (part.status === SubOrderStatus.pending_payment) {
-    throw new AppError(httpStatus.BAD_REQUEST, "Pay for this order first, or cancel the whole order");
+    throw new AppError(httpStatus.BAD_REQUEST, "PART_CANCEL_UNPAID");
   }
   if (!PART_CANCELLABLE.includes(part.status)) {
-    throw new AppError(httpStatus.BAD_REQUEST, "This store has already started preparing your order: it can no longer be cancelled");
+    throw new AppError(httpStatus.BAD_REQUEST, "PART_CANCEL_PREPARING");
   }
 
   const cancelled = await cancelSubOrder({
@@ -284,9 +284,9 @@ const cancelStorePart = async (orderId: string, subOrderId: string, customerId: 
  */
 const hideMyOrder = async (customerId: string, orderId: string) => {
   const order = Types.ObjectId.isValid(orderId) ? await Order.findOne({ _id: orderId, customerId }) : null;
-  if (!order) throw new AppError(httpStatus.NOT_FOUND, "Order not found");
+  if (!order) throw new AppError(httpStatus.NOT_FOUND, "ORDER_NOT_FOUND");
   if (order.status === OrderStatus.active) {
-    throw new AppError(httpStatus.BAD_REQUEST, "This order is still in progress: you can delete it once it is finished");
+    throw new AppError(httpStatus.BAD_REQUEST, "ORDER_DELETE_IN_PROGRESS");
   }
   await Order.updateOne({ _id: order._id }, { $set: { hiddenByCustomerAt: new Date() } });
 };

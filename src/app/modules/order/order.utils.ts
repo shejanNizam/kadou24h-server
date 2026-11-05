@@ -105,7 +105,7 @@ const cancelSubOrder = async (opts: {
   if (!previous) {
     throw new AppError(
       httpStatus.CONFLICT,
-      "This order can no longer be cancelled — it was just updated. Please refresh.",
+      "ORDER_CANCEL_CONFLICT",
     );
   }
 

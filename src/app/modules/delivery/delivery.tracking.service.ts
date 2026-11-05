@@ -55,7 +55,7 @@ const trackDelivery = async (
     .populate("subOrderId", "subOrderNumber status total items.name items.qty items.image items.removed codAmountToCollect")
     .populate("orderId", "orderNumber addressSnapshot paymentMethod deliveryType");
 
-  if (!delivery) throw new AppError(httpStatus.NOT_FOUND, "Delivery not found");
+  if (!delivery) throw new AppError(httpStatus.NOT_FOUND, "DELIVERY_NOT_FOUND");
 
   const subOrder = await SubOrder.findById(delivery.subOrderId);
   const order = await Order.findById(delivery.orderId);
@@ -100,7 +100,7 @@ const trackDelivery = async (
   if (!isVendor && !isCustomer && !isGiver && !isReceiver && !isRider && !isStaffOrAdmin) {
     throw new AppError(
       httpStatus.FORBIDDEN,
-      "You are not authorized to view tracking for this delivery",
+      "TRACKING_FORBIDDEN",
     );
   }
 
@@ -211,7 +211,7 @@ const toggleRiderOnline = async (riderUserId: string, isOnline: boolean) => {
     { returnDocument: "after" },
   );
 
-  if (!rider) throw new AppError(httpStatus.NOT_FOUND, "Rider profile not found");
+  if (!rider) throw new AppError(httpStatus.NOT_FOUND, "RIDER_PROFILE_NOT_FOUND");
   return { isOnline: rider.isOnline };
 };
 
@@ -244,7 +244,7 @@ const getMyDeliveries = async (
   query: { status?: DeliveryStatus; type?: string; page?: string; limit?: string },
 ) => {
   const rider = await RiderProfile.findOne({ userId: riderUserId });
-  if (!rider) throw new AppError(httpStatus.FORBIDDEN, "Rider profile not found");
+  if (!rider) throw new AppError(httpStatus.FORBIDDEN, "RIDER_PROFILE_NOT_FOUND");
 
   const filter: Record<string, unknown> = { riderId: rider._id };
   if (query.status) filter.status = query.status;

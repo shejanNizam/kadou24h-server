@@ -14,7 +14,12 @@ import validateRequest from "../app/middlewares/validateRequest";
 import { passwordSchema } from "../app/modules/user/user.validation";
 
 /** Every {argument} a message uses, including those inside plural/select branches */
-type AstNode = { type: number; value?: unknown; options?: Record<string, { value: AstNode[] }>; children?: AstNode[] };
+interface AstNode {
+  type: number;
+  value?: unknown;
+  options?: Record<string, { value: AstNode[] }>;
+  children?: AstNode[];
+}
 const argumentsOf = (nodes: AstNode[], found = new Set<string>()): Set<string> => {
   for (const node of nodes) {
     // 1 argument · 2 number · 3 date · 4 time · 5 select · 6 plural
@@ -65,6 +70,37 @@ describe("Error catalog", () => {
     expect(translateError("OTP_INVALID", "fr", { remaining: 1 })).toBe("Code invalide. 1 tentative restante.");
     expect(translateError("OTP_INVALID", "en", { remaining: 3 })).toBe("Invalid code. 3 attempts remaining.");
     expect(translateError("MODE_NOT_APPROVED", "fr", { mode: "rider" })).toBe("Vous n'êtes pas encore un livreur approuvé.");
+  });
+
+  it("formats money with the language's digit grouping", () => {
+    // French groups thousands with a narrow no-break space
+    expect(translateError("COD_LIMIT", "fr", { limit: 500000 })).toBe(
+      "Le paiement à la livraison est limité à 500 000 GNF par boutique. Payez en ligne.",
+    );
+    expect(translateError("COD_LIMIT", "en", { limit: 500000 })).toContain("above 500,000 GNF");
+  });
+
+  it("drops an optional part when its count is 0", () => {
+    const params = { amount: 9000, left: 5000 };
+    expect(translateError("REFUND_EXCEEDS_LEFT", "en", { ...params, waiting: 0 })).toBe(
+      "Refund amount (9,000 GNF) exceeds what is left to refund (5,000 GNF).",
+    );
+    expect(translateError("REFUND_EXCEEDS_LEFT", "en", { ...params, waiting: 2000 })).toContain(
+      "; 2,000 GNF is already waiting in a pending request",
+    );
+  });
+
+  it("names statuses in words, and falls back to the raw value", () => {
+    expect(translateError("SUB_ORDER_TRANSITION_INVALID", "fr", { from: "new", to: "ready_for_pickup" })).toBe(
+      "Cette commande ne peut pas passer de « nouvelle » à « prête pour l'enlèvement ».",
+    );
+    expect(translateError("PICKUP_WRONG_STATUS", "en", { status: "in_transit" })).toBe(
+      "Cannot verify pickup while the delivery is in transit.",
+    );
+    expect(translateError("ASSIGN_WRONG_STATUS", "en", { status: "lost" })).toContain("while the delivery is lost.");
+    expect(translateError("TOO_MANY_ACTIVE_DELIVERIES", "fr", { max: 1 })).toBe(
+      "Terminez d'abord votre livraison en cours (1 à la fois).",
+    );
   });
 
   it("never throws on a missing value (the error answer must always be built)", () => {

@@ -29,7 +29,7 @@ const getVendorSubOrders = async (
 ) => {
   const vendor = await VendorProfile.findOne({ userId: vendorUserId });
   if (!vendor) {
-    throw new AppError(httpStatus.FORBIDDEN, "Vendor profile not found");
+    throw new AppError(httpStatus.FORBIDDEN, "VENDOR_PROFILE_NOT_FOUND");
   }
 
   const page = Math.max(1, Number(query.page) || 1);
@@ -44,7 +44,7 @@ const getVendorSubOrders = async (
       .split(",")
       .filter((s): s is SubOrderStatus => Object.values(SubOrderStatus).includes(s as SubOrderStatus))
       .filter((s) => s !== SubOrderStatus.pending_payment);
-    if (!statuses.length) throw new AppError(httpStatus.BAD_REQUEST, "Invalid sub-order status");
+    if (!statuses.length) throw new AppError(httpStatus.BAD_REQUEST, "STATUS_INVALID");
     filter.status = { $in: statuses };
   }
 
@@ -98,7 +98,7 @@ const getVendorSubOrderDetail = async (
 ) => {
   const vendor = await VendorProfile.findOne({ userId: vendorUserId });
   if (!vendor) {
-    throw new AppError(httpStatus.FORBIDDEN, "Vendor profile not found");
+    throw new AppError(httpStatus.FORBIDDEN, "VENDOR_PROFILE_NOT_FOUND");
   }
 
   const subOrder = await SubOrder.findOne({
@@ -116,7 +116,7 @@ const getVendorSubOrderDetail = async (
     });
 
   if (!subOrder) {
-    throw new AppError(httpStatus.NOT_FOUND, "Sub-order not found");
+    throw new AppError(httpStatus.NOT_FOUND, "SUB_ORDER_NOT_FOUND");
   }
 
   const parentOrder = await Order.findById(subOrder.orderId).select(
@@ -168,7 +168,7 @@ const updateSubOrderStatus = async (
 ) => {
   const vendor = await VendorProfile.findOne({ userId: vendorUserId });
   if (!vendor) {
-    throw new AppError(httpStatus.FORBIDDEN, "Vendor profile not found");
+    throw new AppError(httpStatus.FORBIDDEN, "VENDOR_PROFILE_NOT_FOUND");
   }
 
   const subOrder = await SubOrder.findOne({
@@ -179,7 +179,7 @@ const updateSubOrderStatus = async (
   });
 
   if (!subOrder) {
-    throw new AppError(httpStatus.NOT_FOUND, "Sub-order not found");
+    throw new AppError(httpStatus.NOT_FOUND, "SUB_ORDER_NOT_FOUND");
   }
 
   // Allowed transitions (Vendor cannot mark in_delivery or delivered; only rider PIN verification does)
@@ -204,7 +204,7 @@ const updateSubOrderStatus = async (
   if (!validTransitions[subOrder.status]?.includes(newStatus)) {
     throw new AppError(
       httpStatus.BAD_REQUEST,
-      `Cannot transition sub-order from "${subOrder.status}" to "${newStatus}"`,
+      "SUB_ORDER_TRANSITION_INVALID", { from: subOrder.status, to: newStatus },
     );
   }
 
@@ -243,7 +243,7 @@ const updateSubOrderStatus = async (
   if (!updated) {
     throw new AppError(
       httpStatus.CONFLICT,
-      "This order was just updated (it may have been cancelled). Please refresh.",
+      "SUB_ORDER_CONFLICT",
     );
   }
 
@@ -274,7 +274,7 @@ const modifySubOrderItems = async (
 ) => {
   const vendor = await VendorProfile.findOne({ userId: vendorUserId });
   if (!vendor) {
-    throw new AppError(httpStatus.FORBIDDEN, "Vendor profile not found");
+    throw new AppError(httpStatus.FORBIDDEN, "VENDOR_PROFILE_NOT_FOUND");
   }
 
   const subOrder = await SubOrder.findOne({
@@ -285,7 +285,7 @@ const modifySubOrderItems = async (
   });
 
   if (!subOrder) {
-    throw new AppError(httpStatus.NOT_FOUND, "Sub-order not found");
+    throw new AppError(httpStatus.NOT_FOUND, "SUB_ORDER_NOT_FOUND");
   }
 
   // Only allowed before pickup
@@ -298,7 +298,7 @@ const modifySubOrderItems = async (
   ) {
     throw new AppError(
       httpStatus.BAD_REQUEST,
-      "Cannot modify order items after it has been marked ready for pickup or handed to delivery.",
+      "ORDER_ITEMS_LOCKED",
     );
   }
 
@@ -312,16 +312,16 @@ const modifySubOrderItems = async (
       (i) => String(i.productId) === mod.productId && !i.removed,
     );
     if (!item) {
-      throw new AppError(httpStatus.BAD_REQUEST, "This item is not in the order");
+      throw new AppError(httpStatus.BAD_REQUEST, "ORDER_ITEM_NOT_IN_ORDER");
     }
     const newQty = mod.action === "remove" ? 0 : mod.newQty;
     if (newQty === undefined) {
-      throw new AppError(httpStatus.BAD_REQUEST, "newQty is required to change a quantity");
+      throw new AppError(httpStatus.BAD_REQUEST, "NEW_QTY_REQUIRED");
     }
     if (newQty >= item.qty) {
       throw new AppError(
         httpStatus.BAD_REQUEST,
-        `You can only reduce the quantity of "${item.name}" (now ${item.qty})`,
+        "QTY_ONLY_REDUCE", { name: item.name, qty: item.qty },
       );
     }
     return { item, newQty };
@@ -333,7 +333,7 @@ const modifySubOrderItems = async (
   if (leftAfter === 0) {
     throw new AppError(
       httpStatus.BAD_REQUEST,
-      "An order needs at least one item. To remove everything, cancel the order instead.",
+      "ORDER_NEEDS_ONE_ITEM",
     );
   }
 
@@ -492,7 +492,7 @@ const cancelVendorSubOrder = async (
 ) => {
   const vendor = await VendorProfile.findOne({ userId: vendorUserId });
   if (!vendor) {
-    throw new AppError(httpStatus.FORBIDDEN, "Vendor profile not found");
+    throw new AppError(httpStatus.FORBIDDEN, "VENDOR_PROFILE_NOT_FOUND");
   }
 
   const subOrder = await SubOrder.findOne({
@@ -503,7 +503,7 @@ const cancelVendorSubOrder = async (
   });
 
   if (!subOrder) {
-    throw new AppError(httpStatus.NOT_FOUND, "Sub-order not found");
+    throw new AppError(httpStatus.NOT_FOUND, "SUB_ORDER_NOT_FOUND");
   }
 
   if (
@@ -515,7 +515,7 @@ const cancelVendorSubOrder = async (
   ) {
     throw new AppError(
       httpStatus.BAD_REQUEST,
-      "Cannot cancel sub-order once ready for pickup or in delivery.",
+      "SUB_ORDER_CANCEL_TOO_LATE",
     );
   }
 

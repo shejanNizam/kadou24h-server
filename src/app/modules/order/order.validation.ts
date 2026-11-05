@@ -6,9 +6,9 @@ import {
 } from "./order.interface";
 
 const addressSnapshotSchema = z.object({
-  fullName: z.string().min(1, "Full name is required"),
-  phone: z.string().min(1, "Phone is required"),
-  city: z.string().min(1, "City is required"),
+  fullName: z.string().min(1, "FIELD_REQUIRED"),
+  phone: z.string().min(1, "FIELD_REQUIRED"),
+  city: z.string().min(1, "FIELD_REQUIRED"),
   commune: z.string().optional(),
   neighborhood: z.string().optional(),
   landmark: z.string().optional(),
@@ -99,14 +99,14 @@ const vendorModifyOrderSchema = z.object({
           newQty: z.number().int().min(0).optional(),
         }),
       )
-      .min(1, "At least one modification item is required"),
+      .min(1, "MODIFICATIONS_REQUIRED"),
     reason: z.string().optional(),
   }),
 });
 
 const cancelOrderSchema = z.object({
   body: z.object({
-    reason: z.string().min(3, "Cancellation reason must be at least 3 characters"),
+    reason: z.string().min(3, "REASON_TOO_SHORT"),
   }),
 });
 

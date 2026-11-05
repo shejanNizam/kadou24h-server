@@ -17,7 +17,7 @@ import { PayoutMethodType } from "../settings/settings.interface";
 const modeFromQuery = (req: Request) => {
   const mode = req.query.mode as WalletMode;
   if (!Object.values(WalletMode).includes(mode)) {
-    throw new AppError(httpStatus.BAD_REQUEST, "Query `mode` must be vendor or rider");
+    throw new AppError(httpStatus.BAD_REQUEST, "WALLET_MODE_INVALID");
   }
   return mode;
 };

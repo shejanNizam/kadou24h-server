@@ -19,7 +19,7 @@ export const paymentGateway = (): PaymentGateway => {
   if (isDemoPayments()) return demoGateway;
   const gateway = configs.payment_provider ? GATEWAYS[configs.payment_provider] : undefined;
   if (!gateway || gateway === demoGateway) {
-    throw new AppError(httpStatus.SERVICE_UNAVAILABLE, "Online payment is not available right now. Please try again later");
+    throw new AppError(httpStatus.SERVICE_UNAVAILABLE, "PAYMENT_UNAVAILABLE");
   }
   return gateway;
 };

@@ -190,21 +190,21 @@ const processRefund = async (
   },
 ) => {
   const existing = await Refund.findById(refundId);
-  if (!existing) throw new AppError(httpStatus.NOT_FOUND, "Refund request not found");
+  if (!existing) throw new AppError(httpStatus.NOT_FOUND, "REFUND_NOT_FOUND");
   if (existing.status !== RefundStatus.pending) {
-    throw new AppError(httpStatus.BAD_REQUEST, `This refund was already ${existing.status}`);
+    throw new AppError(httpStatus.BAD_REQUEST, "REFUND_ALREADY_HANDLED", { status: existing.status });
   }
   const order = await Order.findById(existing.orderId);
-  if (!order) throw new AppError(httpStatus.NOT_FOUND, "Order not found");
+  if (!order) throw new AppError(httpStatus.NOT_FOUND, "ORDER_NOT_FOUND");
 
   const amount = payload.amount ?? existing.amount;
   if (payload.status === "completed") {
     if (amount > existing.amount) {
-      throw new AppError(httpStatus.BAD_REQUEST, `You can approve at most the requested ${existing.amount} GNF`);
+      throw new AppError(httpStatus.BAD_REQUEST, "REFUND_ABOVE_REQUESTED", { amount: existing.amount });
     }
     const left = await refundableLeft(order, existing._id);
     if (amount > left) {
-      throw new AppError(httpStatus.BAD_REQUEST, `Only ${left} GNF is left to refund on this order`);
+      throw new AppError(httpStatus.BAD_REQUEST, "REFUND_ABOVE_LEFT", { left });
     }
   }
 
@@ -224,7 +224,7 @@ const processRefund = async (
     },
     { returnDocument: "after" },
   );
-  if (!refund) throw new AppError(httpStatus.CONFLICT, "This refund was just handled by someone else");
+  if (!refund) throw new AppError(httpStatus.CONFLICT, "REFUND_CONFLICT");
 
   if (payload.status === "completed") await applyCompletedRefund(refund, order, adminUserId);
   Notify.refundProcessed(refund, order.orderNumber, payload.status);
@@ -245,13 +245,13 @@ const issueRefund = async (
   },
 ) => {
   const order = await Order.findById(payload.orderId);
-  if (!order) throw new AppError(httpStatus.NOT_FOUND, "Order not found");
+  if (!order) throw new AppError(httpStatus.NOT_FOUND, "ORDER_NOT_FOUND");
 
   // Only money the customer actually paid can go back
   if (order.paymentStatus === OrderPaymentStatus.unpaid) {
     throw new AppError(
       httpStatus.BAD_REQUEST,
-      "This order has not been paid (COD orders are paid at delivery) — nothing to refund. Cancel it instead.",
+      "REFUND_NOTHING_PAID",
     );
   }
 
@@ -260,8 +260,8 @@ const issueRefund = async (
     const waiting = await sumRefunds(order._id, [RefundStatus.pending]);
     throw new AppError(
       httpStatus.BAD_REQUEST,
-      `Refund amount (${payload.amount} GNF) exceeds what is left to refund (${left} GNF)` +
-        (waiting ? `; ${waiting} GNF is already waiting in a pending request — approve that one instead` : ""),
+      "REFUND_EXCEEDS_LEFT",
+      { amount: payload.amount, left, waiting: waiting || 0 },
     );
   }
 

@@ -1,6 +1,10 @@
 import { authErrors } from "./auth";
 import { commonErrors } from "./common";
+import { deliveryErrors } from "./delivery";
+import { orderErrors } from "./orders";
+import { paymentErrors } from "./payment";
 import { validationErrors } from "./validation";
+import { walletErrors } from "./wallet";
 
 /**
  * Every error the API can answer with, by stable code. The code is the contract
@@ -9,7 +13,15 @@ import { validationErrors } from "./validation";
  *
  * One file per area keeps the catalog readable; add a new part to this list.
  */
-export const errorCatalogParts = [commonErrors, validationErrors, authErrors] as const;
+export const errorCatalogParts = [
+  commonErrors,
+  validationErrors,
+  authErrors,
+  orderErrors,
+  paymentErrors,
+  deliveryErrors,
+  walletErrors,
+] as const;
 
 type MergeParts<T extends readonly object[]> = T extends readonly [infer Head, ...infer Rest extends readonly object[]]
   ? Head & MergeParts<Rest>
