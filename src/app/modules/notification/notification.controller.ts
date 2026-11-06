@@ -2,10 +2,32 @@ import { Request, Response } from "express";
 import catchAsync from "../../utils/catchAsync";
 import sendResponse from "../../utils/sendResponse";
 import { NotificationServices } from "./notification.service";
+import { BroadcastAudience } from "./team_broadcast.model";
+import { TeamBroadcastServices } from "./team_broadcast.service";
 
 const sendTeamMessage = catchAsync(async (req: Request, res: Response) => {
   const result = await NotificationServices.sendTeamMessage(req.user._id, { userId: req.body.userId, title: req.body.title, body: req.body.message });
   sendResponse(res, { statusCode: 201, success: true, message: "Message sent", data: result });
+});
+
+const createBroadcast = catchAsync(async (req: Request, res: Response) => {
+  const result = await TeamBroadcastServices.createBroadcast(req.user._id, req.body);
+  sendResponse(res, { statusCode: 201, success: true, message: "Broadcast started", data: result });
+});
+
+const getBroadcasts = catchAsync(async (req: Request, res: Response) => {
+  const result = await TeamBroadcastServices.getBroadcasts(req.query as never);
+  sendResponse(res, { statusCode: 200, success: true, message: "Broadcasts", meta: result.meta as never, data: result.data });
+});
+
+/** ?audiences=vendors,riders → people per group and in the chosen ones together */
+const getAudienceCounts = catchAsync(async (req: Request, res: Response) => {
+  const allowed = Object.values(BroadcastAudience) as string[];
+  const audiences = String(req.query.audiences ?? "")
+    .split(",")
+    .filter((a): a is BroadcastAudience => allowed.includes(a));
+  const result = await TeamBroadcastServices.getAudienceCounts(audiences);
+  sendResponse(res, { statusCode: 200, success: true, message: "Audience", data: result });
 });
 
 const getTeamMessages = catchAsync(async (req: Request, res: Response) => {
@@ -79,6 +101,9 @@ const getUnreadCount = catchAsync(async (req: Request, res: Response) => {
 export const NotificationControllers = {
   sendTeamMessage,
   getTeamMessages,
+  createBroadcast,
+  getBroadcasts,
+  getAudienceCounts,
   getMyNotifications,
   markAsRead,
   markAllAsRead,

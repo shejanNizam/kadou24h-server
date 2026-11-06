@@ -12,6 +12,7 @@ import { BookingServices } from "./app/modules/booking/booking.service";
 import { DeliveryDispatch } from "./app/modules/delivery/delivery.dispatch.service";
 import { RideServices } from "./app/modules/ride/ride.service";
 import { ProfessionalProfileServices } from "./app/modules/professional_profile/professional_profile.service";
+import { TeamBroadcastServices } from "./app/modules/notification/team_broadcast.service";
 
 let server: Server;
 
@@ -41,6 +42,9 @@ async function main() {
     DeliveryDispatch.startDispatchSweep();
     // Moto-taxi: requests reach farther riders, unanswered ones expire
     RideServices.startRideSweep();
+    // Team broadcasts cut short by a restart carry on
+    const broadcasts = await TeamBroadcastServices.resumeUnfinished();
+    if (broadcasts) logger.info(`Resuming ${broadcasts} team broadcast(s)`);
   } catch (error) {
     logger.error("Startup failed", { error });
     process.exit(1);

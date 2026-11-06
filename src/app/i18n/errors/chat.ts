@@ -73,6 +73,10 @@ export const chatErrors = {
     en: "Notification not found.",
     fr: "Notification introuvable.",
   },
+  BROADCAST_NO_RECIPIENTS: {
+    en: "Nobody to send it to: no approved account in the chosen groups.",
+    fr: "Personne à qui l'envoyer : aucun compte approuvé dans les groupes choisis.",
+  },
   DEVICE_TOKEN_INVALID: {
     en: "Invalid device token.",
     fr: "Jeton d'appareil invalide.",

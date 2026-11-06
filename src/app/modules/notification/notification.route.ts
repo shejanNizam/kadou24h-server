@@ -1,8 +1,8 @@
 import { Router } from "express";
 import { checkAuth } from "../../middlewares/checkAuth";
 import validateRequest from "../../middlewares/validateRequest";
-import { ADMIN_ROLES, ALL_ROLES } from "../user/user.interface";
-import { sendTeamMessageZodSchema } from "./notification.validation";
+import { ADMIN_ROLES, ALL_ROLES, UserRole } from "../user/user.interface";
+import { sendBroadcastZodSchema, sendTeamMessageZodSchema } from "./notification.validation";
 import { NotificationControllers } from "./notification.controller";
 
 const router = Router();
@@ -10,6 +10,33 @@ const router = Router();
 // The Kadou24h team writes to one user (shown with a "Kadou24h Team" badge, audit-logged)
 router.post("/admin/team-message", checkAuth(...ADMIN_ROLES), validateRequest(sendTeamMessageZodSchema), NotificationControllers.sendTeamMessage);
 router.get("/admin/team-messages/:userId", checkAuth(...ADMIN_ROLES), NotificationControllers.getTeamMessages);
+
+/**
+ * @swagger
+ * /notifications/admin/broadcasts:
+ *   post:
+ *     tags: [Notification]
+ *     summary: Admin — one team message to every approved vendor, rider and/or worker (body { title, message, audiences })
+ *     description: Sent in the background (status sending → sent), resumes after a restart. Push follows each person's "account alerts" setting. Audit-logged.
+ *     security: [{ bearerAuth: [] }]
+ *   get:
+ *     tags: [Notification]
+ *     summary: Staff — past broadcasts with recipients, delivered, phones reached and read counts
+ *     security: [{ bearerAuth: [] }]
+ * /notifications/admin/broadcasts/audience:
+ *   get:
+ *     tags: [Notification]
+ *     summary: Staff — people per group (?audiences=vendors,riders also gives the chosen groups' total, each person once)
+ *     security: [{ bearerAuth: [] }]
+ */
+router.get("/admin/broadcasts/audience", checkAuth(...ADMIN_ROLES), NotificationControllers.getAudienceCounts);
+router.get("/admin/broadcasts", checkAuth(...ADMIN_ROLES), NotificationControllers.getBroadcasts);
+router.post(
+  "/admin/broadcasts",
+  checkAuth(UserRole.admin, UserRole.super_admin),
+  validateRequest(sendBroadcastZodSchema),
+  NotificationControllers.createBroadcast,
+);
 
 /**
  * @swagger

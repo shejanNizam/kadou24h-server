@@ -1159,6 +1159,36 @@ const run = async () => {
   r = await call("POST", `/conversations/${jobChat}/messages`, { text: "Toujours intéressé" }, C.token);
   check("its chat works again", ok(r), brief(r));
 
+  // ═════ 8c. One team message to whole groups ═════
+  r = await call("GET", "/notifications/admin/broadcasts/audience?audiences=vendors", null, C.token);
+  check("broadcast: customers are refused", r.status === 403, brief(r));
+  r = await call("GET", "/notifications/admin/broadcasts/audience?audiences=vendors,riders", null, admin);
+  const audience = r.body.data;
+  check("broadcast: people per group and together", audience?.vendors >= 1 && audience?.riders >= 1 && audience.total >= Math.max(audience.vendors, audience.riders) && audience.total <= audience.vendors + audience.riders, JSON.stringify(audience));
+  r = await call("POST", "/notifications/admin/broadcasts", { title: "Annonce", message: "Bonjour à tous", audiences: [] }, admin);
+  check("broadcast: at least one group", r.status === 400, brief(r));
+  r = await call("POST", "/notifications/admin/broadcasts", { title: "Annonce", message: "Bonjour à tous", audiences: ["vendors"] }, C.token);
+  check("broadcast: only admins send", r.status === 403, brief(r));
+  r = await call("POST", "/notifications/admin/broadcasts", { title: "Annonce boutiques", message: "Nouvelle commission dès lundi & merci !", audiences: ["vendors"] }, admin);
+  const broadcastId = r.body.data?._id;
+  check("broadcast: started for every approved store", r.status === 201 && r.body.data?.recipients === audience.vendors, brief(r));
+  let sentBroadcast;
+  for (let i = 0; i < 25 && sentBroadcast?.status !== "sent"; i++) {
+    await sleep(200);
+    sentBroadcast = (await call("GET", "/notifications/admin/broadcasts", null, admin)).body.data?.find((b) => b._id === broadcastId);
+  }
+  check("broadcast: sent to all of them", sentBroadcast?.status === "sent" && sentBroadcast.delivered === sentBroadcast.recipients && sentBroadcast.sentBy?.name, JSON.stringify(sentBroadcast));
+  r = await call("GET", "/notifications?limit=50", null, V.token);
+  const vendorCopy = r.body.data?.find((n) => n.data?.broadcastId === broadcastId);
+  check("broadcast: the store has it as a team message, & kept as typed", vendorCopy?.type === "team_message" && vendorCopy.body?.fr === "Nouvelle commission dès lundi & merci !", JSON.stringify(vendorCopy));
+  r = await call("GET", "/notifications?limit=100", null, C.token);
+  check("broadcast: a plain customer does not get it", !r.body.data?.some((n) => n.data?.broadcastId === broadcastId), brief(r));
+  await call("PATCH", `/notifications/${vendorCopy?._id}/read`, null, V.token);
+  r = await call("GET", "/notifications/admin/broadcasts", null, admin);
+  check("broadcast: read count", r.body.data?.find((b) => b._id === broadcastId)?.read === 1, brief(r));
+  r = await call("GET", "/audit-logs?searchTerm=notification.broadcast", null, admin);
+  check("broadcast: in the audit log", r.body.data?.some((l) => l.targetId === broadcastId), brief(r));
+
   // ═════ 9. Worker directory & pagination ═════
   r = await call("GET", "/professional-profiles/workers?limit=5");
   check("worker directory is public & has no phone/email", r.status === 200 && JSON.stringify(r.body.data).includes('"phone"') === false, brief(r));

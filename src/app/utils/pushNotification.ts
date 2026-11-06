@@ -43,20 +43,14 @@ const getFirebaseApp = (): App | null => {
   return firebaseApp;
 };
 
-/**
- * Sends a push notification to every registered device of a user (FCM: Android,
- * iOS and web). Never throws — push is best-effort; the in-app notification is
- * the source of truth. Dead tokens are removed.
- */
-export const sendPushToUser = async (userId: string | Types.ObjectId, message: PushMessage) => {
+// FCM accepts at most 500 tokens per multicast
+const FCM_BATCH = 500;
+
+const sendBatch = async (tokens: string[], message: PushMessage) => {
   const app = getFirebaseApp();
-  if (!app) return { sent: 0, failed: 0 };
+  if (!app || tokens.length === 0) return { sent: 0, failed: 0 };
 
   try {
-    const devices = await DeviceToken.find({ userId }).select("token").lean();
-    const tokens = devices.map((d) => d.token);
-    if (tokens.length === 0) return { sent: 0, failed: 0 };
-
     // FCM data values must be strings
     const data = Object.fromEntries(
       Object.entries(message.data ?? {}).map(([key, value]) => [
@@ -84,9 +78,36 @@ export const sendPushToUser = async (userId: string | Types.ObjectId, message: P
     return { sent: result.successCount, failed: result.failureCount };
   } catch (error) {
     logger.error("Push notification failed", {
-      userId: String(userId),
+      tokens: tokens.length,
       error: error instanceof Error ? error.message : error,
     });
+    return { sent: 0, failed: 0 };
+  }
+};
+
+/**
+ * Sends one push to many devices (FCM: Android, iOS and web), 500 at a time.
+ * Never throws — push is best-effort; the in-app notification is the source of
+ * truth. Dead tokens are removed.
+ */
+export const sendPushToTokens = async (tokens: string[], message: PushMessage) => {
+  const totals = { sent: 0, failed: 0 };
+  for (let i = 0; i < tokens.length; i += FCM_BATCH) {
+    const result = await sendBatch(tokens.slice(i, i + FCM_BATCH), message);
+    totals.sent += result.sent;
+    totals.failed += result.failed;
+  }
+  return totals;
+};
+
+/** Every registered device of a user */
+export const sendPushToUser = async (userId: string | Types.ObjectId, message: PushMessage) => {
+  if (!getFirebaseApp()) return { sent: 0, failed: 0 };
+  try {
+    const devices = await DeviceToken.find({ userId }).select("token").lean();
+    return await sendPushToTokens(devices.map((d) => d.token), message);
+  } catch (error) {
+    logger.error("Push notification failed", { userId: String(userId), error: error instanceof Error ? error.message : error });
     return { sent: 0, failed: 0 };
   }
 };

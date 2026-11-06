@@ -55,5 +55,10 @@ export const notificationSchema = new Schema<INotification>(
 
 notificationSchema.index({ userId: 1, isRead: 1, createdAt: -1 });
 notificationSchema.index({ userId: 1, mode: 1, createdAt: -1 });
+// Team broadcasts: who already has it (resume) and how many read it
+notificationSchema.index(
+  { "data.broadcastId": 1, isRead: 1 },
+  { partialFilterExpression: { "data.broadcastId": { $exists: true } } },
+);
 
 export const Notification = model<INotification>("Notification", notificationSchema);
