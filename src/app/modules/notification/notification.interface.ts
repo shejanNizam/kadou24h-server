@@ -16,6 +16,8 @@ export enum NotificationType {
   withdrawal_update = "withdrawal_update",
   refund_update = "refund_update",
   application_update = "application_update",
+  // The Kadou24h team removed or restored a job offer (to its poster)
+  job_update = "job_update",
   booking_update = "booking_update",
   ride_update = "ride_update",
   profile_approved = "profile_approved",

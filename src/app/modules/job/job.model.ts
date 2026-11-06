@@ -68,6 +68,17 @@ const jobSchema = new Schema<IJob>(
     publishPaymentId: { type: Schema.Types.ObjectId, ref: "Payment" },
     publishedAt: { type: Date },
     expiresAt: { type: Date },
+    removal: {
+      type: new Schema(
+        {
+          at: { type: Date, required: true },
+          by: { type: Schema.Types.ObjectId, ref: "User", required: true },
+          reason: { type: String, required: true, trim: true },
+          previousStatus: { type: String, enum: Object.values(JobStatus), required: true },
+        },
+        { _id: false },
+      ),
+    },
     stats: {
       views: { type: Number, default: 0 },
       applicants: { type: Number, default: 0 },

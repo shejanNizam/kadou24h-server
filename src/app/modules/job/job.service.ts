@@ -92,6 +92,11 @@ const createJob = async (
 /**
  * Updates a job post.
  */
+/** A job the Kadou24h team removed stays as it is until the team restores it */
+const assertNotRemoved = (job: IJob) => {
+  if (job.status === JobStatus.removed) throw new AppError(httpStatus.BAD_REQUEST, "JOB_REMOVED");
+};
+
 const updateJob = async (
   userId: string,
   jobId: string,
@@ -99,6 +104,7 @@ const updateJob = async (
 ) => {
   const job = await Job.findOne({ _id: jobId, postedBy: userId, isDeleted: false });
   if (!job) throw new AppError(httpStatus.NOT_FOUND, "JOB_NOT_FOUND");
+  assertNotRemoved(job);
 
   const { location, categoryId, ...rest } = payload;
   if (location) job.location = toGeoPoint(location);
@@ -120,6 +126,7 @@ const publishJob = async (
 ) => {
   const job = await Job.findOne({ _id: jobId, postedBy: userId, isDeleted: false });
   if (!job) throw new AppError(httpStatus.NOT_FOUND, "JOB_NOT_FOUND");
+  assertNotRemoved(job);
 
   if (job.status === JobStatus.published && job.expiresAt && job.expiresAt > new Date()) {
     throw new AppError(httpStatus.BAD_REQUEST, "JOB_ALREADY_PUBLISHED");
@@ -152,6 +159,7 @@ const publishJob = async (
 const closeJob = async (userId: string, jobId: string) => {
   const job = await Job.findOne({ _id: jobId, postedBy: userId, isDeleted: false });
   if (!job) throw new AppError(httpStatus.NOT_FOUND, "JOB_NOT_FOUND");
+  assertNotRemoved(job);
 
   job.status = JobStatus.closed;
   await job.save();
@@ -225,7 +233,7 @@ const searchJobs = async (query: {
 
 /**
  * Public view of a single job. Increments views count.
- * Drafts and unpaid jobs are only visible to their poster; closed / expired
+ * Drafts, unpaid and removed jobs are only visible to their poster; closed / expired
  * jobs stay readable (candidates open them from their applications).
  * A signed-in viewer also gets `myApplication` (to show "Applied" instead of Apply).
  */
@@ -237,7 +245,7 @@ const getJobDetails = async (jobId: string, viewerId?: string) => {
   if (!job) throw new AppError(httpStatus.NOT_FOUND, "JOB_NOT_FOUND");
 
   const isOwner = Boolean(viewerId && String(job.postedBy._id) === viewerId);
-  if (!isOwner && [JobStatus.draft, JobStatus.pending_payment].includes(job.status)) {
+  if (!isOwner && [JobStatus.draft, JobStatus.pending_payment, JobStatus.removed].includes(job.status)) {
     throw new AppError(httpStatus.NOT_FOUND, "JOB_NOT_FOUND");
   }
 
@@ -268,7 +276,7 @@ const MY_JOB_TABS = {
   draft: () => ({ status: { $in: [JobStatus.draft, JobStatus.pending_payment] } }),
   closed: () => ({
     $or: [
-      { status: { $in: [JobStatus.closed, JobStatus.expired] } },
+      { status: { $in: [JobStatus.closed, JobStatus.expired, JobStatus.removed] } },
       { status: JobStatus.published, expiresAt: { $lte: new Date() } },
     ],
   }),
@@ -593,6 +601,7 @@ const updateApplicationStatus = async (
   if (!application) throw new AppError(httpStatus.NOT_FOUND, "JOB_APPLICATION_NOT_FOUND");
 
   const job = await assertCanManageApplication(recruiterId, application);
+  if (job) assertNotRemoved(job);
   // The recruiter decides; "interview" goes through scheduleInterview (date, place),
   // "withdrawn" is the candidate's own choice
   if (!RECRUITER_STATUSES.includes(status)) {
@@ -648,6 +657,7 @@ const scheduleInterview = async (
   if (!application) throw new AppError(httpStatus.NOT_FOUND, "JOB_APPLICATION_NOT_FOUND");
 
   const job = await assertCanManageApplication(recruiterId, application);
+  if (job) assertNotRemoved(job);
   if (application.status === ApplicationStatus.withdrawn) {
     throw new AppError(httpStatus.BAD_REQUEST, "CANDIDATE_WITHDREW");
   }

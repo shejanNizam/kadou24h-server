@@ -7,6 +7,7 @@ import { Settings } from "../settings/settings.model";
 import { AppMode, UserStatus } from "../user/user.interface";
 import { User } from "../user/user.model";
 import {
+  ConversationType,
   IConversation,
   IMessage,
   MessageType,
@@ -16,7 +17,13 @@ import {
 } from "./chat.interface";
 import { Conversation } from "./conversation.model";
 import { Message } from "./message.model";
-import { assertReachable, resolveConversation, voiceAllowedFor, type StartConversationInput } from "./chat.start.service";
+import {
+  assertApplicationJobLive,
+  assertReachable,
+  resolveConversation,
+  voiceAllowedFor,
+  type StartConversationInput,
+} from "./chat.start.service";
 import { inspectContent } from "./moderation.util";
 import { VendorProfile } from "../vendor_profile/vendor_profile.model";
 import { ModerationViolation } from "./moderation_violation.model";
@@ -284,6 +291,9 @@ const sendMessage = async (
 
   if (!isParticipant) {
     throw new AppError(403, "NOT_CONVERSATION_PARTICIPANT");
+  }
+  if (conversation.type === ConversationType.job_application && conversation.applicationId) {
+    await assertApplicationJobLive(conversation.applicationId);
   }
 
   // 3. Voice note policy check

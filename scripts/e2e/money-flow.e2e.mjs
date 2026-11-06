@@ -1093,6 +1093,72 @@ const run = async () => {
   r = await call("PATCH", `/jobs/applications/${app._id}/status`, { status: "rejected" }, xToken);
   check("stranger cannot change someone's application", r.status === 403, brief(r));
 
+  // ═════ 8b. Jobs in the admin panel: remove / restore ═════
+  r = await call("POST", "/jobs", {
+    organizationName: "TechHub", title: "Vendeur en boutique", jobType: "full_time", workplace: "on_site",
+    city: "Conakry", about: "Accueil des clients et tenue de la caisse.",
+  }, V.token);
+  const jobId = r.body.data?._id;
+  check("job offer created (draft)", ok(r) && r.body.data?.status === "draft", brief(r));
+  r = await call("POST", `/jobs/${jobId}/publish`, { paymentMethod: "orange_money" }, V.token);
+  await webhook({ paymentId: r.body.data?.payment?._id, status: "success" });
+  r = await call("GET", `/jobs/${jobId}`);
+  check("job offer is published after payment", r.body.data?.isOpen === true, brief(r));
+  r = await call("POST", "/jobs/apply", { jobId, coverNote: "Disponible tout de suite" }, C.token);
+  const jobApplicationId = r.body.data?._id;
+  check("candidate applies to the offer", ok(r), brief(r));
+  r = await call("POST", "/conversations", { type: "job_application", applicationId: jobApplicationId }, C.token);
+  const jobChat = r.body.data?._id;
+  check("candidate opens a chat about the application", ok(r) && jobChat, brief(r));
+
+  r = await call("GET", "/jobs/admin?state=live&search=Vendeur en boutique", null, C.token);
+  check("admin jobs: customers are refused", r.status === 403, brief(r));
+  r = await call("GET", "/jobs/admin?state=live&search=Vendeur en boutique", null, admin);
+  check("admin jobs: the offer is listed as live with its poster", r.body.data?.[0]?._id === jobId && r.body.data[0].state === "live" && r.body.data[0].postedBy?.name === "Vendor Store" && r.body.meta?.counts?.live >= 1, brief(r));
+  r = await call("GET", `/jobs/admin/${jobId}/applications`, null, admin);
+  check("admin jobs: the team sees the candidate's contact", r.body.data?.[0]?.applicantId?.phone === `+22462${stamp}3`, brief(r));
+  r = await call("PATCH", `/jobs/admin/${jobId}/remove`, { reason: "no" }, admin);
+  check("admin jobs: a removal needs a reason", r.status === 400, brief(r));
+  r = await call("PATCH", `/jobs/admin/${jobId}/remove`, { reason: "Offre trompeuse" }, admin);
+  check("admin jobs: offer removed, previous state kept", ok(r) && r.body.data?.state === "removed" && r.body.data?.removal?.previousStatus === "published" && r.body.data?.removal?.by?.name, brief(r));
+  r = await call("PATCH", `/jobs/admin/${jobId}/remove`, { reason: "Encore" }, admin);
+  check("admin jobs: removing twice is refused", r.body.code === "JOB_ALREADY_REMOVED", brief(r));
+
+  r = await call("GET", "/jobs?search=Vendeur");
+  check("removed offer is gone from the job search", r.status === 200 && !r.body.data?.some((j) => j._id === jobId), brief(r));
+  r = await call("GET", `/jobs/${jobId}`, null, C.token);
+  check("candidates can no longer open a removed offer", r.status === 404, brief(r));
+  r = await call("GET", `/jobs/${jobId}`, null, V.token);
+  check("its poster still sees it, with the reason", r.body.data?.status === "removed" && r.body.data?.removal?.reason === "Offre trompeuse", brief(r));
+  r = await call("POST", `/jobs/${jobId}/publish`, { paymentMethod: "orange_money" }, V.token);
+  check("its poster cannot publish it again", r.body.code === "JOB_REMOVED", brief(r));
+  r = await call("PATCH", `/jobs/${jobId}`, { title: "Autre titre" }, V.token, { "Accept-Language": "fr" });
+  check("…nor edit it (French message)", r.body.code === "JOB_REMOVED" && r.body.message.startsWith("L'équipe Kadou24h a retiré"), brief(r));
+  r = await call("PATCH", `/jobs/applications/${jobApplicationId}/status`, { status: "shortlisted" }, V.token);
+  check("…nor decide on its applications", r.body.code === "JOB_REMOVED", brief(r));
+  r = await call("POST", `/conversations/${jobChat}/messages`, { text: "Toujours intéressé" }, C.token);
+  check("no more messages in its application chats", r.body.code === "JOB_REMOVED", brief(r));
+  r = await call("POST", "/conversations", { type: "job_application", applicationId: jobApplicationId }, V.token);
+  check("…and no new ones", r.body.code === "JOB_REMOVED", brief(r));
+  r = await call("GET", "/jobs/my?tab=closed", null, V.token);
+  check("removed offer is in the poster's closed tab", r.body.data?.some((j) => j._id === jobId), brief(r));
+  // In the mode the offer was posted from
+  const postedMode = (await call("GET", `/jobs/${jobId}`, null, V.token)).body.data?.postedByMode;
+  check("poster is told (job_update)", (await notificationTypes(V.token, postedMode)).includes("job_update"), postedMode);
+  r = await call("GET", "/notifications?mode=customer&limit=20", null, C.token);
+  check("waiting candidate is told", r.body.data?.some((n) => n.data?.applicationId === jobApplicationId && n.body?.en?.includes("no longer active")), brief(r));
+  r = await call("GET", `/audit-logs?searchTerm=job.remove`, null, admin);
+  check("removal is in the audit log", r.body.data?.some((l) => l.action === "job.remove" && l.targetId === jobId), brief(r));
+
+  r = await call("PATCH", `/jobs/admin/${jobId}/restore`, null, admin);
+  check("admin jobs: offer restored as it was", ok(r) && r.body.data?.state === "live" && !r.body.data?.removal, brief(r));
+  r = await call("PATCH", `/jobs/admin/${jobId}/restore`, null, admin);
+  check("admin jobs: restoring a live offer is refused", r.body.code === "JOB_NOT_REMOVED", brief(r));
+  r = await call("GET", `/jobs/${jobId}`, null, C.token);
+  check("restored offer is open again", r.body.data?.isOpen === true, brief(r));
+  r = await call("POST", `/conversations/${jobChat}/messages`, { text: "Toujours intéressé" }, C.token);
+  check("its chat works again", ok(r), brief(r));
+
   // ═════ 9. Worker directory & pagination ═════
   r = await call("GET", "/professional-profiles/workers?limit=5");
   check("worker directory is public & has no phone/email", r.status === 200 && JSON.stringify(r.body.data).includes('"phone"') === false, brief(r));

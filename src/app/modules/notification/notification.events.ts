@@ -532,6 +532,30 @@ const applicationUpdate = (
     data,
   });
 
+/** The Kadou24h team removed a job offer (with its reason) or put it back: to its poster */
+const jobModerated = (
+  userId: Id,
+  mode: AppMode,
+  job: { _id: unknown; title: string },
+  change: { removed: true; reason: string } | { removed: false },
+) =>
+  send({
+    userId,
+    mode,
+    type: NotificationType.job_update,
+    title: change.removed ? { fr: "Offre retirée", en: "Job offer removed" } : { fr: "Offre rétablie", en: "Job offer restored" },
+    body: change.removed
+      ? {
+          fr: `L'équipe Kadou24h a retiré votre offre « ${job.title} ». Motif : ${change.reason}`,
+          en: `The Kadou24h team removed your job offer "${job.title}". Reason: ${change.reason}`,
+        }
+      : {
+          fr: `L'équipe Kadou24h a rétabli votre offre « ${job.title} ».`,
+          en: `The Kadou24h team restored your job offer "${job.title}".`,
+        },
+    data: { jobId: String(job._id) },
+  });
+
 export const Notify = {
   orderPlaced,
   orderAccepted,
@@ -555,4 +579,5 @@ export const Notify = {
   codSettlementProcessed,
   profileReviewed,
   applicationUpdate,
+  jobModerated,
 };

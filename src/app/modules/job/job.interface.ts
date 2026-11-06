@@ -26,6 +26,8 @@ export enum JobStatus {
   published = "published",
   closed = "closed",
   expired = "expired",
+  // Taken down by the Kadou24h team (rules, fraud): hidden everywhere; only the team can bring it back
+  removed = "removed",
 }
 
 export interface IJobStats {
@@ -33,6 +35,14 @@ export interface IJobStats {
   applicants: number;
   shortlisted: number;
   interviews: number;
+}
+
+/** Why and by whom the team took a job down; `previousStatus` comes back on restore */
+export interface IJobRemoval {
+  at: Date;
+  by: Types.ObjectId;
+  reason: string;
+  previousStatus: JobStatus;
 }
 
 export interface IJobInitial {
@@ -70,6 +80,7 @@ export interface IJobInitial {
   publishPaymentId?: Types.ObjectId;
   publishedAt?: Date;
   expiresAt?: Date;
+  removal?: IJobRemoval;
   stats: IJobStats;
   isDeleted: boolean;
 }

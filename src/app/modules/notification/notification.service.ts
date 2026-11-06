@@ -63,6 +63,7 @@ const PREF_BY_TYPE: Record<NotificationType, keyof INotificationPrefs> = {
   [NotificationType.new_message]: "messages",
   [NotificationType.special_offer]: "offers",
   [NotificationType.application_update]: "jobPosts",
+  [NotificationType.job_update]: "accountAlerts",
   [NotificationType.earnings_updated]: "accountAlerts",
   [NotificationType.withdrawal_update]: "accountAlerts",
   [NotificationType.profile_approved]: "accountAlerts",
@@ -73,7 +74,12 @@ const PREF_BY_TYPE: Record<NotificationType, keyof INotificationPrefs> = {
 };
 
 // Safety-critical types are always pushed, whatever the preference
-const ALWAYS_PUSH = new Set([NotificationType.account_suspended, NotificationType.moderation_warning, NotificationType.team_message]);
+const ALWAYS_PUSH = new Set([
+  NotificationType.account_suspended,
+  NotificationType.moderation_warning,
+  NotificationType.team_message,
+  NotificationType.job_update,
+]);
 
 const sendPhonePush = async (payload: ICreateNotificationPayload) => {
   try {

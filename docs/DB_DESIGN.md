@@ -317,7 +317,7 @@ Any customer or vendor can have one.
 
 ### `jobs`
 Anyone can post (customer, vendor or rider mode → `posted_by_mode`). Fields mirror the 3-step "Create Job Post" form: basics, location, salary (`currency`, min, max, frequency), about / responsibilities / requirements / benefits, candidate preferences (used for the **% match**), application settings.
-Publishing requires a **5,000 GNF payment**: `draft → pending_payment → published` (30 days, `expires_at`) → `expired` / `closed`.
+Publishing requires a **5,000 GNF payment**: `draft → pending_payment → published` (30 days, `expires_at`) → `expired` / `closed`. The Kadou24h team can set any job to `removed` (`removal`: at, by, reason, previous_status) and restore it to its previous status.
 
 ### `job_applications`
 - `kind = offer` → applied to a `job_id` (unique per job + applicant)
@@ -454,7 +454,7 @@ held → refunded   (cancelled / refunded)
 ```
 
 **Withdrawal**: `pending → approved → completed` or `pending → rejected`
-**Job**: `draft → pending_payment → published → closed / expired`
+**Job**: `draft → pending_payment → published → closed / expired`; any → `removed` by the team (restorable)
 **Application**: `applied → under_review → shortlisted → interview → hired / rejected` (+ `withdrawn`)
 **Profile approval**: `draft → pending → approved / rejected / needs_changes → pending …`, `approved → suspended`
 

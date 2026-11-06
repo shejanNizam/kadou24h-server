@@ -89,3 +89,8 @@ export const scheduleInterviewSchema = z.object({
 const onlineMethod = z.enum(["orange_money", "mobile_money", "card"], { error: "PAYMENT_METHOD_ONLINE" });
 
 export const unlockCvSchema = z.object({ paymentMethod: onlineMethod });
+
+/** Admin takes a job offer down; the poster reads the reason */
+export const removeJobSchema = z.object({
+  reason: z.string().trim().min(3, "REASON_TOO_SHORT").max(300),
+});

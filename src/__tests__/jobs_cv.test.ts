@@ -145,6 +145,7 @@ describe("Jobs, Worker Profiles & CV Module (Step 7)", () => {
         "published",
         "closed",
         "expired",
+        "removed",
       ]);
       expect(Object.values(ApplicationStatus)).toEqual([
         "pending_payment",

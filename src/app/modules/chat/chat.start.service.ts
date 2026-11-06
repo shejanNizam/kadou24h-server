@@ -9,6 +9,7 @@ import { Types } from "mongoose";
 import AppError from "../../errorHelpers/AppError";
 import type { ErrorCode } from "../../i18n/errors";
 import { Delivery } from "../delivery/delivery.model";
+import { JobStatus } from "../job/job.interface";
 import { Job } from "../job/job.model";
 import { JobApplication } from "../job/job_application.model";
 import { SubOrderStatus } from "../order/order.interface";
@@ -170,7 +171,8 @@ export const resolveConversation = async (
   if (!application) throw notFound("JOB_APPLICATION_NOT_FOUND");
   let poster: Party | null = null;
   if (application.jobId) {
-    const job = await Job.findById(application.jobId).select("postedBy postedByMode");
+    const job = await Job.findById(application.jobId).select("postedBy postedByMode status");
+    if (job?.status === JobStatus.removed) throw new AppError(httpStatus.BAD_REQUEST, "JOB_REMOVED");
     if (job) poster = { userId: job.postedBy, mode: (job.postedByMode as AppMode) || AppMode.customer };
   } else if (application.targetVendorId) {
     const vendor = await VendorProfile.findById(application.targetVendorId).select("userId");
@@ -189,6 +191,15 @@ export const resolveConversation = async (
     context: { applicationId: application._id as Types.ObjectId },
     allowVoice: voiceAllowedFor(ConversationType.job_application),
   };
+};
+
+/** No more messages about an offer the Kadou24h team removed (rules, fraud) */
+export const assertApplicationJobLive = async (applicationId: Types.ObjectId) => {
+  const application = await JobApplication.findById(applicationId).select("jobId").lean();
+  if (!application?.jobId) return;
+  if (await Job.exists({ _id: application.jobId, status: JobStatus.removed })) {
+    throw new AppError(httpStatus.BAD_REQUEST, "JOB_REMOVED");
+  }
 };
 
 /** The other person must still exist (deleted accounts can't be messaged). */

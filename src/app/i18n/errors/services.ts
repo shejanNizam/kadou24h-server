@@ -145,6 +145,18 @@ export const serviceErrors = {
     en: "This job is not available for applications.",
     fr: "Cette offre n'accepte plus de candidatures.",
   },
+  JOB_REMOVED: {
+    en: "The Kadou24h team removed this job offer. Contact support to find out more.",
+    fr: "L'équipe Kadou24h a retiré cette offre. Contactez le support pour en savoir plus.",
+  },
+  JOB_ALREADY_REMOVED: {
+    en: "This job offer is already removed.",
+    fr: "Cette offre est déjà retirée.",
+  },
+  JOB_NOT_REMOVED: {
+    en: "This job offer was not removed.",
+    fr: "Cette offre n'a pas été retirée.",
+  },
   APPLY_OWN_JOB: {
     en: "You cannot apply to your own job.",
     fr: "Vous ne pouvez pas postuler à votre propre offre.",

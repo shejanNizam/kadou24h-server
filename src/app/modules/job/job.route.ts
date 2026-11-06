@@ -1,13 +1,14 @@
 import { Router } from "express";
 import { checkAuth, optionalAuth } from "../../middlewares/checkAuth";
 import validateRequest from "../../middlewares/validateRequest";
-import { APP_ROLES, UserRole } from "../user/user.interface";
+import { ADMIN_ROLES, APP_ROLES, UserRole } from "../user/user.interface";
 import { JobControllers } from "./job.controller";
 import {
   applyJobSchema,
   applySpontaneousSchema,
   createJobSchema,
   publishJobSchema,
+  removeJobSchema,
   scheduleInterviewSchema,
   updateApplicationStatusSchema,
   unlockCvSchema,
@@ -15,6 +16,43 @@ import {
 } from "./job.validation";
 
 const router = Router();
+const staff = checkAuth(...ADMIN_ROLES);
+const admin = checkAuth(UserRole.admin, UserRole.super_admin);
+
+/**
+ * @swagger
+ * /jobs/admin:
+ *   get:
+ *     tags: [Jobs]
+ *     summary: Admin — every job offer with its poster (state live|draft|unpaid|expired|closed|removed, search by title / organization / city / poster name, phone or email; meta.counts per state)
+ *     security: [{ bearerAuth: [] }]
+ * /jobs/admin/{id}:
+ *   get:
+ *     tags: [Jobs]
+ *     summary: Admin — one job offer with its poster, publish payment, application counts and removal
+ *     security: [{ bearerAuth: [] }]
+ * /jobs/admin/{id}/applications:
+ *   get:
+ *     tags: [Jobs]
+ *     summary: Admin — the job's applications with the candidates' contact
+ *     security: [{ bearerAuth: [] }]
+ * /jobs/admin/{id}/remove:
+ *   patch:
+ *     tags: [Jobs]
+ *     summary: Admin — take a job offer down (body { reason }); hidden everywhere, the poster and waiting candidates are told. No refund.
+ *     security: [{ bearerAuth: [] }]
+ * /jobs/admin/{id}/restore:
+ *   patch:
+ *     tags: [Jobs]
+ *     summary: Admin — put a removed offer back as it was (a published one gets back the days it spent removed)
+ *     security: [{ bearerAuth: [] }]
+ */
+// Before "/:id", which would swallow "/admin"
+router.get("/admin", staff, JobControllers.getJobsForAdmin);
+router.get("/admin/:id", staff, JobControllers.getJobForAdmin);
+router.get("/admin/:id/applications", staff, JobControllers.getJobApplicationsForAdmin);
+router.patch("/admin/:id/remove", admin, validateRequest(removeJobSchema), JobControllers.removeJob);
+router.patch("/admin/:id/restore", admin, JobControllers.restoreJob);
 
 // Public Job Search & Details
 router.get("/", JobControllers.searchJobs);

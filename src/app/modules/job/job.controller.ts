@@ -3,6 +3,7 @@ import httpStatus from "http-status";
 import catchAsync from "../../utils/catchAsync";
 import sendResponse from "../../utils/sendResponse";
 import { ApplicationStatus } from "./job.interface";
+import { JobAdminServices } from "./job.admin.service";
 import { JobServices } from "./job.service";
 import { enumQuery } from "../../utils/queryParams";
 
@@ -253,6 +254,27 @@ const confirmInterview = catchAsync(async (req: Request, res: Response) => {
   });
 });
 
+// ── Admin ──
+const ok = (res: Response, message: string, data: unknown) => sendResponse(res, { statusCode: httpStatus.OK, success: true, message, data });
+
+const getJobsForAdmin = catchAsync(async (req: Request, res: Response) => {
+  const result = await JobAdminServices.getJobsForAdmin(req.query as never);
+  sendResponse(res, { statusCode: httpStatus.OK, success: true, message: "Jobs retrieved", meta: result.meta as never, data: result.data });
+});
+const getJobForAdmin = catchAsync(async (req: Request, res: Response) =>
+  ok(res, "Job retrieved", await JobAdminServices.getJobForAdmin(String(req.params.id))),
+);
+const getJobApplicationsForAdmin = catchAsync(async (req: Request, res: Response) => {
+  const result = await JobAdminServices.getJobApplicationsForAdmin(String(req.params.id), req.query as never);
+  sendResponse(res, { statusCode: httpStatus.OK, success: true, message: "Applications retrieved", meta: result.meta as never, data: result.data });
+});
+const removeJob = catchAsync(async (req: Request, res: Response) =>
+  ok(res, "Job removed", await JobAdminServices.removeJob(String(req.params.id), req.body.reason, req.user._id)),
+);
+const restoreJob = catchAsync(async (req: Request, res: Response) =>
+  ok(res, "Job restored", await JobAdminServices.restoreJob(String(req.params.id), req.user._id)),
+);
+
 export const JobControllers = {
   getMyJobs,
   getApplication,
@@ -272,4 +294,9 @@ export const JobControllers = {
   updateApplicationStatus,
   scheduleInterview,
   unlockCandidateCv,
+  getJobsForAdmin,
+  getJobForAdmin,
+  getJobApplicationsForAdmin,
+  removeJob,
+  restoreJob,
 };
