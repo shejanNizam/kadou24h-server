@@ -39,6 +39,7 @@ export const conversationSchema = new Schema<IConversation>(
     subOrderId: { type: Schema.Types.ObjectId, ref: "sub_orders" },
     applicationId: { type: Schema.Types.ObjectId, ref: "JobApplication" },
     workerProfileId: { type: Schema.Types.ObjectId, ref: "ProfessionalProfile" },
+    rideId: { type: Schema.Types.ObjectId, ref: "rides" },
     allowVoice: { type: Boolean, default: false },
     participants: {
       type: [participantSchema],
@@ -57,6 +58,7 @@ export const conversationSchema = new Schema<IConversation>(
 
 conversationSchema.index({ subOrderId: 1 });
 conversationSchema.index({ applicationId: 1 });
+conversationSchema.index({ rideId: 1 }, { sparse: true });
 conversationSchema.index({ "participants.userId": 1, "participants.mode": 1 });
 conversationSchema.index({ updatedAt: -1 });
 

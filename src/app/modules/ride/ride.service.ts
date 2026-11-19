@@ -17,7 +17,7 @@ import { Types } from "mongoose";
 import AppError from "../../errorHelpers/AppError";
 import type { ErrorCode } from "../../i18n/errors";
 import { emitToUser } from "../../../socket/socket";
-import { ILatLng } from "../../interfaces/common.types";
+import { IFileRef, ILatLng } from "../../interfaces/common.types";
 import { toGeoPoint } from "../../utils/commonSchemas";
 import { logger } from "../../utils/logger";
 import { escapeRegex } from "../../utils/queryParams";
@@ -195,6 +195,7 @@ const present = (ride: Populated, as: "passenger" | "rider" | "admin") => {
     durationMin: ride.durationMin,
     fare: ride.fare,
     note: ride.note,
+    pickupPhoto: ride.pickupPhoto,
     searchStartedAt: ride.searchStartedAt,
     acceptedAt: ride.acceptedAt,
     arrivedAt: ride.arrivedAt,
@@ -242,7 +243,7 @@ const estimate = async (passengerId: string, payload: { pickup: ILatLng; dropoff
   return { ...price, ridersNearby };
 };
 
-const requestRide = async (passengerId: string, payload: { pickup: PlaceInput; dropoff: PlaceInput; note?: string }) => {
+const requestRide = async (passengerId: string, payload: { pickup: PlaceInput; dropoff: PlaceInput; note?: string; pickupPhoto?: IFileRef }) => {
   if (await Ride.exists({ passengerId, status: { $in: ACTIVE_RIDE } })) {
     throw new AppError(httpStatus.CONFLICT, "RIDE_IN_PROGRESS");
   }
@@ -256,6 +257,7 @@ const requestRide = async (passengerId: string, payload: { pickup: PlaceInput; d
     dropoff: { location: toGeoPoint(payload.dropoff), address: payload.dropoff.address },
     ...price,
     note: payload.note,
+    pickupPhoto: payload.pickupPhoto,
     searchStartedAt: now,
     offerRadiusKm: RIDE.radiusSteps[0][1],
   });
@@ -386,6 +388,7 @@ const getRideOffers = async (riderUserId: string) => {
       durationMin: ride.durationMin,
       fare: ride.fare,
       note: ride.note,
+      pickupPhoto: ride.pickupPhoto,
       pickupKm: km,
       searchStartedAt: ride.searchStartedAt,
     }));

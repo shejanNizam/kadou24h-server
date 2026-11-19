@@ -1,5 +1,5 @@
 import { Schema, model } from "mongoose";
-import { geoPointSchema } from "../../utils/commonSchemas";
+import { fileRefSchema, geoPointSchema } from "../../utils/commonSchemas";
 import { IRide, RideStatus } from "./ride.interface";
 
 const placeSchema = new Schema(
@@ -22,6 +22,7 @@ const rideSchema = new Schema<IRide>(
     durationMin: { type: Number, required: true, min: 0 },
     fare: { type: Number, required: true, min: 0 },
     note: { type: String, trim: true, maxlength: 200 },
+    pickupPhoto: { type: fileRefSchema },
     searchStartedAt: { type: Date, default: Date.now },
     offerRadiusKm: { type: Number, default: 0 },
     offerNotified: { type: [Schema.Types.ObjectId], default: undefined, select: false },

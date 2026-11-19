@@ -1,5 +1,5 @@
 import { Document, Types } from "mongoose";
-import { IGeoPoint } from "../../interfaces/common.types";
+import { IFileRef, IGeoPoint } from "../../interfaces/common.types";
 
 /**
  * Moto-taxi ride (point A → point B), client 2026-10-23: "structure it as you see fit,
@@ -38,6 +38,8 @@ export interface IRideInitial {
   /** GNF, fixed at the request: what the passenger pays the rider in cash */
   fare: number;
   note?: string;
+  /** The passenger's photo of the pickup spot (gate, landmark): riders see it to find them */
+  pickupPhoto?: IFileRef;
   // Open dispatch, like deliveries: nearby riders see it, the radius grows from here
   searchStartedAt: Date;
   offerRadiusKm: number;

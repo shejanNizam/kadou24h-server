@@ -31,6 +31,7 @@ const contextAround = async (adminId: string, focus: { conversationId: Types.Obj
   const conversation = await Conversation.findById(focus.conversationId)
     .populate("participants.userId", "name phone avatar status moderation.violationCount")
     .populate("subOrderId", "subOrderNumber")
+    .populate("rideId", "rideNumber")
     .lean();
   if (!conversation) throw new AppError(httpStatus.NOT_FOUND, "CONVERSATION_NOT_FOUND");
 
@@ -64,11 +65,13 @@ const contextAround = async (adminId: string, focus: { conversationId: Types.Obj
   });
 
   const subOrder = conversation.subOrderId as unknown as { subOrderNumber?: string } | undefined;
+  const ride = conversation.rideId as unknown as { rideNumber?: string } | undefined;
   return {
     conversation: {
       _id: conversation._id,
       type: conversation.type,
       subOrderNumber: subOrder?.subOrderNumber,
+      rideNumber: ride?.rideNumber,
       createdAt: conversation.createdAt,
       participants: conversation.participants.map((p) => {
         const user = p.userId as unknown as PopulatedUser;

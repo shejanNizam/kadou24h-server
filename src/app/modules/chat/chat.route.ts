@@ -45,16 +45,17 @@ router.post(
  *       content:
  *         application/json:
  *           schema:
- *             description: "Say what the chat is about; the server finds the other person and the modes. One of: { type: buyer_seller, vendorId } · { type: worker, workerProfileId } · { type: order, subOrderId, with: vendor|rider|customer } · { type: job_application, applicationId }. Voice notes are allowed in every chat except job applications."
+ *             description: "Say what the chat is about; the server finds the other person and the modes. One of: { type: buyer_seller, vendorId } · { type: worker, workerProfileId } · { type: order, subOrderId, with: vendor|rider|customer } · { type: job_application, applicationId } · { type: ride, rideId } (moto-taxi passenger ↔ rider; messages only while the ride is going on). Voice notes are allowed in every chat except job applications."
  *             type: object
  *             required: [type]
  *             properties:
- *               type: { type: string, enum: [buyer_seller, worker, order, job_application] }
+ *               type: { type: string, enum: [buyer_seller, worker, order, job_application, ride] }
  *               vendorId: { type: string }
  *               workerProfileId: { type: string }
  *               subOrderId: { type: string }
  *               with: { type: string, enum: [vendor, rider, customer] }
  *               applicationId: { type: string }
+ *               rideId: { type: string }
  *     responses:
  *       200:
  *         description: Conversation retrieved or created

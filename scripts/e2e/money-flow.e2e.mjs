@@ -1531,7 +1531,8 @@ const run = async () => {
     ok(r) && est.fare === expectedFare && est.fare % 500 === 0 && est.durationMin > 0 && est.ridersNearby >= 1,
     JSON.stringify(est ?? brief(r)),
   );
-  r = await call("POST", "/rides", { pickup: PICK, dropoff: DROP, note: "Devant la pharmacie & le marché" }, PA.token);
+  const GATE = { url: "https://res.cloudinary.com/demo/image/upload/e2e-gate.jpg", publicId: "e2e-gate" };
+  r = await call("POST", "/rides", { pickup: PICK, dropoff: DROP, note: "Devant la pharmacie & le marché", pickupPhoto: GATE }, PA.token);
   const ride = r.body.data;
   check("input: "&" is stored as typed, not as &amp;", ride?.note === "Devant la pharmacie & le marché", JSON.stringify(ride?.note));
   check("ride: ordered → searching, same fare as the estimate", r.status === 201 && ride?.status === "searching" && ride?.fare === est.fare, brief(r));
@@ -1540,6 +1541,7 @@ const run = async () => {
   const rideOffers = async (token) => (await call("GET", "/rides/rider/offers", null, token)).body.data ?? [];
   const seen = (await rideOffers(T.token)).find((o) => o._id === ride?._id);
   check("ride: a nearby rider sees it with the fare and the pickup distance", seen && seen.fare === ride.fare && seen.pickupKm < 2, JSON.stringify(seen));
+  check("ride: riders see the passenger's photo of the pickup spot", seen?.pickupPhoto?.url === GATE.url && ride?.pickupPhoto?.url === GATE.url, JSON.stringify([seen?.pickupPhoto, ride?.pickupPhoto]));
   check("ride: a far rider doesn't see it yet", !(await rideOffers(Far.token)).some((o) => o._id === ride?._id));
   // A moto-taxi approved before plate + vest were required: no passengers until filled in
   const setVest = async (vestNumber) => {
@@ -1557,6 +1559,8 @@ const run = async () => {
   check("ride: the nearby rider is told", (r.body.data ?? []).some((n) => n.type === "ride_update"), brief(r));
   r = await call("POST", `/rides/${ride?._id}/accept`, null, PA.token);
   check("ride: a passenger can't accept rides", r.status === 403, brief(r));
+  r = await call("POST", "/conversations", { type: "ride", rideId: ride?._id }, PA.token);
+  check("ride chat: not before a rider takes the ride", r.body.code === "RIDE_NO_RIDER_YET", brief(r));
   const [a1, a2] = await Promise.all([call("POST", `/rides/${ride?._id}/accept`, null, T.token), call("POST", `/rides/${ride?._id}/accept`, null, D.token)]);
   check("ride: two riders at once → one gets it, the other 409", [a1, a2].filter(ok).length === 1 && [a1, a2].some((x) => x.status === 409), `${brief(a1)} | ${brief(a2)}`);
   const [driver, other] = ok(a1) ? [T, D] : [D, T];
@@ -1571,6 +1575,27 @@ const run = async () => {
   check("ride: the rider gets the passenger's phone to find them", r.body.data?.passenger?.phone === `+22465${stamp}4`, JSON.stringify(r.body.data?.passenger));
   r = await call("GET", `/rides/${ride?._id}`, null, other.token);
   check("ride: another rider can't open it", r.status === 404, brief(r));
+
+  // Ride chat: the passenger can't call the rider (no phone), so they write, send a voice note or a photo
+  r = await call("POST", "/conversations", { type: "ride", rideId: ride?._id }, PA.token);
+  const rideChat = r.body.data;
+  check(
+    "ride chat: the passenger opens it with the rider (rider mode, voice allowed, no phone)",
+    ok(r) && rideChat?.myMode === "customer" && rideChat?.peer?.mode === "rider" && rideChat?.allowVoice === true && rideChat?.rideId?.rideNumber === ride?.rideNumber && !JSON.stringify(rideChat).includes("+224"),
+    JSON.stringify(rideChat ?? brief(r)),
+  );
+  r = await call("POST", "/conversations", { type: "ride", rideId: ride?._id }, driver.token);
+  check("ride chat: the rider gets the same chat, in rider mode", r.body.data?._id === rideChat?._id && r.body.data?.myMode === "rider", brief(r));
+  r = await call("POST", "/conversations", { type: "ride", rideId: ride?._id }, other.token);
+  check("ride chat: another rider can't open it", r.status === 403 && r.body.code === "NOT_PART_OF_RIDE", brief(r));
+  r = await call("POST", `/conversations/${rideChat?._id}/messages`, { type: "voice", mediaUrl: "https://res.cloudinary.com/demo/video/upload/e2e-voice.m4a", mediaDurationSec: 6 }, PA.token);
+  check("ride chat: the passenger sends a voice note", ok(r) && r.body.data?.type === "voice", brief(r));
+  r = await call("POST", `/conversations/${rideChat?._id}/messages`, { type: "image", mediaUrl: GATE.url }, PA.token);
+  check("ride chat: …and a photo of the gate", ok(r) && r.body.data?.type === "image", brief(r));
+  r = await call("POST", `/conversations/${rideChat?._id}/messages`, { text: "J'arrive dans 2 minutes" }, driver.token);
+  check("ride chat: the rider answers", ok(r), brief(r));
+  r = await call("GET", "/conversations?mode=rider", null, driver.token);
+  check("ride chat: in the rider's chat list, with the ride number", (r.body.data ?? []).some((c) => c._id === rideChat?._id && c.rideId?.rideNumber === ride?.rideNumber && c.myUnread === 2), brief(r));
 
   // "Share my trip": a close one follows the ride from a link, no account
   r = await call("POST", `/rides/${ride?._id}/share`, null, driver.token);
@@ -1604,6 +1629,10 @@ const run = async () => {
   check("ride: the passenger can't cancel once it started", r.status === 400, brief(r));
   r = await call("POST", `/rides/${ride?._id}/complete`, null, driver.token);
   check("ride: finished", ok(r) && r.body.data?.status === "completed" && Boolean(r.body.data?.completedAt), brief(r));
+  r = await call("POST", `/conversations/${rideChat?._id}/messages`, { text: "Merci !" }, PA.token);
+  check("ride chat: closed once the ride is over", r.status === 400 && r.body.code === "RIDE_CHAT_CLOSED", brief(r));
+  r = await call("GET", `/conversations/${rideChat?._id}/messages`, null, PA.token);
+  check("ride chat: …but stays readable", ok(r) && (r.body.data ?? []).length >= 4, brief(r));
   r = await call("GET", `/rides/shared/${share?.token}`);
   check("share: once finished the link only says so (no position, driver or addresses)", ok(r) && r.body.data?.ended === true && !r.body.data?.rider && !r.body.data?.pickup, JSON.stringify(r.body.data));
   r = await call("POST", `/rides/${ride?._id}/share`, null, PA.token);

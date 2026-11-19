@@ -67,6 +67,18 @@ export const chatErrors = {
     en: "No rider is assigned to this order yet.",
     fr: "Aucun livreur n'est encore assigné à cette commande.",
   },
+  NOT_PART_OF_RIDE: {
+    en: "You are not part of this ride.",
+    fr: "Vous ne faites pas partie de cette course.",
+  },
+  RIDE_NO_RIDER_YET: {
+    en: "No rider has taken this ride yet.",
+    fr: "Aucun conducteur n'a encore accepté cette course.",
+  },
+  RIDE_CHAT_CLOSED: {
+    en: "This ride is over: you can no longer send messages.",
+    fr: "Cette course est terminée : vous ne pouvez plus envoyer de messages.",
+  },
 
   // Notifications
   NOTIFICATION_NOT_FOUND: {

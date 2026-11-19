@@ -15,6 +15,8 @@ const startConversationZodSchema = z.object({
       with: z.enum(["vendor", "rider", "customer"]),
     }),
     z.object({ type: z.literal(ConversationType.job_application), applicationId: objectId }),
+    // Moto-taxi: the passenger ↔ the rider who took the ride
+    z.object({ type: z.literal(ConversationType.ride), rideId: objectId }),
   ]),
 });
 

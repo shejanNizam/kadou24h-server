@@ -332,9 +332,10 @@ Admin creates plans (e.g. "Professional", 10$/month equivalent in GNF) with `fea
 ## 9. Domain 7 — Chat & trust
 
 ### `conversations`
-`type`: `order` (customer/vendor/rider about a sub-order), `buyer_seller` (before ordering), `worker` (messaging a worker), `job_application`.
+`type`: `order` (customer/vendor/rider about a sub-order), `buyer_seller` (before ordering), `worker` (messaging a worker), `job_application`, `ride` (moto-taxi passenger ↔ the rider who took the ride, `rideId`; messages only while the ride is accepted / arrived / in progress, readable afterwards).
 `conversation_participants[]` (embedded) stores each person's `mode` (so the vendor inbox and customer inbox are separate) and `unread_count`.
-`allow_voice = true` **only** for customer ↔ rider (client rule — helps users who cannot read).
+Voice notes are allowed in every chat **except** `job_application` (client, 2026-10-23 — helps users who cannot read; a recruiter pays to unlock a candidate's contact and voice can't be checked for phone numbers).
+A moto-taxi ride can also carry `pickupPhoto` (the passenger's photo of the gate or landmark), shown to the riders it is offered to.
 Every new conversation gets an automatic **system warning**: pay only through Kadou24h or on delivery.
 
 ### `messages`

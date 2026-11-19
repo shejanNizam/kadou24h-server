@@ -18,6 +18,8 @@ import { Booking } from "../booking/booking.model";
 import { ProfessionalProfile } from "../professional_profile/professional_profile.model";
 import { publicWorkerFilter } from "../professional_profile/worker_listing";
 import { ApprovalStatus } from "../profile_common/profile.common";
+import { RideStatus } from "../ride/ride.interface";
+import { Ride } from "../ride/ride.model";
 import { RiderProfile } from "../rider_profile/rider_profile.model";
 import { AppMode } from "../user/user.interface";
 import { User } from "../user/user.model";
@@ -28,7 +30,8 @@ export type StartConversationInput =
   | { type: ConversationType.buyer_seller; vendorId: string }
   | { type: ConversationType.worker; workerProfileId?: string; bookingId?: string }
   | { type: ConversationType.order; subOrderId: string; with: "vendor" | "rider" | "customer" }
-  | { type: ConversationType.job_application; applicationId: string };
+  | { type: ConversationType.job_application; applicationId: string }
+  | { type: ConversationType.ride; rideId: string };
 
 interface Party {
   userId: Types.ObjectId;
@@ -44,6 +47,7 @@ export interface ResolvedConversation {
     subOrderId?: Types.ObjectId;
     workerProfileId?: Types.ObjectId;
     applicationId?: Types.ObjectId;
+    rideId?: Types.ObjectId;
   };
   /** See voiceAllowedFor */
   allowVoice: boolean;
@@ -166,6 +170,29 @@ export const resolveConversation = async (
     };
   }
 
+  // Moto-taxi: the passenger ↔ the rider who took the ride. The rider already has the
+  // passenger's phone; the passenger never gets the rider's (client rule), so this chat
+  // is how they reach the rider: a voice note or a photo of the gate helps find them.
+  if (input.type === ConversationType.ride) {
+    const ride = await Ride.findById(input.rideId).select("passengerId riderId");
+    if (!ride) throw notFound("RIDE_NOT_FOUND");
+    const rider = ride.riderId ? await RiderProfile.findById(ride.riderId).select("userId") : null;
+    const passenger: Party = { userId: ride.passengerId, mode: AppMode.customer };
+    const driver: Party | null = rider ? { userId: rider.userId, mode: AppMode.rider } : null;
+    const iAmPassenger = String(passenger.userId) === userId;
+    if (!iAmPassenger && String(driver?.userId) !== userId) {
+      throw new AppError(httpStatus.FORBIDDEN, "NOT_PART_OF_RIDE");
+    }
+    if (!driver) throw new AppError(httpStatus.BAD_REQUEST, "RIDE_NO_RIDER_YET");
+    return {
+      type: input.type,
+      me: iAmPassenger ? passenger : driver,
+      other: iAmPassenger ? driver : passenger,
+      context: { rideId: ride._id as Types.ObjectId },
+      allowVoice: voiceAllowedFor(input.type),
+    };
+  }
+
   // job_application: the applicant ↔ whoever posted the job (or the store, for a spontaneous application)
   const application = await JobApplication.findById(input.applicationId).select("applicantId jobId targetVendorId");
   if (!application) throw notFound("JOB_APPLICATION_NOT_FOUND");
@@ -199,6 +226,16 @@ export const assertApplicationJobLive = async (applicationId: Types.ObjectId) =>
   if (!application?.jobId) return;
   if (await Job.exists({ _id: application.jobId, status: JobStatus.removed })) {
     throw new AppError(httpStatus.BAD_REQUEST, "JOB_REMOVED");
+  }
+};
+
+/** A rider is on this ride: the passenger and the rider can write to each other */
+export const RIDE_CHAT_OPEN = [RideStatus.accepted, RideStatus.arrived, RideStatus.in_progress];
+
+/** Messages only while the ride is going on; afterwards the chat stays readable */
+export const assertRideChatOpen = async (rideId: Types.ObjectId) => {
+  if (!(await Ride.exists({ _id: rideId, status: { $in: RIDE_CHAT_OPEN } }))) {
+    throw new AppError(httpStatus.BAD_REQUEST, "RIDE_CHAT_CLOSED");
   }
 };
 

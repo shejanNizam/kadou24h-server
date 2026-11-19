@@ -20,6 +20,7 @@ import { Message } from "./message.model";
 import {
   assertApplicationJobLive,
   assertReachable,
+  assertRideChatOpen,
   resolveConversation,
   voiceAllowedFor,
   type StartConversationInput,
@@ -145,6 +146,7 @@ const getMyConversations = async (
     Conversation.find(filter)
       .populate("participants.userId", PARTICIPANT_FIELDS)
       .populate("subOrderId", "subOrderNumber")
+      .populate("rideId", "rideNumber status")
       .sort({ updatedAt: -1 })
       .skip(skip)
       .limit(limit)
@@ -179,6 +181,7 @@ const getConversationById = async (userId: string, conversationId: string) => {
   const conversation = await Conversation.findById(conversationId)
     .populate("participants.userId", PARTICIPANT_FIELDS)
     .populate("subOrderId", "subOrderNumber orderId status")
+    .populate("rideId", "rideNumber status")
     .lean();
 
   if (!conversation) {
@@ -294,6 +297,9 @@ const sendMessage = async (
   }
   if (conversation.type === ConversationType.job_application && conversation.applicationId) {
     await assertApplicationJobLive(conversation.applicationId);
+  }
+  if (conversation.type === ConversationType.ride && conversation.rideId) {
+    await assertRideChatOpen(conversation.rideId);
   }
 
   // 3. Voice note policy check

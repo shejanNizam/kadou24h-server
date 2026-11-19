@@ -1,5 +1,5 @@
 import z from "zod";
-import { latLngSchema } from "../../utils/commonSchemas";
+import { fileRefZodSchema, latLngSchema } from "../../utils/commonSchemas";
 
 const place = latLngSchema.extend({
   address: z.string().trim().min(2, "RIDE_ADDRESS_REQUIRED").max(200),
@@ -14,6 +14,7 @@ export const requestRideZodSchema = z.object({
   pickup: place,
   dropoff: place,
   note: z.string().trim().max(200).optional(),
+  pickupPhoto: fileRefZodSchema.optional(),
 });
 
 export const cancelRideZodSchema = z.object({

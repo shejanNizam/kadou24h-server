@@ -6,6 +6,7 @@ export enum ConversationType {
   buyer_seller = "buyer_seller",
   worker = "worker",
   job_application = "job_application",
+  ride = "ride",
 }
 
 export enum MessageType {
@@ -56,6 +57,8 @@ export interface IConversationInitial {
   subOrderId?: Types.ObjectId;
   applicationId?: Types.ObjectId;
   workerProfileId?: Types.ObjectId;
+  /** Moto-taxi: the passenger and the rider of this ride */
+  rideId?: Types.ObjectId;
   allowVoice: boolean;
   participants: IParticipant[];
   lastMessage?: ILastMessage;
