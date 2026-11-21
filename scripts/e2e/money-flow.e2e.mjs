@@ -75,6 +75,7 @@ const server = spawn(process.execPath, ["--import", "tsx", "src/server.ts"], {
     PAYMENT_WEBHOOK_SECRET: SECRET,
     DISPATCH_SWEEP_MS: "1000",
     RIDE_SWEEP_MS: "1000",
+    ORDER_ACCEPT_SWEEP_MS: "1000",
     REDIS_HOST: "localhost",
     REDIS_PORT: "6379",
     ...redisEnv,
@@ -518,6 +519,43 @@ const run = async () => {
   check("COD: the fees can't be paid twice", r.status === 400, brief(r));
   r = await call("POST", `/orders/${feeOrder?._id}/cancel`, { reason: "Changed my mind" }, C.token);
   check("COD: the customer can still cancel", ok(r), brief(r));
+
+  // ═════ 3e. A store that doesn't accept in time loses the order (client, 2026-11-21) ═════
+  r = await call("GET", "/settings", null, admin);
+  check("accept delay: 30 minutes by default (admin setting)", r.body.data?.orders?.acceptMinutes === 30, JSON.stringify(r.body.data?.orders));
+  r = await call("PATCH", "/settings", { orders: { acceptMinutes: 2 } }, admin);
+  check("accept delay: under 5 minutes is refused", r.status === 400, brief(r));
+  const stockLate = await stockOf(productId);
+  r = await order([{ productId, qty: 1 }]);
+  const lateSub = r.body.data?.subOrders?.[0];
+  const lateOrderId = r.body.data?.order?._id;
+  check("accept delay: a paid order reaches the store as new", lateSub?.status === "new", brief(r));
+  const ageSub = async (minutes) => {
+    await mongoose.connect(DATABASE_URL);
+    await mongoose.connection.collection("sub_orders").updateOne({ _id: new mongoose.Types.ObjectId(lateSub?._id) }, { $set: { awaitingSince: new Date(Date.now() - minutes * 60_000) } });
+    await mongoose.disconnect();
+    await sleep(2500);
+  };
+  await ageSub(16);
+  r = await call("GET", "/notifications?mode=vendor&limit=100", null, V.token);
+  const reminders = (r.body.data ?? []).filter((n) => n.data?.subOrderId === lateSub?._id && /dans les \d+ minutes|within \d+ minutes/.test(`${n.body?.fr ?? n.body} ${n.body?.en ?? ""}`));
+  check("accept delay: half-way, the store is reminded once", reminders.length === 1, JSON.stringify(reminders.map((n) => n.body)));
+  r = await call("GET", `/orders/${lateOrderId}`, null, C.token);
+  check("accept delay: …and the order still waits", r.body.data?.subOrders?.[0]?.status === "new", JSON.stringify(r.body.data?.subOrders?.[0]?.status));
+  await ageSub(31);
+  r = await call("GET", `/orders/${lateOrderId}`, null, C.token);
+  const lateNow = r.body.data?.subOrders?.[0];
+  check(
+    "accept delay: past 30 minutes → cancelled by the system (code not_accepted)",
+    lateNow?.status === "cancelled" && lateNow?.cancellation?.by === "system" && lateNow?.cancellation?.code === "not_accepted",
+    JSON.stringify(lateNow?.cancellation ?? lateNow?.status),
+  );
+  check("accept delay: …the stock comes back", (await stockOf(productId)) === stockLate, String(await stockOf(productId)));
+  r = await call("GET", "/notifications?mode=customer&limit=100", null, C.token);
+  const lateNotice = (r.body.data ?? []).find((n) => n.type === "order_cancelled" && n.data?.subOrderId === lateSub?._id);
+  check("accept delay: …the customer is told, in their words (no English reason)", lateNotice?.data?.code === "not_accepted" && !/Not accepted by the store/.test(JSON.stringify(lateNotice?.body)), JSON.stringify(lateNotice?.body));
+  r = await call("GET", "/payments/admin/refunds?limit=100", null, admin);
+  check("accept delay: …the fees paid online go into a refund request", (r.body.data ?? []).some((x) => String(x.subOrderId?._id ?? x.subOrderId) === lateSub?._id), brief(r));
   r = await call("GET", "/payments/admin/refunds?limit=100", null, admin);
   const feeRefund = (r.body.data ?? []).find((x) => String(x.orderId?._id ?? x.orderId) === feeOrder?._id);
   check("COD cancelled after paying the fees → all the fees come back (refund request)", feeRefund?.status === "pending" && feeRefund?.amount === feeOrder?.upfrontAmount, JSON.stringify(feeRefund ?? brief(r)));
@@ -1515,7 +1553,7 @@ const run = async () => {
   for (const so of [dSub, eSub]) await call("POST", `/orders/vendor/sub-orders/${so._id}/cancel`, { reason: "End of the e2e run" }, V.token);
   const busyAfter = (await call("GET", "/riders/me", null, winner.token)).body.data?.activeDeliveryCount;
   check("dispatch: cancelling frees the rider who took it", busyAfter === busyBefore - 1, JSON.stringify([busyBefore, busyAfter]));
-  // ═════ 13. Moto-taxi: price first, nearest riders, first to accept, cash at the end ═════
+  // ═════ 13. Moto-taxi: suggested price, nearby riders send theirs, the passenger chooses, cash at the end ═════
   const T = await moto("Taxi Rider", `+22465${stamp}3`, 9.522, -13.702);
   const PA = await signup("Passenger", `+22465${stamp}4`);
   const settingsRides = (await call("GET", "/settings", null, admin)).body.data?.rides;
@@ -1541,6 +1579,12 @@ const run = async () => {
   const rideOffers = async (token) => (await call("GET", "/rides/rider/offers", null, token)).body.data ?? [];
   const seen = (await rideOffers(T.token)).find((o) => o._id === ride?._id);
   check("ride: a nearby rider sees it with the fare and the pickup distance", seen && seen.fare === ride.fare && seen.pickupKm < 2, JSON.stringify(seen));
+  const maxFare = Math.ceil((ride.fare * 1.3) / 500) * 500;
+  check(
+    "ride price: the rider sees the suggested price and the most they may ask (+30% by default)",
+    seen?.suggestedFare === ride.fare && seen?.maxFare === maxFare && ride?.maxFare === maxFare && seen?.bidsLeft === 3 && !seen?.myBid,
+    JSON.stringify([seen?.suggestedFare, seen?.maxFare, ride?.maxFare, seen?.bidsLeft]),
+  );
   check("ride: riders see the passenger's photo of the pickup spot", seen?.pickupPhoto?.url === GATE.url && ride?.pickupPhoto?.url === GATE.url, JSON.stringify([seen?.pickupPhoto, ride?.pickupPhoto]));
   check("ride: a far rider doesn't see it yet", !(await rideOffers(Far.token)).some((o) => o._id === ride?._id));
   // A moto-taxi approved before plate + vest were required: no passengers until filled in
@@ -1551,19 +1595,93 @@ const run = async () => {
   };
   await setVest(null);
   check("ride: a moto-taxi without a vest number gets no passengers", (await rideOffers(T.token)).length === 0);
-  r = await call("POST", `/rides/${ride?._id}/accept`, null, T.token);
-  check("ride: …and can't accept one (told to add it)", r.status === 400 && /vest/i.test(r.body.message), brief(r));
+  r = await call("POST", `/rides/${ride?._id}/bid`, {}, T.token);
+  check("ride: …and can't answer one (told to add it)", r.status === 400 && /vest/i.test(r.body.message), brief(r));
   await setVest(`V-${stamp}`);
   await sleep(400);
   r = await call("GET", "/notifications?mode=rider&limit=50", null, T.token);
   check("ride: the nearby rider is told", (r.body.data ?? []).some((n) => n.type === "ride_update"), brief(r));
-  r = await call("POST", `/rides/${ride?._id}/accept`, null, PA.token);
-  check("ride: a passenger can't accept rides", r.status === 403, brief(r));
+  r = await call("POST", `/rides/${ride?._id}/bid`, {}, PA.token);
+  check("ride: a passenger can't send a rider price", r.status === 403, brief(r));
   r = await call("POST", "/conversations", { type: "ride", rideId: ride?._id }, PA.token);
   check("ride chat: not before a rider takes the ride", r.body.code === "RIDE_NO_RIDER_YET", brief(r));
-  const [a1, a2] = await Promise.all([call("POST", `/rides/${ride?._id}/accept`, null, T.token), call("POST", `/rides/${ride?._id}/accept`, null, D.token)]);
-  check("ride: two riders at once → one gets it, the other 409", [a1, a2].filter(ok).length === 1 && [a1, a2].some((x) => x.status === 409), `${brief(a1)} | ${brief(a2)}`);
+  // Negotiation (client, 2026-11-21): riders send a price, the passenger chooses or counter-offers
+  r = await call("POST", `/rides/${ride?._id}/bid`, { price: maxFare + 500 }, T.token);
+  check("ride price: more than +30% is refused", r.status === 400 && r.body.code === "RIDE_BID_OUT_OF_RANGE", brief(r));
+  r = await call("POST", `/rides/${ride?._id}/bid`, { price: ride.fare - 500 }, T.token);
+  check("ride price: less than the suggested price is refused", r.body.code === "RIDE_BID_OUT_OF_RANGE", brief(r));
+  r = await call("POST", `/rides/${ride?._id}/bid`, { price: ride.fare + 250 }, T.token);
+  check("ride price: only steps of 500 GNF", r.status === 400 && r.body.code === "RIDE_BID_STEP", brief(r));
+  const tPrice = Math.min(maxFare, ride.fare + 1000);
+  r = await call("POST", `/rides/${ride?._id}/bid`, { price: tPrice }, T.token);
+  check("ride price: a rider asks more (rain, night, bad road)", r.status === 201 && r.body.data?.price === tPrice, brief(r));
+  r = await call("POST", `/rides/${ride?._id}/bid`, { price: ride.fare }, T.token);
+  check("ride price: one waiting price per rider", r.status === 409 && r.body.code === "RIDE_BID_WAITING", brief(r));
+  r = await call("POST", `/rides/${ride?._id}/bid`, {}, D.token);
+  check("ride price: another rider accepts the suggested price", r.status === 201 && r.body.data?.price === ride.fare, brief(r));
+  r = await call("GET", `/rides/${ride?._id}`, null, PA.token);
+  const bids = r.body.data?.bids ?? [];
+  const tBid = bids.find((b) => b.price === tPrice);
+  const dBid = bids.find((b) => b.price === ride.fare);
+  check(
+    "ride price: the passenger sees both prices with each rider (name, rating, how far) — no phone",
+    bids.length === 2 && Boolean(tBid?.rider?.name) && tBid?.pickupKm >= 0 && tBid?.etaMin >= 1 && !JSON.stringify(bids).includes("+224"),
+    JSON.stringify(bids),
+  );
+  await sleep(400);
+  r = await call("GET", "/notifications?mode=customer&limit=50", null, PA.token);
+  check(
+    "ride price: the passenger is told once (first price), not for every price",
+    (r.body.data ?? []).filter((n) => n.data?.bid === true && n.data?.rideId === ride?._id).length === 1,
+    brief(r),
+  );
+  r = await call("POST", `/rides/${ride?._id}/bids/${tBid?._id}/counter`, { price: ride.fare - 500 }, PA.token);
+  check("ride price: a counter-offer under the suggested price is refused", r.status === 400 && r.body.code === "RIDE_COUNTER_OUT_OF_RANGE", brief(r));
+  r = await call("POST", `/rides/${ride?._id}/bids/${dBid?._id}/counter`, { price: ride.fare }, PA.token);
+  check("ride price: no counter-offer on the suggested price itself", r.body.code === "RIDE_COUNTER_NOT_POSSIBLE", brief(r));
+  r = await call("POST", `/rides/${ride?._id}/bids/${tBid?._id}/counter`, { price: tPrice - 500 }, T.token);
+  check("ride price: only the passenger counter-offers", r.status === 404, brief(r));
+  r = await call("POST", `/rides/${ride?._id}/bids/${tBid?._id}/counter`, { price: tPrice - 500 }, PA.token);
+  check("ride price: the passenger counter-offers", ok(r) && r.body.data?.bids?.find((b) => b._id === tBid?._id)?.status === "countered", brief(r));
+  r = await call("POST", `/rides/${ride?._id}/bids/${tBid?._id}/counter`, { price: ride.fare }, PA.token);
+  check("ride price: …once per price", r.status === 409 && r.body.code === "RIDE_BID_GONE", brief(r));
+  let myT = (await rideOffers(T.token)).find((o) => o._id === ride?._id)?.myBid;
+  check("ride price: the rider sees the counter-offer", myT?.status === "countered" && myT?.counterPrice === tPrice - 500, JSON.stringify(myT));
+  r = await call("POST", `/rides/${ride?._id}/bid/answer`, { accept: false }, T.token);
+  myT = (await rideOffers(T.token)).find((o) => o._id === ride?._id);
+  check(
+    "ride price: the rider declines it (and may still send another price)",
+    ok(r) && myT?.myBid?.status === "declined" && myT?.bidsLeft === 2,
+    JSON.stringify(myT?.myBid ?? brief(r)),
+  );
+  r = await call("GET", `/rides/${ride?._id}`, null, PA.token);
+  check("ride price: the passenger now sees only the live price", (r.body.data?.bids ?? []).length === 1 && r.body.data?.bids?.[0]?._id === dBid?._id, JSON.stringify(r.body.data?.bids));
+  r = await call("POST", `/rides/${ride?._id}/bid`, { price: ride.fare + 500 }, T.token);
+  const tBid2 = (await call("GET", `/rides/${ride?._id}`, null, PA.token)).body.data?.bids?.find((b) => b.price === ride.fare + 500);
+  check("ride price: the rider sends a new price", r.status === 201 && Boolean(tBid2), brief(r));
+  // The passenger taps two prices at once: only one rider gets the ride
+  const [a1, a2] = await Promise.all([
+    call("POST", `/rides/${ride?._id}/bids/${tBid2?._id}/accept`, null, PA.token),
+    call("POST", `/rides/${ride?._id}/bids/${dBid?._id}/accept`, null, PA.token),
+  ]);
+  check("ride price: two choices at once → one wins, the other 409", [a1, a2].filter(ok).length === 1 && [a1, a2].some((x) => x.status === 409), `${brief(a1)} | ${brief(a2)}`);
   const [driver, other] = ok(a1) ? [T, D] : [D, T];
+  const agreed = ok(a1) ? ride.fare + 500 : ride.fare;
+  r = await call("GET", `/rides/${ride?._id}`, null, PA.token);
+  check(
+    "ride price: the ride is taken at the chosen price",
+    r.body.data?.status === "accepted" && r.body.data?.fare === agreed && r.body.data?.suggestedFare === ride.fare,
+    JSON.stringify([r.body.data?.status, r.body.data?.fare]),
+  );
+  ride.fare = agreed;
+  r = await call("POST", `/rides/${ride?._id}/bid`, {}, other.token);
+  check("ride price: no more prices once a rider is chosen", r.status === 409, brief(r));
+  r = await call("GET", `/rides/admin/${ride?._id}`, null, admin);
+  check(
+    "ride price: the team sees every price and how it ended",
+    (r.body.data?.bids ?? []).length === 3 && r.body.data.bids.some((b) => b.status === "accepted") && r.body.data.bids.some((b) => b.status === "declined"),
+    JSON.stringify((r.body.data?.bids ?? []).map((b) => b.status)),
+  );
   r = await call("GET", `/rides/${ride?._id}`, null, PA.token);
   check(
     "ride: the passenger sees the rider (name, rating) — never the phone",
@@ -1647,11 +1765,18 @@ const run = async () => {
   // A rider drops a ride before it starts → back to the other riders; then the passenger cancels
   r = await call("POST", "/rides", { pickup: PICK, dropoff: DROP }, PA.token);
   const ride2 = r.body.data;
-  r = await call("POST", `/rides/${ride2?._id}/accept`, null, T.token);
+  await call("POST", `/rides/${ride2?._id}/bid`, { price: ride2.fare + 500 }, T.token);
+  const bid2 = (await call("GET", `/rides/${ride2?._id}`, null, PA.token)).body.data?.bids?.[0];
+  r = await call("POST", `/rides/${ride2?._id}/bids/${bid2?._id}/accept`, null, PA.token);
+  check("ride price: chosen at the rider's price", ok(r) && r.body.data?.fare === ride2.fare + 500, brief(r));
   r = await call("POST", `/rides/${ride2?._id}/release`, { reason: "Pneu crevé" }, T.token);
   check("ride: a rider can drop it before the start", ok(r), brief(r));
   r = await call("GET", `/rides/${ride2?._id}`, null, PA.token);
-  check("ride: …it is searching again, without a rider", r.body.data?.status === "searching" && !r.body.data?.rider, JSON.stringify(r.body.data?.status));
+  check(
+    "ride: …it is searching again, without a rider, at the suggested price",
+    r.body.data?.status === "searching" && !r.body.data?.rider && r.body.data?.fare === ride2.fare,
+    JSON.stringify([r.body.data?.status, r.body.data?.fare]),
+  );
   check("ride: …the rider who dropped it isn't offered it again", !(await rideOffers(T.token)).some((o) => o._id === ride2?._id));
   r = await call("POST", `/rides/${ride2?._id}/cancel`, { reason: "J'ai trouvé autrement" }, PA.token);
   check("ride: the passenger cancels while searching", ok(r) && r.body.data?.status === "cancelled", brief(r));
@@ -1690,6 +1815,22 @@ const run = async () => {
   check("admin rides: not for customers", r.status === 403, brief(r));
   r = await call("POST", "/rides", { pickup: PICK, dropoff: DROP }, PA.token);
   const ride4 = r.body.data;
+  // A price nobody answers expires: the rider may send another one
+  await call("POST", `/rides/${ride4?._id}/bid`, {}, D.token);
+  await db((c) => c.collection("rides").updateOne({ _id: oid(ride4?._id) }, { $set: { "bids.0.expiresAt": new Date(Date.now() - 1000) } }));
+  await sleep(2500);
+  r = await call("GET", `/rides/${ride4?._id}`, null, PA.token);
+  const dRow = (await rideOffers(D.token)).find((o) => o._id === ride4?._id);
+  check(
+    "ride price: an unanswered price expires (gone for the passenger, the rider may try again)",
+    (r.body.data?.bids ?? []).length === 0 && dRow?.myBid?.status === "expired" && dRow?.bidsLeft === 2,
+    JSON.stringify([r.body.data?.bids, dRow?.myBid]),
+  );
+  r = await call("POST", `/rides/${ride4?._id}/bid`, {}, D.token);
+  check("ride price: …and sends a new one", r.status === 201, brief(r));
+  await call("DELETE", `/rides/${ride4?._id}/bid`, null, D.token);
+  r = await call("GET", `/rides/${ride4?._id}`, null, PA.token);
+  check("ride price: a rider takes their price back", (r.body.data?.bids ?? []).length === 0, JSON.stringify(r.body.data?.bids));
   r = await call("POST", `/rides/admin/${ride4?._id}/cancel`, {}, admin);
   check("admin rides: cancelling needs a reason", r.status === 400, brief(r));
   r = await call("POST", `/rides/admin/${ride4?._id}/cancel`, { reason: "Test du support" }, admin);
@@ -1721,7 +1862,7 @@ const run = async () => {
   r = await call("POST", "/rides", { pickup: PICK, dropoff: DROP }, PA.token);
   const ride5 = r.body.data;
   check("ride plan: …the ride isn't offered to that rider", ok(r) && !(await rideOffers(T.token)).some((o) => o._id === ride5?._id));
-  r = await call("POST", `/rides/${ride5?._id}/accept`, null, T.token);
+  r = await call("POST", `/rides/${ride5?._id}/bid`, {}, T.token);
   check("ride plan: …nor can they take it", r.status === 400 && /subscription has ended/i.test(r.body.message ?? ""), brief(r));
   r = await call("POST", "/subscriptions/admin/plans", { name: "Moto-taxi 30 jours", audience: "moto_driver", price: 15000, durationDays: 30, features: [], highlights: [] }, admin);
   const motoPlan = r.body.data?._id;

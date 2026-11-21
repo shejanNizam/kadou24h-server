@@ -1,6 +1,6 @@
 import { Schema, model } from "mongoose";
 import { fileRefSchema, geoPointSchema } from "../../utils/commonSchemas";
-import { IRide, RideStatus } from "./ride.interface";
+import { IRide, RideBidStatus, RideStatus } from "./ride.interface";
 
 const placeSchema = new Schema(
   {
@@ -8,6 +8,19 @@ const placeSchema = new Schema(
     address: { type: String, required: true, trim: true, maxlength: 200 },
   },
   { _id: false },
+);
+
+const bidSchema = new Schema(
+  {
+    riderId: { type: Schema.Types.ObjectId, ref: "RiderProfile", required: true },
+    price: { type: Number, required: true, min: 0 },
+    counterPrice: { type: Number, min: 0 },
+    status: { type: String, enum: Object.values(RideBidStatus), default: RideBidStatus.pending },
+    pickupKm: { type: Number, default: 0 },
+    expiresAt: { type: Date, required: true },
+    createdAt: { type: Date, default: Date.now },
+  },
+  { _id: true },
 );
 
 const rideSchema = new Schema<IRide>(
@@ -21,6 +34,9 @@ const rideSchema = new Schema<IRide>(
     distanceKm: { type: Number, required: true, min: 0 },
     durationMin: { type: Number, required: true, min: 0 },
     fare: { type: Number, required: true, min: 0 },
+    suggestedFare: { type: Number, min: 0 },
+    maxFare: { type: Number, min: 0 },
+    bids: { type: [bidSchema], default: undefined },
     note: { type: String, trim: true, maxlength: 200 },
     pickupPhoto: { type: fileRefSchema },
     searchStartedAt: { type: Date, default: Date.now },
@@ -50,6 +66,9 @@ const rideSchema = new Schema<IRide>(
 rideSchema.index({ status: 1, createdAt: 1 });
 rideSchema.index({ passengerId: 1, createdAt: -1 });
 rideSchema.index({ riderId: 1, status: 1 });
+// A rider's live bid (one at a time) and the bid-expiry sweep
+rideSchema.index({ "bids.riderId": 1, "bids.status": 1 });
+rideSchema.index({ status: 1, "bids.expiresAt": 1 });
 rideSchema.index({ shareToken: 1 }, { unique: true, sparse: true });
 
 export const Ride = model<IRide>("rides", rideSchema);

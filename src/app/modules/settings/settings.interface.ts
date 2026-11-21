@@ -35,12 +35,21 @@ export interface ISettingsInitial {
     spontaneousApplicationFee: number;
   };
 
-  // Moto-taxi (A → B): the price is fixed before the request and paid in cash to the rider
+  orders: {
+    // A store that doesn't accept a new order in time loses it: cancelled, the customer told (client, 2026-11-21)
+    acceptMinutes: number;
+  };
+
+  // Moto-taxi (A → B): Kadou24h suggests the price, riders may ask more, paid in cash to the rider
   rides: {
     enabled: boolean;
     baseFare: number; // GNF at pickup
     perKm: number; // GNF per road km
     minFare: number; // GNF, shortest rides
+    // Client 2026-11-21: riders may ask up to this % above the suggested price (rain, night, bad road)
+    maxRaisePercent: number;
+    // Client 2026-11-21: only riders this close to the pickup get the request
+    searchRadiusKm: number;
     // Client 2026-10-23: free at first, later a monthly subscription for moto riders (never a commission)
     subscriptionRequired: boolean;
     trialDays: number; // free days each rider gets once the subscription is required

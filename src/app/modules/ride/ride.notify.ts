@@ -28,11 +28,11 @@ const send = (userId: Id, mode: AppMode, title: Text, body: Text, data: Record<s
 const data = (ride: R, extra: Record<string, unknown> = {}) => ({ kind: "ride", rideId: String(ride._id), status: ride.status, ...extra });
 
 /** Both screens refresh at once (passenger and rider) */
-const changed = (ride: R, userIds: (Id | undefined)[]) => {
+const changed = (ride: Pick<R, "_id" | "status">, userIds: (Id | undefined)[]) => {
   for (const id of userIds) if (id) emitToUser(String(id), "ride:updated", { rideId: ride._id, status: ride.status });
 };
 
-/** A ride request near a rider: the fare and how far the pickup is; the first to accept gets it */
+/** A ride request near a rider: the suggested fare and how far the pickup is; they answer with a price */
 const offer = (riderUser: Id, ride: R, pickupKm?: number) => {
   const away = pickupKm !== undefined ? { fr: ` · à ${km(pickupKm)}`, en: ` · ${km(pickupKm)} away` } : { fr: "", en: "" };
   send(
@@ -40,8 +40,8 @@ const offer = (riderUser: Id, ride: R, pickupKm?: number) => {
     AppMode.rider,
     { fr: "Course moto près de vous", en: "Moto ride near you" },
     {
-      fr: `${ride.pickup.address} → ${ride.dropoff.address}${away.fr} · ${gnf(ride.fare)} en espèces. Le premier qui accepte la prend.`,
-      en: `${ride.pickup.address} → ${ride.dropoff.address}${away.en} · ${gnf(ride.fare)} in cash. The first to accept gets it.`,
+      fr: `${ride.pickup.address} → ${ride.dropoff.address}${away.fr} · ${gnf(ride.fare)} en espèces. Acceptez ce prix ou proposez le vôtre.`,
+      en: `${ride.pickup.address} → ${ride.dropoff.address}${away.en} · ${gnf(ride.fare)} in cash. Accept this price or propose yours.`,
     },
     data(ride, { offer: true }),
   );
@@ -85,8 +85,8 @@ const riderLeft = (passenger: Id, ride: R) =>
     AppMode.customer,
     { fr: "Nouveau chauffeur en recherche", en: "Looking for another rider" },
     {
-      fr: "Votre chauffeur a annulé. Nous cherchons un autre chauffeur proche, au même prix.",
-      en: "Your rider cancelled. We are looking for another nearby rider, same price.",
+      fr: "Votre chauffeur a annulé. Nous cherchons un autre chauffeur proche.",
+      en: "Your rider cancelled. We are looking for another nearby rider.",
     },
     data(ride),
   );
@@ -124,4 +124,55 @@ const expired = (passenger: Id, ride: R) =>
     data({ ...ride, status: RideStatus.expired }),
   );
 
-export const RideNotify = { changed, offer, accepted, arrived, completed, riderLeft, cancelledForRider, cancelledForPassenger, expired };
+// ── Negotiation (client, 2026-11-21) ─────────────────────────────────
+
+/** A rider sent a price → the passenger (pushed for the first one only: they are watching the screen) */
+const bidReceived = (passenger: Id, ride: R, riderName: string, price: number, first: boolean) => {
+  changed(ride, [passenger]);
+  if (!first) return;
+  send(
+    passenger,
+    AppMode.customer,
+    { fr: "Un chauffeur vous propose un prix", en: "A rider sent you a price" },
+    { fr: `${riderName} propose ${gnf(price)}. Choisissez votre chauffeur.`, en: `${riderName} offers ${gnf(price)}. Choose your rider.` },
+    data(ride, { bid: true }),
+  );
+};
+
+/** The passenger chose this rider's price → the rider */
+const bidAccepted = (riderUser: Id, ride: R) =>
+  send(
+    riderUser,
+    AppMode.rider,
+    { fr: "Le passager vous a choisi", en: "The passenger chose you" },
+    {
+      fr: `Course ${ride.rideNumber} à ${gnf(ride.fare)}. Allez au point de départ : ${ride.pickup.address}.`,
+      en: `Ride ${ride.rideNumber} for ${gnf(ride.fare)}. Go to the pickup point: ${ride.pickup.address}.`,
+    },
+    data(ride),
+  );
+
+/** The passenger proposes a lower price → the rider */
+const countered = (riderUser: Id, ride: R, price: number) =>
+  send(
+    riderUser,
+    AppMode.rider,
+    { fr: "Contre-proposition du passager", en: "The passenger made a counter-offer" },
+    {
+      fr: `Le passager propose ${gnf(price)} pour la course ${ride.rideNumber}. Répondez vite.`,
+      en: `The passenger offers ${gnf(price)} for ride ${ride.rideNumber}. Answer quickly.`,
+    },
+    data(ride, { offer: true }),
+  );
+
+/** The rider said no to the counter-offer → the passenger */
+const counterDeclined = (passenger: Id, ride: R, riderName: string) =>
+  send(
+    passenger,
+    AppMode.customer,
+    { fr: "Contre-proposition refusée", en: "Counter-offer declined" },
+    { fr: `${riderName} a refusé votre prix. Choisissez une autre offre.`, en: `${riderName} declined your price. Choose another offer.` },
+    data(ride),
+  );
+
+export const RideNotify = { changed, bidReceived, bidAccepted, countered, counterDeclined, offer, accepted, arrived, completed, riderLeft, cancelledForRider, cancelledForPassenger, expired };

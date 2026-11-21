@@ -1,10 +1,12 @@
 /**
  * Moto-taxi (point A → point B), client 2026-10-23.
  *
- * - Price fixed before the request: max(minFare, baseFare + perKm × road km), rounded up to
- *   500 GNF (settings.rides, set by Kadou24h). Paid in cash to the rider at the end.
- * - Open dispatch like deliveries: available moto riders near the pickup get the request,
- *   the radius grows every minute, the first to accept takes it. Nobody in 10 min → expired.
+ * - Suggested price: max(minFare, baseFare + perKm × road km), rounded up to 500 GNF
+ *   (settings.rides, set by Kadou24h). Paid in cash to the rider at the end.
+ * - Negotiable (client, 2026-11-21; ride.bid.service.ts): riders answer with a price, from the
+ *   suggested one up to maxRaisePercent more; the passenger picks one or counter-offers.
+ * - Open dispatch like deliveries: available moto riders near the pickup get the request, the
+ *   radius grows every minute up to settings.rides.searchRadiusKm. Nobody in 10 min → expired.
  * - Available = approved moto rider, online, a recent position, no parcel on board and no
  *   other ride.
  * - Steps: accepted → arrived → in_progress → completed. The passenger may cancel until the
@@ -30,7 +32,7 @@ import { RiderProfile } from "../rider_profile/rider_profile.model";
 import { SettingsServices } from "../settings/settings.service";
 import { rideAccessFilter, rideAccessState, startRideTrialIfFirst } from "../rider_profile/ride_access";
 import { User } from "../user/user.model";
-import { IRide, RideStatus } from "./ride.interface";
+import { IRide, IRideBid, RideBidStatus, RideStatus } from "./ride.interface";
 import { Ride } from "./ride.model";
 import { RideNotify } from "./ride.notify";
 
@@ -41,13 +43,23 @@ export const RIDE = {
   /** Average moto speed in town, for the time estimate */
   speedKmh: 22,
   roundTo: 500,
-  /** [minutes since the search started, radius in km] */
+  /** [minutes since the search started, radius in km], never past settings.rides.searchRadiusKm */
   radiusSteps: [
     [0, 2],
     [1, 4],
     [2, 7],
     [4, 10],
+    [6, 20],
   ] as const,
+  /** Client 2026-11-21: 5 km at most by default, so riders don't take rides that are too far */
+  defaultSearchRadiusKm: 5,
+  defaultMaxRaisePercent: 30,
+  /** The passenger has this long to answer a rider's price */
+  bidSeconds: 60,
+  /** The rider has this long to answer the passenger's counter-offer */
+  counterSeconds: 60,
+  /** Prices one rider may send for the same ride */
+  maxBidsPerRider: 3,
   /** Nobody accepted after this → expired */
   searchMinutes: 10,
   locationFreshMinutes: 15,
@@ -61,12 +73,17 @@ export const ACTIVE_RIDE = [RideStatus.searching, RideStatus.accepted, RideStatu
 const WITH_RIDER = [RideStatus.accepted, RideStatus.arrived, RideStatus.in_progress];
 const round1 = (n: number) => Math.round(n * 10) / 10;
 
-const radiusAt = (since: Date, now = Date.now()) => {
+/** Bids still waiting for an answer */
+export const LIVE_BID = [RideBidStatus.pending, RideBidStatus.countered];
+
+export const radiusAt = (since: Date, capKm: number, now = Date.now()) => {
   const minutes = (now - since.getTime()) / MINUTE;
   let radius: number = RIDE.radiusSteps[0][1];
   for (const [after, km] of RIDE.radiusSteps) if (minutes >= after) radius = km;
-  return radius;
+  return Math.min(radius, capKm);
 };
+
+export const roundUpFare = (amount: number) => Math.ceil(amount / RIDE.roundTo) * RIDE.roundTo;
 
 interface PlaceInput extends ILatLng {
   address: string;
@@ -83,14 +100,17 @@ const quote = async (pickup: ILatLng, dropoff: ILatLng) => {
   const distanceKm = round1(straight * RIDE.roadFactor);
   if (distanceKm > RIDE.maxKm) throw new AppError(httpStatus.BAD_REQUEST, "RIDE_TOO_LONG");
   const raw = rides.baseFare + rides.perKm * distanceKm;
-  const fare = Math.max(rides.minFare, Math.ceil(raw / RIDE.roundTo) * RIDE.roundTo);
+  const fare = Math.max(rides.minFare, roundUpFare(raw));
   const durationMin = Math.max(3, Math.round((distanceKm / RIDE.speedKmh) * 60));
-  return { distanceKm, durationMin, fare };
+  // The most a rider may ask (rain, night, bad road)
+  const raise = "maxRaisePercent" in rides ? (rides.maxRaisePercent ?? RIDE.defaultMaxRaisePercent) : RIDE.defaultMaxRaisePercent;
+  const maxFare = Math.max(fare, roundUpFare(fare * (1 + raise / 100)));
+  return { distanceKm, durationMin, fare, maxFare };
 };
 
 // ── Who can take a ride ──────────────────────────────────────────────
 
-interface RiderLite {
+export interface RiderLite {
   _id: Types.ObjectId;
   userId: Types.ObjectId;
   lastLocation?: { coordinates: [number, number] };
@@ -108,7 +128,9 @@ interface RiderLite {
 const RIDER_FIELDS =
   "userId lastLocation lastLocationAt activeDeliveryCount isOnline partnerType approvalStatus rideAccessUntil rideTrialUsedAt vehicle vestNumber";
 
-const rideSettings = async () => (await SettingsServices.getSettings()).rides;
+export const rideSettings = async () => (await SettingsServices.getSettings()).rides;
+/** How far from the pickup a rider may be (admin, default 5 km) */
+export const searchCapKm = async () => (await rideSettings())?.searchRadiusKm ?? RIDE.defaultSearchRadiusKm;
 
 /** Online moto riders with a recent position, no parcel and no ride; with their distance to a point */
 const availableRiders = async (point: [number, number], now = Date.now()) => {
@@ -135,7 +157,7 @@ const availableRiders = async (point: [number, number], now = Date.now()) => {
 };
 
 /** Why this rider can't take a ride now (null = can) */
-const riderBlocker = async (rider: RiderLite): Promise<ErrorCode | null> => {
+export const riderBlocker = async (rider: RiderLite): Promise<ErrorCode | null> => {
   if (rider.approvalStatus !== ApprovalStatus.approved || rider.partnerType !== PartnerType.moto) {
     return "RIDE_ONLY_MOTO";
   }
@@ -194,6 +216,8 @@ const present = (ride: Populated, as: "passenger" | "rider" | "admin") => {
     distanceKm: ride.distanceKm,
     durationMin: ride.durationMin,
     fare: ride.fare,
+    suggestedFare: ride.suggestedFare ?? ride.fare,
+    maxFare: ride.maxFare ?? ride.fare,
     note: ride.note,
     pickupPhoto: ride.pickupPhoto,
     searchStartedAt: ride.searchStartedAt,
@@ -231,15 +255,74 @@ const present = (ride: Populated, as: "passenger" | "rider" | "admin") => {
   };
 };
 
-const loadRide = (id: string) =>
+interface BidRider {
+  _id: Types.ObjectId;
+  userId?: { name?: string; avatar?: { url?: string } };
+  vehicle?: { type?: string; brand?: string; color?: string };
+  rideStats?: { ratingAvg?: number; ratingCount?: number; completed?: number };
+}
+
+/**
+ * The riders' prices. The passenger sees the live ones while searching, with who offers them
+ * (name, photo, moto, rating, how far — never the phone); the team sees every bid.
+ */
+const bidsView = async (ride: Populated, as: "passenger" | "rider" | "admin") => {
+  if (as === "rider") return undefined;
+  const now = Date.now();
+  const all = ride.bids ?? [];
+  const shown =
+    as === "passenger"
+      ? ride.status === RideStatus.searching
+        ? all.filter((b) => LIVE_BID.includes(b.status) && new Date(b.expiresAt).getTime() > now)
+        : []
+      : all;
+  if (!shown.length) return [];
+  const riders = await RiderProfile.find({ _id: { $in: shown.map((b) => b.riderId) } })
+    .select("userId vehicle rideStats")
+    .populate({ path: "userId", select: "name avatar" })
+    .lean<BidRider[]>();
+  const byId = new Map(riders.map((r) => [String(r._id), r]));
+  return shown.map((b) => {
+    const r = byId.get(String(b.riderId));
+    return {
+      _id: b._id,
+      price: b.price,
+      counterPrice: b.counterPrice,
+      status: b.status,
+      expiresAt: b.expiresAt,
+      createdAt: b.createdAt,
+      pickupKm: b.pickupKm,
+      etaMin: Math.max(1, Math.round((b.pickupKm / RIDE.speedKmh) * 60)),
+      rider: r
+        ? {
+            _id: r._id,
+            name: r.userId?.name,
+            avatar: r.userId?.avatar,
+            vehicle: { type: r.vehicle?.type, brand: r.vehicle?.brand, color: r.vehicle?.color },
+            rating: r.rideStats?.ratingAvg ?? 0,
+            ratingCount: r.rideStats?.ratingCount ?? 0,
+            rides: r.rideStats?.completed ?? 0,
+          }
+        : undefined,
+    };
+  });
+};
+
+/** present() plus the bids (passenger and team) */
+const view = async (ride: Populated, as: "passenger" | "rider" | "admin") => {
+  const bids = await bidsView(ride, as);
+  return { ...present(ride, as), ...(bids && { bids }) };
+};
+
+export const loadRide = (id: string) =>
   Types.ObjectId.isValid(id) ? Ride.findById(id).populate(POPULATE).lean<Populated>() : Promise.resolve(null);
 
 // ── Passenger ───────────────────────────────────────────────────────
 
 const estimate = async (passengerId: string, payload: { pickup: ILatLng; dropoff: ILatLng }) => {
   const price = await quote(payload.pickup, payload.dropoff);
-  const nearby = await availableRiders([payload.pickup.lng, payload.pickup.lat]);
-  const ridersNearby = nearby.filter((r) => r.km <= RIDE.radiusSteps.at(-1)![1] && String(r.rider.userId) !== passengerId).length;
+  const [nearby, cap] = await Promise.all([availableRiders([payload.pickup.lng, payload.pickup.lat]), searchCapKm()]);
+  const ridersNearby = nearby.filter((r) => r.km <= cap && String(r.rider.userId) !== passengerId).length;
   return { ...price, ridersNearby };
 };
 
@@ -247,7 +330,7 @@ const requestRide = async (passengerId: string, payload: { pickup: PlaceInput; d
   if (await Ride.exists({ passengerId, status: { $in: ACTIVE_RIDE } })) {
     throw new AppError(httpStatus.CONFLICT, "RIDE_IN_PROGRESS");
   }
-  const price = await quote(payload.pickup, payload.dropoff);
+  const { maxFare, ...price } = await quote(payload.pickup, payload.dropoff);
   const now = new Date();
   const ride = await Ride.create({
     rideNumber: await CounterServices.nextCode("ride"),
@@ -256,10 +339,12 @@ const requestRide = async (passengerId: string, payload: { pickup: PlaceInput; d
     pickup: { location: toGeoPoint(payload.pickup), address: payload.pickup.address },
     dropoff: { location: toGeoPoint(payload.dropoff), address: payload.dropoff.address },
     ...price,
+    suggestedFare: price.fare,
+    maxFare,
     note: payload.note,
     pickupPhoto: payload.pickupPhoto,
     searchStartedAt: now,
-    offerRadiusKm: RIDE.radiusSteps[0][1],
+    offerRadiusKm: radiusAt(now, await searchCapKm(), now.getTime()),
   });
   await announce(ride._id);
   return present((await loadRide(String(ride._id)))!, "passenger");
@@ -269,9 +354,9 @@ const getRide = async (userId: string, id: string, isStaff = false) => {
   const ride = await loadRide(id);
   if (!ride) throw new AppError(httpStatus.NOT_FOUND, "RIDE_NOT_FOUND");
   const passengerId = String((ride.passengerId as { _id?: Types.ObjectId })._id ?? ride.passengerId);
-  if (passengerId === userId) return present(ride, "passenger");
-  if (ride.riderId && String(ride.riderId.userId?._id) === userId) return present(ride, "rider");
-  if (isStaff) return present(ride, "admin");
+  if (passengerId === userId) return view(ride, "passenger");
+  if (ride.riderId && String(ride.riderId.userId?._id) === userId) return view(ride, "rider");
+  if (isStaff) return view(ride, "admin");
   throw new AppError(httpStatus.NOT_FOUND, "RIDE_NOT_FOUND");
 };
 
@@ -300,7 +385,7 @@ const hideMyRide = async (passengerId: string, id: string) => {
 /** The passenger's running ride (the app reopens it), or null */
 const getMyCurrentRide = async (passengerId: string) => {
   const ride = await Ride.findOne({ passengerId, status: { $in: ACTIVE_RIDE } }).populate(POPULATE).lean<Populated>();
-  return ride ? present(ride, "passenger") : null;
+  return ride ? view(ride, "passenger") : null;
 };
 
 const cancelByPassenger = async (passengerId: string, id: string, reason?: string) => {
@@ -313,6 +398,7 @@ const cancelByPassenger = async (passengerId: string, id: string, reason?: strin
     { returnDocument: "after" },
   );
   if (!cancelled) throw new AppError(httpStatus.CONFLICT, "RIDE_CHANGED");
+  await closeLiveBids(cancelled._id);
   const riderUser = cancelled.riderId ? (await RiderProfile.findById(cancelled.riderId).select("userId").lean())?.userId : undefined;
   if (riderUser) RideNotify.cancelledForRider(riderUser, cancelled, "passenger");
   RideNotify.changed(cancelled, [passengerId, riderUser]);
@@ -356,13 +442,13 @@ const rateRide = async (passengerId: string, id: string, payload: { stars: numbe
 
 // ── Rider ───────────────────────────────────────────────────────────
 
-const myRiderProfile = async (riderUserId: string) => {
+export const myRiderProfile = async (riderUserId: string) => {
   const rider = await RiderProfile.findOne({ userId: riderUserId }).select(RIDER_FIELDS).lean<RiderLite>();
   if (!rider) throw new AppError(httpStatus.FORBIDDEN, "RIDER_PROFILE_NOT_FOUND");
   return rider;
 };
 
-/** Ride requests I can take now, nearest first (fare, pickup distance, trip) */
+/** Ride requests I can answer now, nearest first: the suggested price, the most I may ask, my price if I sent one */
 const getRideOffers = async (riderUserId: string) => {
   const rider = await myRiderProfile(riderUserId);
   await startRideTrialIfFirst(rider._id, await rideSettings());
@@ -375,9 +461,12 @@ const getRideOffers = async (riderUserId: string) => {
     passengerId: { $ne: rider.userId },
   }).lean();
   const now = Date.now();
+  const cap = await searchCapKm();
+  const mine = (ride: { bids?: IRideBid[] }) => (ride.bids ?? []).filter((b) => String(b.riderId) === String(rider._id));
   return rides
     .map((ride) => ({ ride, km: round1(calculateDistanceKm(ride.pickup.location.coordinates, rider.lastLocation!.coordinates)) }))
-    .filter(({ ride, km }) => km <= radiusAt(ride.searchStartedAt, now))
+    // A ride I already sent a price for stays listed, even if the search area moved on
+    .filter(({ ride, km }) => km <= radiusAt(ride.searchStartedAt, cap, now) || mine(ride).length > 0)
     .sort((a, b) => a.km - b.km)
     .map(({ ride, km }) => ({
       _id: ride._id,
@@ -387,39 +476,29 @@ const getRideOffers = async (riderUserId: string) => {
       distanceKm: ride.distanceKm,
       durationMin: ride.durationMin,
       fare: ride.fare,
+      suggestedFare: ride.suggestedFare ?? ride.fare,
+      maxFare: ride.maxFare ?? ride.fare,
       note: ride.note,
       pickupPhoto: ride.pickupPhoto,
       pickupKm: km,
       searchStartedAt: ride.searchStartedAt,
+      myBid: myLatestBid(mine(ride), now),
+      bidsLeft: Math.max(0, RIDE.maxBidsPerRider - mine(ride).length),
     }));
 };
 
-/** The first rider to accept takes the ride (atomic) */
-const acceptRide = async (riderUserId: string, id: string) => {
-  const rider = await myRiderProfile(riderUserId);
-  await startRideTrialIfFirst(rider._id, await rideSettings());
-  const blocker = await riderBlocker(rider);
-  if (blocker) throw new AppError(httpStatus.BAD_REQUEST, blocker);
-  const ride = Types.ObjectId.isValid(id) ? await Ride.findById(id).select("+offerSkippedBy") : null;
-  if (!ride) throw new AppError(httpStatus.NOT_FOUND, "RIDE_NOT_FOUND");
-  if (ride.status !== RideStatus.searching) throw new AppError(httpStatus.CONFLICT, "RIDE_ALREADY_TAKEN");
-  if (String(ride.passengerId) === riderUserId) throw new AppError(httpStatus.BAD_REQUEST, "RIDE_OWN");
-  const coords = rider.lastLocation?.coordinates;
-  const km = coords ? calculateDistanceKm(ride.pickup.location.coordinates, coords) : Infinity;
-  if (km > radiusAt(ride.searchStartedAt) || (ride.offerSkippedBy ?? []).some((r) => String(r) === String(rider._id))) {
-    throw new AppError(httpStatus.BAD_REQUEST, "RIDE_NOT_FOR_YOU");
-  }
-  const taken = await Ride.findOneAndUpdate(
-    { _id: ride._id, status: RideStatus.searching },
-    { $set: { status: RideStatus.accepted, riderId: rider._id, acceptedAt: new Date() } },
-    { returnDocument: "after" },
-  );
-  if (!taken) throw new AppError(httpStatus.CONFLICT, "RIDE_ALREADY_TAKEN");
-  const me = await User.findById(riderUserId).select("name").lean();
-  RideNotify.accepted(taken.passengerId, taken, me?.name ?? "Rider");
-  RideNotify.changed(taken, [taken.passengerId, riderUserId]);
-  await offerGone(taken._id, rider._id);
-  return getRide(riderUserId, String(taken._id));
+/** My last price on a ride, as I see it (an expired one reads "expired" before the sweep marks it) */
+const myLatestBid = (bids: IRideBid[], now: number) => {
+  const last = bids.at(-1);
+  if (!last) return undefined;
+  const expired = LIVE_BID.includes(last.status) && new Date(last.expiresAt).getTime() <= now;
+  return {
+    _id: last._id,
+    price: last.price,
+    counterPrice: last.counterPrice,
+    status: expired ? RideBidStatus.expired : last.status,
+    expiresAt: last.expiresAt,
+  };
 };
 
 /** My moto-taxi subscription: required or not, until when (starts the free period the first time) */
@@ -473,11 +552,20 @@ const riderStep = async (riderUserId: string, id: string, step: keyof typeof STE
 /** The rider drops a ride before it starts: it goes back to the other nearby riders */
 const releaseByRider = async (riderUserId: string, id: string, reason?: string) => {
   const rider = await myRiderProfile(riderUserId);
-  const released = Types.ObjectId.isValid(id)
+  const filter = { _id: id, riderId: rider._id, status: { $in: [RideStatus.accepted, RideStatus.arrived] } };
+  const current = Types.ObjectId.isValid(id) ? await Ride.findOne(filter).select("fare suggestedFare").lean() : null;
+  const now = new Date();
+  const released = current
     ? await Ride.findOneAndUpdate(
-        { _id: id, riderId: rider._id, status: { $in: [RideStatus.accepted, RideStatus.arrived] } },
+        filter,
         {
-          $set: { status: RideStatus.searching, searchStartedAt: new Date(), offerRadiusKm: RIDE.radiusSteps[0][1] },
+          // Back to Kadou24h's price: the other riders send their own
+          $set: {
+            status: RideStatus.searching,
+            searchStartedAt: now,
+            offerRadiusKm: radiusAt(now, await searchCapKm(), now.getTime()),
+            fare: current.suggestedFare ?? current.fare,
+          },
           $unset: { riderId: 1, acceptedAt: 1, arrivedAt: 1 },
           $addToSet: { offerSkippedBy: rider._id },
         },
@@ -518,7 +606,7 @@ const announce = async (rideId: Types.ObjectId | string) => {
   const ride = await Ride.findOne({ _id: rideId, status: RideStatus.searching }).select("+offerNotified +offerSkippedBy");
   if (!ride) return;
   const now = Date.now();
-  const radius = radiusAt(ride.searchStartedAt, now);
+  const radius = radiusAt(ride.searchStartedAt, await searchCapKm(), now);
   const told = new Set([...(ride.offerNotified ?? []), ...(ride.offerSkippedBy ?? [])].map(String));
   const fresh = (await availableRiders(ride.pickup.location.coordinates, now)).filter(
     ({ rider, km }) => km <= radius && !told.has(String(rider._id)) && String(rider.userId) !== String(ride.passengerId),
@@ -531,7 +619,7 @@ const announce = async (rideId: Types.ObjectId | string) => {
 };
 
 /** The request left the other riders' lists (taken or cancelled) */
-const offerGone = async (rideId: Types.ObjectId, keep: Types.ObjectId | null) => {
+export const offerGone = async (rideId: Types.ObjectId, keep: Types.ObjectId | null) => {
   const ride = await Ride.findById(rideId).select("+offerNotified").lean();
   const others = (ride?.offerNotified ?? []).filter((r) => !keep || String(r) !== String(keep));
   if (!others.length) return;
@@ -553,13 +641,43 @@ const sweep = async () => {
       { returnDocument: "after" },
     );
     if (!ended) continue;
+    await closeLiveBids(ended._id);
     RideNotify.expired(ended.passengerId, ended);
     RideNotify.changed(ended, [ended.passengerId]);
     await offerGone(ended._id, null);
   }
+  await expireBids(new Date(now));
   // Still searching: the radius grows, new riders may be in reach
   const searching = await Ride.find({ status: RideStatus.searching }).select("_id").lean();
   for (const { _id } of searching) await announce(_id);
+};
+
+/** The ride ended without them: the prices still waiting close */
+const closeLiveBids = (rideId: Types.ObjectId) =>
+  Ride.updateOne(
+    { _id: rideId },
+    { $set: { "bids.$[b].status": RideBidStatus.expired } },
+    { arrayFilters: [{ "b.status": { $in: LIVE_BID } }] },
+  );
+
+/** Prices nobody answered in time: both screens refresh (the rider may send another one) */
+const expireBids = async (now: Date) => {
+  const rides = await Ride.find({
+    status: RideStatus.searching,
+    bids: { $elemMatch: { status: { $in: LIVE_BID }, expiresAt: { $lte: now } } },
+  })
+    .select("passengerId status bids")
+    .lean();
+  for (const ride of rides) {
+    const ripe = (ride.bids ?? []).filter((b) => LIVE_BID.includes(b.status) && b.expiresAt <= now);
+    await Ride.updateOne(
+      { _id: ride._id },
+      { $set: { "bids.$[b].status": RideBidStatus.expired } },
+      { arrayFilters: [{ "b.status": { $in: LIVE_BID }, "b.expiresAt": { $lte: now } }] },
+    );
+    const riders = await RiderProfile.find({ _id: { $in: ripe.map((b) => b.riderId) } }).select("userId").lean();
+    RideNotify.changed(ride, [ride.passengerId, ...riders.map((r) => r.userId)]);
+  }
 };
 
 const startRideSweep = () => {
@@ -628,6 +746,7 @@ const cancelByAdmin = async (adminUserId: string, id: string, reason: string) =>
       )
     : null;
   if (!cancelled) throw new AppError(httpStatus.BAD_REQUEST, "RIDE_NOT_IN_PROGRESS");
+  await closeLiveBids(cancelled._id);
   const riderUser = cancelled.riderId ? (await RiderProfile.findById(cancelled.riderId).select("userId").lean())?.userId : undefined;
   if (riderUser) RideNotify.cancelledForRider(riderUser, cancelled, "admin");
   RideNotify.cancelledForPassenger(cancelled.passengerId, cancelled);
@@ -647,7 +766,6 @@ export const RideServices = {
   cancelByPassenger,
   rateRide,
   getRideOffers,
-  acceptRide,
   skipRide,
   riderStep,
   releaseByRider,

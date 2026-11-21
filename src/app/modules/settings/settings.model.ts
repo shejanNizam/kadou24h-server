@@ -46,11 +46,17 @@ const settingsSchema = new Schema<ISettings>(
       spontaneousApplicationFee: { type: Number, default: 5000 },
     },
 
+    orders: {
+      acceptMinutes: { type: Number, default: 30, min: 5, max: 1440 },
+    },
+
     rides: {
       enabled: { type: Boolean, default: true },
       baseFare: { type: Number, default: 3000 },
       perKm: { type: Number, default: 1500 },
       minFare: { type: Number, default: 5000 },
+      maxRaisePercent: { type: Number, default: 30, min: 0, max: 100 },
+      searchRadiusKm: { type: Number, default: 5, min: 1, max: 20 },
       subscriptionRequired: { type: Boolean, default: false },
       trialDays: { type: Number, default: 30, min: 0 },
     },

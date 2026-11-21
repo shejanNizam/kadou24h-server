@@ -182,7 +182,8 @@ const subOrderSchema = new Schema<ISubOrder>(
       type: Date,
     },
     cancellation: {
-      by: { type: String, enum: ["customer", "vendor", "admin"] },
+      by: { type: String, enum: ["customer", "vendor", "admin", "system"] },
+      code: { type: String, enum: ["payment_expired", "not_accepted"] },
       reason: { type: String },
       at: { type: Date },
     },
@@ -217,6 +218,12 @@ const subOrderSchema = new Schema<ISubOrder>(
     deliveredAt: {
       type: Date,
     },
+    awaitingSince: {
+      type: Date,
+    },
+    acceptReminderAt: {
+      type: Date,
+    },
   },
   {
     timestamps: true,
@@ -226,6 +233,8 @@ const subOrderSchema = new Schema<ISubOrder>(
 
 subOrderSchema.index({ vendorId: 1, status: 1, createdAt: -1 });
 subOrderSchema.index({ customerId: 1, createdAt: -1 });
+// The not-accepted sweep
+subOrderSchema.index({ status: 1, awaitingSince: 1 });
 subOrderSchema.index({ currentRiderId: 1, status: 1 });
 // FIFO allocation of a rider's COD cash settlements
 subOrderSchema.index({ codCollectedBy: 1, settlement: 1, codCollectedAt: 1 });

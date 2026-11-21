@@ -279,6 +279,43 @@ export const serviceErrors = {
     en: "This ride is not offered to you.",
     fr: "Cette course ne vous est pas proposée.",
   },
+  // Negotiable price (client, 2026-11-21)
+  RIDE_BID_OUT_OF_RANGE: {
+    en: "Choose a price between {min} and {max}.",
+    fr: "Choisissez un prix entre {min} et {max}.",
+  },
+  RIDE_BID_STEP: {
+    en: "The price must go up in steps of {step}.",
+    fr: "Le prix doit avancer par paliers de {step}.",
+  },
+  RIDE_BID_WAITING: {
+    en: "You already sent a price for this ride. Wait for the passenger's answer, or take it back.",
+    fr: "Vous avez déjà envoyé un prix pour cette course. Attendez la réponse du passager, ou retirez-le.",
+  },
+  RIDE_BID_ELSEWHERE: {
+    en: "You are waiting for an answer on another ride. Take that price back first.",
+    fr: "Vous attendez une réponse pour une autre course. Retirez d'abord ce prix.",
+  },
+  RIDE_BID_LIMIT: {
+    en: "You can't send more prices for this ride.",
+    fr: "Vous ne pouvez plus envoyer de prix pour cette course.",
+  },
+  RIDE_BID_GONE: {
+    en: "This offer is no longer available. Please refresh.",
+    fr: "Cette offre n'est plus disponible. Veuillez actualiser.",
+  },
+  RIDE_RIDER_UNAVAILABLE: {
+    en: "This rider is no longer available. Choose another offer.",
+    fr: "Ce chauffeur n'est plus disponible. Choisissez une autre offre.",
+  },
+  RIDE_COUNTER_OUT_OF_RANGE: {
+    en: "Propose a price between {min} and {max}.",
+    fr: "Proposez un prix entre {min} et {max}.",
+  },
+  RIDE_COUNTER_NOT_POSSIBLE: {
+    en: "This rider already asks the suggested price: accept or decline it.",
+    fr: "Ce chauffeur demande déjà le prix conseillé : acceptez-le ou refusez-le.",
+  },
   RIDE_DROP_TOO_LATE: {
     en: "You can only drop a ride before it starts.",
     fr: "Vous ne pouvez abandonner une course qu'avant le départ.",

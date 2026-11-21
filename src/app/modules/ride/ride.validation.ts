@@ -26,6 +26,21 @@ export const rateRideZodSchema = z.object({
   comment: z.string().trim().max(500).optional(),
 });
 
+/** Rider: my price (whole GNF; default the suggested fare) */
+export const placeBidZodSchema = z.object({
+  price: z.number().int({ message: "WHOLE_NUMBER" }).positive().optional(),
+});
+
+/** Passenger: my counter-offer (whole GNF) */
+export const counterBidZodSchema = z.object({
+  price: z.number().int({ message: "WHOLE_NUMBER" }).positive(),
+});
+
+/** Rider: my answer to the passenger's counter-offer */
+export const answerCounterZodSchema = z.object({
+  accept: z.boolean(),
+});
+
 export const adminCancelRideZodSchema = z.object({
   reason: z.string().trim().min(3, "REASON_TOO_SHORT").max(300),
 });

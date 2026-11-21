@@ -101,8 +101,13 @@ export interface ISubOrderModification {
   at: Date;
 }
 
+/** Why Kadou24h cancelled it by itself (the apps word it in the reader's language) */
+export type AutoCancelCode = "payment_expired" | "not_accepted";
+
 export interface ISubOrderCancellation {
-  by: "customer" | "vendor" | "admin";
+  by: "customer" | "vendor" | "admin" | "system";
+  /** Set when by = system */
+  code?: AutoCancelCode;
   reason: string;
   at: Date;
 }
@@ -135,6 +140,10 @@ export interface ISubOrderInitial {
   settlement: SettlementStatus;
   releasedAt?: Date;
   deliveredAt?: Date; // final leg handed over (earnings summary buckets by this)
+  /** When the store got it (status new): it must accept within settings.orders.acceptMinutes */
+  awaitingSince?: Date;
+  /** The "accept it soon" reminder went to the store */
+  acceptReminderAt?: Date;
 }
 
 export type ISubOrder = ISubOrderInitial & Document;

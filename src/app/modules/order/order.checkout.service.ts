@@ -644,6 +644,7 @@ const createOrderRecords = async (
       commissionAmount: split.commissionAmount,
       vendorEarning: split.vendorEarning,
       status: payOnline ? SubOrderStatus.pending_payment : SubOrderStatus.new,
+      ...(payOnline ? {} : { awaitingSince: placedAt }),
       settlement: SettlementStatus.held,
       codAmountToCollect,
     });

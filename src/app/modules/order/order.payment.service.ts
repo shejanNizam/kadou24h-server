@@ -44,7 +44,7 @@ const confirmOrderPaid = async (orderId: Types.ObjectId | string) => {
     const subOrder = await SubOrder.findOneAndUpdate(
       { _id, status: SubOrderStatus.pending_payment },
       {
-        $set: { status: SubOrderStatus.new },
+        $set: { status: SubOrderStatus.new, awaitingSince: now },
         $push: {
           timeline: {
             status: "payment_received",
@@ -122,6 +122,7 @@ const expireUnpaidOrders = async (now = new Date()) => {
           allowedFrom: [SubOrderStatus.pending_payment],
           by: "system",
           reason: `Payment not received within ${PAYMENT_WINDOW_MINUTES} minutes`,
+          code: "payment_expired",
           actorUserId: String(order.customerId),
           syncParent: false,
           notify: false,

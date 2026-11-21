@@ -13,7 +13,7 @@ import { WalletServices } from "../wallet/wallet.service";
 import { CouponServices } from "../coupon/coupon.service";
 import { RefundSource } from "../payment/payment.interface";
 import { RefundServices } from "../payment/refund.service";
-import { ISubOrder, OrderStatus, PaymentMethod, SettlementStatus, SubOrderStatus } from "./order.interface";
+import { AutoCancelCode, ISubOrder, OrderStatus, PaymentMethod, SettlementStatus, SubOrderStatus } from "./order.interface";
 import { Order } from "./order.model";
 import { SubOrder } from "./sub_order.model";
 
@@ -78,6 +78,8 @@ const cancelSubOrder = async (opts: {
   allowedFrom: SubOrderStatus[];
   by: CancelledBy;
   reason: string;
+  /** by = system: why, for the apps to word it */
+  code?: AutoCancelCode;
   actorUserId: string;
   syncParent?: boolean;
   /** false: the caller sends its own notice (payment window expiry) */
@@ -89,14 +91,14 @@ const cancelSubOrder = async (opts: {
     {
       $set: {
         status: SubOrderStatus.cancelled,
-        cancellation: { by: opts.by, reason: opts.reason, at: now },
+        cancellation: { by: opts.by, reason: opts.reason, at: now, ...(opts.code && { code: opts.code }) },
       },
       $push: {
         timeline: {
           status: SubOrderStatus.cancelled,
           // The system's own reason is English (payment window): `by` says it
           ...(opts.by !== "system" && { note: opts.reason }),
-          params: { by: opts.by },
+          params: { by: opts.by, ...(opts.code && { code: opts.code }) },
           byUserId: new Types.ObjectId(opts.actorUserId),
           at: now,
         },
@@ -173,7 +175,7 @@ const cancelSubOrder = async (opts: {
   }
 
   const riderIds = openLegs.flatMap((leg) => (leg.riderId ? [leg.riderId] : []));
-  if (opts.notify !== false) Notify.orderCancelled(previous, opts.by, opts.reason, riderIds, !wasUnpaid);
+  if (opts.notify !== false) Notify.orderCancelled(previous, opts.by, opts.reason, riderIds, !wasUnpaid, opts.code);
 
   return SubOrder.findById(previous._id);
 };

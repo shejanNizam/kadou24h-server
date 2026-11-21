@@ -3,6 +3,7 @@ import httpStatus from "http-status";
 import catchAsync from "../../utils/catchAsync";
 import sendResponse from "../../utils/sendResponse";
 import { ADMIN_ROLES } from "../user/user.interface";
+import { RideBidServices } from "./ride.bid.service";
 import { RideServices } from "./ride.service";
 import { RideShareServices } from "./ride.share";
 
@@ -37,7 +38,14 @@ const getRideOffers = catchAsync(async (req, res) => ok(res, "Rides near you", a
 const getRiderCurrentRide = catchAsync(async (req, res) => ok(res, "Current ride", await RideServices.getRiderCurrentRide(req.user._id)));
 const getRiderAccess = catchAsync(async (req, res) => ok(res, "Moto-taxi subscription", await RideServices.getRiderAccess(req.user._id)));
 const getRiderRides = catchAsync(async (req, res) => page(res, "Rides retrieved", await RideServices.getRiderRides(req.user._id, req.query as never)));
-const acceptRide = catchAsync(async (req, res) => ok(res, "Ride accepted: go to the pickup point", await RideServices.acceptRide(req.user._id, id(req))));
+// Negotiation (client, 2026-11-21)
+const bidId = (req: Request) => String(req.params.bidId);
+const placeBid = catchAsync(async (req, res) => ok(res, "Price sent to the passenger", await RideBidServices.placeBid(req.user._id, id(req), req.body), httpStatus.CREATED));
+const withdrawBid = catchAsync(async (req, res) => ok(res, "Price taken back", await RideBidServices.withdrawBid(req.user._id, id(req))));
+const answerCounter = catchAsync(async (req, res) => ok(res, "Answer sent", await RideBidServices.answerCounter(req.user._id, id(req), req.body.accept)));
+const acceptBid = catchAsync(async (req, res) => ok(res, "Rider chosen: they are on their way", await RideBidServices.acceptBid(req.user._id, id(req), bidId(req))));
+const declineBid = catchAsync(async (req, res) => ok(res, "Offer declined", await RideBidServices.declineBid(req.user._id, id(req), bidId(req))));
+const counterBid = catchAsync(async (req, res) => ok(res, "Counter-offer sent", await RideBidServices.counterBid(req.user._id, id(req), bidId(req), req.body.price)));
 const skipRide = catchAsync(async (req, res) => ok(res, "Ride hidden", await RideServices.skipRide(req.user._id, id(req))));
 const arrived = catchAsync(async (req, res) => ok(res, "The passenger is told you are here", await RideServices.riderStep(req.user._id, id(req), "arrived")));
 const startRide = catchAsync(async (req, res) => ok(res, "Ride started", await RideServices.riderStep(req.user._id, id(req), "start")));
@@ -64,7 +72,12 @@ export const RideControllers = {
   getRiderCurrentRide,
   getRiderAccess,
   getRiderRides,
-  acceptRide,
+  placeBid,
+  withdrawBid,
+  answerCounter,
+  acceptBid,
+  declineBid,
+  counterBid,
   skipRide,
   arrived,
   startRide,

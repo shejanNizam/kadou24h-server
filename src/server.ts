@@ -8,6 +8,7 @@ import { seedSuperAdmin } from "./app/utils/seedSuperAdmin";
 import { logger } from "./app/utils/logger";
 import { initSocket } from "./socket/socket";
 import { OrderPaymentServices } from "./app/modules/order/order.payment.service";
+import { OrderAcceptServices } from "./app/modules/order/order.accept.service";
 import { BookingServices } from "./app/modules/booking/booking.service";
 import { DeliveryDispatch } from "./app/modules/delivery/delivery.dispatch.service";
 import { RideServices } from "./app/modules/ride/ride.service";
@@ -36,6 +37,8 @@ async function main() {
     });
     // Online orders not paid in time are cancelled and their stock released
     OrderPaymentServices.startPaymentExpirySweep();
+    // New orders a store does not accept in time are cancelled (reminder half-way)
+    OrderAcceptServices.startAcceptSweep();
     // Worker bookings: unanswered requests expire, unconfirmed jobs complete, visibility notices
     BookingServices.startBookingSweep();
     // Open dispatch: offers reach farther riders, unanswered store picks expire, nobody-took-it alerts

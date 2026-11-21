@@ -7,7 +7,7 @@
 import { Types } from "mongoose";
 import { emitToUser } from "../../../socket/socket";
 import { logger } from "../../utils/logger";
-import { ISubOrder } from "../order/order.interface";
+import { AutoCancelCode, ISubOrder } from "../order/order.interface";
 import { RiderProfile } from "../rider_profile/rider_profile.model";
 import { AppMode } from "../user/user.interface";
 import { VendorProfile } from "../vendor_profile/vendor_profile.model";
@@ -66,6 +66,24 @@ const orderPlaced = (subOrder: SubOrderRef & { total: number }) =>
       body: {
         fr: `Commande ${subOrder.subOrderNumber} reçue (${gnf(subOrder.total)}). Acceptez-la pour commencer.`,
         en: `Order ${subOrder.subOrderNumber} received (${gnf(subOrder.total)}). Accept it to get started.`,
+      },
+      data: orderData(subOrder),
+    });
+  });
+
+/** A new order still waits for the store half-way through its accept delay → the store */
+const orderAcceptReminder = (subOrder: SubOrderRef, minutesLeft: number) =>
+  safely(async () => {
+    const userId = await vendorUserId(subOrder.vendorId);
+    if (!userId) return;
+    send({
+      userId,
+      mode: AppMode.vendor,
+      type: NotificationType.order_placed,
+      title: { fr: "Commande en attente", en: "Order waiting" },
+      body: {
+        fr: `Acceptez la commande ${subOrder.subOrderNumber} dans les ${minutesLeft} minutes, sinon elle sera annulée automatiquement.`,
+        en: `Accept order ${subOrder.subOrderNumber} within ${minutesLeft} minutes, or it will be cancelled automatically.`,
       },
       data: orderData(subOrder),
     });
@@ -161,6 +179,8 @@ const orderCancelled = (
   riderIds: Id[] = [],
   /** false when the store never saw the order (cancelled before it was paid) */
   notifyVendor = true,
+  /** Cancelled by Kadou24h itself: worded per reader instead of the English reason */
+  code?: AutoCancelCode,
 ) =>
   safely(async () => {
     const byText = {
@@ -169,17 +189,28 @@ const orderCancelled = (
       admin: { fr: "par Kadou24h", en: "by Kadou24h" },
       system: { fr: "automatiquement", en: "automatically" },
     }[by];
+    const n = subOrder.subOrderNumber;
+    const notAccepted: Partial<Record<AppMode, { fr: string; en: string }>> = {
+      [AppMode.customer]: {
+        fr: `La boutique n'a pas confirmé la commande ${n} à temps : elle a été annulée automatiquement. Si vous avez déjà payé, vous serez remboursé.`,
+        en: `The store did not confirm order ${n} in time, so it was cancelled automatically. If you already paid, you will be refunded.`,
+      },
+      [AppMode.vendor]: {
+        fr: `Vous n'avez pas accepté la commande ${n} à temps : elle a été annulée automatiquement et le client a été prévenu.`,
+        en: `You did not accept order ${n} in time, so it was cancelled automatically and the customer was told.`,
+      },
+    };
     const notice = (userId: Id, mode: AppMode) =>
       send({
         userId,
         mode,
         type: NotificationType.order_cancelled,
         title: { fr: "Commande annulée", en: "Order cancelled" },
-        body: {
-          fr: `La commande ${subOrder.subOrderNumber} a été annulée ${byText.fr} : ${reason}`,
-          en: `Order ${subOrder.subOrderNumber} was cancelled ${byText.en}: ${reason}`,
+        body: (code === "not_accepted" && notAccepted[mode]) || {
+          fr: `La commande ${n} a été annulée ${byText.fr} : ${reason}`,
+          en: `Order ${n} was cancelled ${byText.en}: ${reason}`,
         },
-        data: { ...orderData(subOrder), cancelledBy: by },
+        data: { ...orderData(subOrder), cancelledBy: by, ...(code && { code }) },
       });
 
     if (by !== "customer") notice(subOrder.customerId, AppMode.customer);
@@ -564,6 +595,7 @@ export const Notify = {
   refundRequested,
   refundProcessed,
   orderCancelled,
+  orderAcceptReminder,
   workerReviewed,
   orderPaymentExpired,
   orderDelivered,

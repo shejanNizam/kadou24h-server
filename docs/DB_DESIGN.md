@@ -234,7 +234,7 @@ Why split? A cart can contain items from TechHub **and** GarageTech. Each vendor
 |---|---|
 | Links | `order_id`, `vendor_id`, `customer_id`, `current_leg_id`, `current_rider_id` |
 | Money | `subtotal`, `delivery_fee`, `discount_share`, `total`, `commission_rate` (snapshot), `commission_amount`, `vendor_earning` |
-| Progress | `status`, `estimated_delivery_at`, `cancellation` |
+| Progress | `status`, `estimated_delivery_at`, `cancellation` (`by`, `reason`, `code` when the system cancelled it: `payment_expired` / `not_accepted`), `awaiting_since` (the store got it: it must accept within `settings.orders.acceptMinutes`), `accept_reminder_at` |
 | COD | `cod_amount_to_collect`, `cod_collected_by`, `cod_collected_at` |
 | Escrow | `settlement`: `held` → `released` / `refunded` |
 | Embedded | `sub_order_items[]` (snapshot), `sub_order_timeline[]` (tracking screens), `sub_order_modifications[]` (vendor removed an item after chat → new total + refund) |
@@ -336,6 +336,8 @@ Admin creates plans (e.g. "Professional", 10$/month equivalent in GNF) with `fea
 `conversation_participants[]` (embedded) stores each person's `mode` (so the vendor inbox and customer inbox are separate) and `unread_count`.
 Voice notes are allowed in every chat **except** `job_application` (client, 2026-10-23 — helps users who cannot read; a recruiter pays to unlock a candidate's contact and voice can't be checked for phone numbers).
 A moto-taxi ride can also carry `pickupPhoto` (the passenger's photo of the gate or landmark), shown to the riders it is offered to.
+
+Negotiable price (client, 2026-11-21): a ride keeps `suggestedFare` (Kadou24h's price) and `maxFare` (+ `settings.rides.maxRaisePercent`, fixed at the request); `fare` becomes the agreed price once a rider is chosen. Embedded `bids[]`: `riderId`, `price`, `counterPrice`, `status` (pending → countered → accepted / declined / withdrawn / expired), `pickupKm`, `expiresAt`, `createdAt`. Riders get the request only within `settings.rides.searchRadiusKm`.
 Every new conversation gets an automatic **system warning**: pay only through Kadou24h or on delivery.
 
 ### `messages`

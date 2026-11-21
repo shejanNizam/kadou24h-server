@@ -36,12 +36,20 @@ export const updateSettingsZodSchema = z
       })
       .partial(),
 
+    orders: z
+      .object({
+        acceptMinutes: z.number().int().min(5, { message: "NUMBER_TOO_LOW" }).max(1440, { message: "NUMBER_TOO_HIGH" }),
+      })
+      .partial(),
+
     rides: z
       .object({
         enabled: z.boolean(),
         baseFare: gnf(),
         perKm: gnf(),
         minFare: gnf(),
+        maxRaisePercent: z.number().int().min(0, { message: "NUMBER_TOO_LOW" }).max(100, { message: "NUMBER_TOO_HIGH" }),
+        searchRadiusKm: z.number().min(1, { message: "NUMBER_TOO_LOW" }).max(20, { message: "NUMBER_TOO_HIGH" }),
         subscriptionRequired: z.boolean(),
         trialDays: z.number().int().min(0).max(365),
       })

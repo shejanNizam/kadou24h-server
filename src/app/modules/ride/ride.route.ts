@@ -5,8 +5,11 @@ import { ADMIN_ROLES, APP_ROLES, UserRole } from "../user/user.interface";
 import { RideControllers } from "./ride.controller";
 import {
   adminCancelRideZodSchema,
+  answerCounterZodSchema,
   cancelRideZodSchema,
+  counterBidZodSchema,
   estimateRideZodSchema,
+  placeBidZodSchema,
   rateRideZodSchema,
   requestRideZodSchema,
 } from "./ride.validation";
@@ -27,8 +30,8 @@ const staff = checkAuth(...ADMIN_ROLES);
  * /rides:
  *   post:
  *     tags: [Rides]
- *     summary: Order a moto-taxi — { pickup {lat,lng,address}, dropoff {lat,lng,address}, note? }
- *     description: Nearby moto riders get the request (2 km, then 4, 7, 10 km); the first to accept takes it. Nobody in 10 min → expired. One running ride per passenger (409).
+ *     summary: Order a moto-taxi — { pickup {lat,lng,address}, dropoff {lat,lng,address}, note?, pickupPhoto? }
+ *     description: Nearby moto riders get the request (2 km, then 4, 7… up to settings.rides.searchRadiusKm, default 5). They answer with a price (fare … maxFare); the passenger chooses in ride.bids. Nobody in 10 min → expired. One running ride per passenger (409).
  *     security: [{ bearerAuth: [] }]
  * /rides/my:
  *   get:
@@ -43,7 +46,7 @@ const staff = checkAuth(...ADMIN_ROLES);
  * /rides/rider/offers:
  *   get:
  *     tags: [Rides]
- *     summary: Rider — ride requests near me, nearest first (fare, pickupKm, distanceKm). Empty while offline, with parcels on board or on a ride
+ *     summary: Rider — ride requests near me, nearest first (suggestedFare, maxFare, pickupKm, myBid, bidsLeft). Empty while offline, with parcels on board or on a ride
  *     security: [{ bearerAuth: [] }]
  * /rides/rider/current:
  *   get:
@@ -85,10 +88,34 @@ const staff = checkAuth(...ADMIN_ROLES);
  *     tags: [Rides]
  *     summary: Passenger rates the rider { stars 1–5, comment? } — once, after the ride
  *     security: [{ bearerAuth: [] }]
- * /rides/{id}/accept:
+ * /rides/{id}/bid:
  *   post:
  *     tags: [Rides]
- *     summary: Rider takes the ride — the first wins, else 409
+ *     summary: Rider sends a price { price? } — suggested fare (default) up to maxFare, steps of 500 GNF. The passenger has 60 s to answer. One live price at a time, 3 per ride
+ *     security: [{ bearerAuth: [] }]
+ *   delete:
+ *     tags: [Rides]
+ *     summary: Rider takes their waiting price back
+ *     security: [{ bearerAuth: [] }]
+ * /rides/{id}/bid/answer:
+ *   post:
+ *     tags: [Rides]
+ *     summary: Rider answers the passenger's counter-offer { accept } — yes takes the ride at that price
+ *     security: [{ bearerAuth: [] }]
+ * /rides/{id}/bids/{bidId}/accept:
+ *   post:
+ *     tags: [Rides]
+ *     summary: Passenger chooses this rider at their price — the other prices close
+ *     security: [{ bearerAuth: [] }]
+ * /rides/{id}/bids/{bidId}/decline:
+ *   post:
+ *     tags: [Rides]
+ *     summary: Passenger declines this price
+ *     security: [{ bearerAuth: [] }]
+ * /rides/{id}/bids/{bidId}/counter:
+ *   post:
+ *     tags: [Rides]
+ *     summary: Passenger counter-offers { price } once — between the suggested fare and the rider's price; the rider has 60 s to answer
  *     security: [{ bearerAuth: [] }]
  * /rides/{id}/skip:
  *   post:
@@ -138,7 +165,12 @@ router.post("/:id/share", app, RideControllers.shareRide);
 router.get("/:id", app, RideControllers.getRide);
 router.post("/:id/cancel", app, validateRequest(cancelRideZodSchema), RideControllers.cancelRide);
 router.post("/:id/rate", app, validateRequest(rateRideZodSchema), RideControllers.rateRide);
-router.post("/:id/accept", rider, RideControllers.acceptRide);
+router.post("/:id/bid", rider, validateRequest(placeBidZodSchema), RideControllers.placeBid);
+router.delete("/:id/bid", rider, RideControllers.withdrawBid);
+router.post("/:id/bid/answer", rider, validateRequest(answerCounterZodSchema), RideControllers.answerCounter);
+router.post("/:id/bids/:bidId/accept", app, RideControllers.acceptBid);
+router.post("/:id/bids/:bidId/decline", app, RideControllers.declineBid);
+router.post("/:id/bids/:bidId/counter", app, validateRequest(counterBidZodSchema), RideControllers.counterBid);
 router.post("/:id/skip", rider, RideControllers.skipRide);
 router.post("/:id/arrived", rider, RideControllers.arrived);
 router.post("/:id/start", rider, RideControllers.startRide);
