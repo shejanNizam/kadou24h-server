@@ -530,6 +530,16 @@ const run = async () => {
   const lateSub = r.body.data?.subOrders?.[0];
   const lateOrderId = r.body.data?.order?._id;
   check("accept delay: a paid order reaches the store as new", lateSub?.status === "new", brief(r));
+  // Red dot on the modes I'm not in (client, 2026-11-22): the seller shopping as a customer sees the order waits
+  const vendorAlerts = async () => (await call("GET", "/user/me/alerts", null, V.token)).body.data;
+  const alertsBefore = await vendorAlerts();
+  check(
+    "mode alerts: the store's new order counts as work waiting in vendor mode (+ its unread notifications)",
+    alertsBefore?.vendor?.pending >= 1 && alertsBefore?.vendor?.unread >= 1 && typeof alertsBefore?.vendor?.messages === "number" && Boolean(alertsBefore?.customer),
+    JSON.stringify(alertsBefore),
+  );
+  r = await call("GET", "/user/me/alerts", null, C.token);
+  check("mode alerts: a customer only gets the customer mode", ok(r) && r.body.data?.customer && !r.body.data?.vendor && !r.body.data?.rider, JSON.stringify(r.body.data ?? brief(r)));
   const ageSub = async (minutes) => {
     await mongoose.connect(DATABASE_URL);
     await mongoose.connection.collection("sub_orders").updateOne({ _id: new mongoose.Types.ObjectId(lateSub?._id) }, { $set: { awaitingSince: new Date(Date.now() - minutes * 60_000) } });
@@ -551,6 +561,8 @@ const run = async () => {
     JSON.stringify(lateNow?.cancellation ?? lateNow?.status),
   );
   check("accept delay: …the stock comes back", (await stockOf(productId)) === stockLate, String(await stockOf(productId)));
+  const alertsAfter = await vendorAlerts();
+  check("mode alerts: an order no longer waiting leaves the count", alertsAfter?.vendor?.pending === alertsBefore?.vendor?.pending - 1, JSON.stringify(alertsAfter));
   r = await call("GET", "/notifications?mode=customer&limit=100", null, C.token);
   const lateNotice = (r.body.data ?? []).find((n) => n.type === "order_cancelled" && n.data?.subOrderId === lateSub?._id);
   check("accept delay: …the customer is told, in their words (no English reason)", lateNotice?.data?.code === "not_accepted" && !/Not accepted by the store/.test(JSON.stringify(lateNotice?.body)), JSON.stringify(lateNotice?.body));
@@ -1605,6 +1617,10 @@ const run = async () => {
   check("ride: a passenger can't send a rider price", r.status === 403, brief(r));
   r = await call("POST", "/conversations", { type: "ride", rideId: ride?._id }, PA.token);
   check("ride chat: not before a rider takes the ride", r.body.code === "RIDE_NO_RIDER_YET", brief(r));
+  // Red dot on the rider mode (client, 2026-11-22): a ride near me is work waiting
+  const riderWork = async () => (await call("GET", "/user/me/alerts", null, T.token)).body.data?.rider?.pending;
+  const tWork = await riderWork();
+  check("mode alerts: a ride request near me counts in rider mode", tWork >= 1, String(tWork));
   // Negotiation (client, 2026-11-21): riders send a price, the passenger chooses or counter-offers
   r = await call("POST", `/rides/${ride?._id}/bid`, { price: maxFare + 500 }, T.token);
   check("ride price: more than +30% is refused", r.status === 400 && r.body.code === "RIDE_BID_OUT_OF_RANGE", brief(r));
@@ -1615,6 +1631,7 @@ const run = async () => {
   const tPrice = Math.min(maxFare, ride.fare + 1000);
   r = await call("POST", `/rides/${ride?._id}/bid`, { price: tPrice }, T.token);
   check("ride price: a rider asks more (rain, night, bad road)", r.status === 201 && r.body.data?.price === tPrice, brief(r));
+  check("mode alerts: my price waiting for the passenger is not work for me", (await riderWork()) === tWork - 1, String(await riderWork()));
   r = await call("POST", `/rides/${ride?._id}/bid`, { price: ride.fare }, T.token);
   check("ride price: one waiting price per rider", r.status === 409 && r.body.code === "RIDE_BID_WAITING", brief(r));
   r = await call("POST", `/rides/${ride?._id}/bid`, {}, D.token);
@@ -1643,6 +1660,7 @@ const run = async () => {
   check("ride price: only the passenger counter-offers", r.status === 404, brief(r));
   r = await call("POST", `/rides/${ride?._id}/bids/${tBid?._id}/counter`, { price: tPrice - 500 }, PA.token);
   check("ride price: the passenger counter-offers", ok(r) && r.body.data?.bids?.find((b) => b._id === tBid?._id)?.status === "countered", brief(r));
+  check("mode alerts: a counter-offer to answer is work again", (await riderWork()) === tWork, String(await riderWork()));
   r = await call("POST", `/rides/${ride?._id}/bids/${tBid?._id}/counter`, { price: ride.fare }, PA.token);
   check("ride price: …once per price", r.status === 409 && r.body.code === "RIDE_BID_GONE", brief(r));
   let myT = (await rideOffers(T.token)).find((o) => o._id === ride?._id)?.myBid;

@@ -452,6 +452,11 @@ export const myRiderProfile = async (riderUserId: string) => {
 const getRideOffers = async (riderUserId: string) => {
   const rider = await myRiderProfile(riderUserId);
   await startRideTrialIfFirst(rider._id, await rideSettings());
+  return rideOffersFor(rider);
+};
+
+/** The same list without side effects (also counted for the red dot on the rider mode) */
+export const rideOffersFor = async (rider: RiderLite) => {
   if ((await riderBlocker(rider)) || !rider.lastLocation?.coordinates) return [];
   const fresh = rider.lastLocationAt && Date.now() - rider.lastLocationAt.getTime() <= RIDE.locationFreshMinutes * MINUTE;
   if (!fresh) return [];

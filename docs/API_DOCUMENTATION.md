@@ -598,6 +598,15 @@ Unknown fields (e.g. `roles`, `status`) are **rejected with 400**. **200** `data
 #### `PATCH /user/me/mode`
 Body `{ "mode": "customer" | "vendor" | "rider" }` → **200** `data: { mode }` · 403 role not approved.
 
+#### `GET /user/me/alerts`
+What waits in each mode I hold, for the red dot on the modes I'm not in (client, 2026-11-22).
+**200** `data: { customer: ModeAlert, vendor?: ModeAlert, rider?: ModeAlert }` (vendor / rider only once approved), where `ModeAlert = { pending, unread, messages }`:
+- `pending`: work to answer. Vendor: new orders to accept. Rider: deliveries a store gave me (to accept or decline), open deliveries I can take, and moto rides near me I can still answer (a price of mine waiting for the passenger is not counted; a counter-offer is). The same lists as the rider's "Near me" tab.
+- `unread`: unread notifications of that mode only (team messages, which have no mode, are not counted).
+- `messages`: unread chat messages of that mode.
+
+An online rider keeps getting requests in any mode: the app sends the rider's position while online, whatever the mode.
+
 #### `PATCH /user/me/notification-preferences`
 Any subset of `{ orderUpdates, messages, deliveryUpdates, offers, jobPosts, accountAlerts }` (booleans).
 **200** `data: { …all six flags }`.

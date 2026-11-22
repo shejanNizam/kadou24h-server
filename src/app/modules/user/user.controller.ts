@@ -2,6 +2,7 @@ import { Request, Response } from "express";
 import httpStatus from "http-status";
 import catchAsync from "../../utils/catchAsync";
 import sendResponse from "../../utils/sendResponse";
+import { UserAlertServices } from "./user.alerts.service";
 import { UserServices } from "./user.service";
 
 // ── Self-service ──
@@ -14,6 +15,12 @@ const getMe = catchAsync(async (req: Request, res: Response) => {
     message: "Profile retrieved successfully!",
     data: result,
   });
+});
+
+/** Red dots on my other modes: work waiting, unread notifications and messages per mode */
+const getModeAlerts = catchAsync(async (req: Request, res: Response) => {
+  const result = await UserAlertServices.getModeAlerts(req.user._id, req.user.roles);
+  sendResponse(res, { statusCode: httpStatus.OK, success: true, message: "Mode alerts", data: result });
 });
 
 const updateMe = catchAsync(async (req: Request, res: Response) => {
@@ -169,6 +176,7 @@ const updateTeamMember = catchAsync(async (req: Request, res: Response) => {
 
 export const UserControllers = {
   getMe,
+  getModeAlerts,
   updateMe,
   switchMode,
   updateNotificationPrefs,

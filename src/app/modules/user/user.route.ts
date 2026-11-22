@@ -80,6 +80,25 @@ router.delete("/me", checkAuth(...ALL_ROLES), UserControllers.deleteMe);
 
 /**
  * @swagger
+ * /user/me/alerts:
+ *   get:
+ *     tags: [User]
+ *     summary: What waits in each of my modes (red dot on the modes I'm not in)
+ *     description: |
+ *       Per mode I hold (customer always; vendor / rider once approved):
+ *       `pending` = work to answer (vendor: new orders to accept; rider: deliveries to answer,
+ *       open deliveries and moto rides near me I can still answer), `unread` = unread
+ *       notifications of that mode only, `messages` = unread chat messages of that mode.
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: "{ customer: { pending, unread, messages }, vendor?: {...}, rider?: {...} }"
+ */
+router.get("/me/alerts", checkAuth(...ALL_ROLES), UserControllers.getModeAlerts);
+
+/**
+ * @swagger
  * /user/me/mode:
  *   patch:
  *     tags: [User]
