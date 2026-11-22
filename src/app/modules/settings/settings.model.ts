@@ -61,6 +61,10 @@ const settingsSchema = new Schema<ISettings>(
       trialDays: { type: Number, default: 30, min: 0 },
     },
 
+    chat: {
+      retentionDays: { type: Number, default: 90, min: 30, max: 730 },
+    },
+
     moderation: {
       restrictAfter: { type: Number, default: 3 },
       suspendAfter: { type: Number, default: 5 },

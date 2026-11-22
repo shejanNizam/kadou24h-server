@@ -93,6 +93,22 @@ router.post(
  */
 router.get("/me", checkAuth(...ALL_ROLES), ReviewControllers.getMyReviews);
 
+/**
+ * @swagger
+ * /reviews/{id}:
+ *   delete:
+ *     tags: [Review]
+ *     summary: Delete my own review (the store and product ratings are worked out again)
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Deleted
+ *       404:
+ *         description: Not my review
+ */
+router.delete("/:id", checkAuth(...ALL_ROLES), ReviewControllers.deleteMyReview);
+
 // Report a review
 router.post("/:id/report", checkAuth(...ALL_ROLES), ReviewControllers.reportReview);
 

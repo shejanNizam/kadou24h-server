@@ -24,6 +24,7 @@ import { toGeoPoint } from "../../utils/commonSchemas";
 import { logger } from "../../utils/logger";
 import { escapeRegex } from "../../utils/queryParams";
 import { AuditLogServices } from "../audit_log/audit_log.service";
+import { Conversation } from "../chat/conversation.model";
 import { CounterServices } from "../counter/counter.service";
 import { calculateDistanceKm } from "../delivery_rate/delivery_rate.service";
 import { ApprovalStatus } from "../profile_common/profile.common";
@@ -309,9 +310,15 @@ const bidsView = async (ride: Populated, as: "passenger" | "rider" | "admin") =>
 };
 
 /** present() plus the bids (passenger and team) */
-const view = async (ride: Populated, as: "passenger" | "rider" | "admin") => {
-  const bids = await bidsView(ride, as);
-  return { ...present(ride, as), ...(bids && { bids }) };
+/** Unread messages of this ride's chat for one of its two people (badge on the chat button) */
+const chatUnreadFor = async (rideId: Types.ObjectId, userId: string) => {
+  const chat = await Conversation.findOne({ rideId, "participants.userId": new Types.ObjectId(userId) }).select("participants").lean();
+  return chat?.participants.find((p) => String(p.userId) === userId)?.unreadCount ?? 0;
+};
+
+const view = async (ride: Populated, as: "passenger" | "rider" | "admin", viewerId?: string) => {
+  const [bids, chatUnread] = await Promise.all([bidsView(ride, as), viewerId && as !== "admin" ? chatUnreadFor(ride._id, viewerId) : undefined]);
+  return { ...present(ride, as), ...(bids && { bids }), ...(chatUnread !== undefined && { chatUnread }) };
 };
 
 export const loadRide = (id: string) =>
@@ -354,8 +361,8 @@ const getRide = async (userId: string, id: string, isStaff = false) => {
   const ride = await loadRide(id);
   if (!ride) throw new AppError(httpStatus.NOT_FOUND, "RIDE_NOT_FOUND");
   const passengerId = String((ride.passengerId as { _id?: Types.ObjectId })._id ?? ride.passengerId);
-  if (passengerId === userId) return view(ride, "passenger");
-  if (ride.riderId && String(ride.riderId.userId?._id) === userId) return view(ride, "rider");
+  if (passengerId === userId) return view(ride, "passenger", userId);
+  if (ride.riderId && String(ride.riderId.userId?._id) === userId) return view(ride, "rider", userId);
   if (isStaff) return view(ride, "admin");
   throw new AppError(httpStatus.NOT_FOUND, "RIDE_NOT_FOUND");
 };
@@ -385,7 +392,7 @@ const hideMyRide = async (passengerId: string, id: string) => {
 /** The passenger's running ride (the app reopens it), or null */
 const getMyCurrentRide = async (passengerId: string) => {
   const ride = await Ride.findOne({ passengerId, status: { $in: ACTIVE_RIDE } }).populate(POPULATE).lean<Populated>();
-  return ride ? view(ride, "passenger") : null;
+  return ride ? view(ride, "passenger", passengerId) : null;
 };
 
 const cancelByPassenger = async (passengerId: string, id: string, reason?: string) => {
@@ -589,7 +596,7 @@ const releaseByRider = async (riderUserId: string, id: string, reason?: string) 
 const getRiderCurrentRide = async (riderUserId: string) => {
   const rider = await myRiderProfile(riderUserId);
   const ride = await Ride.findOne({ riderId: rider._id, status: { $in: WITH_RIDER } }).populate(POPULATE).lean<Populated>();
-  return ride ? present(ride, "rider") : null;
+  return ride ? view(ride, "rider", riderUserId) : null;
 };
 
 const getRiderRides = async (riderUserId: string, query: { page?: string; limit?: string }) => {

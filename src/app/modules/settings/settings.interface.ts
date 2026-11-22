@@ -55,6 +55,12 @@ export interface ISettingsInitial {
     trialDays: number; // free days each rider gets once the subscription is required
   };
 
+  // Chat messages older than this are deleted (client, 2026-11-22); open disputes, refunds,
+  // reports and orders still going keep their messages
+  chat: {
+    retentionDays: number;
+  };
+
   moderation: {
     restrictAfter: number; // violations before chat is restricted
     suspendAfter: number; // violations before the account is suspended

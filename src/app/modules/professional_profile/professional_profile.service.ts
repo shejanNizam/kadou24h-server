@@ -101,6 +101,28 @@ const upsertProfile = async (
   return profile;
 };
 
+/** The CV itself: what "Delete my CV" clears (client, 2026-11-22) */
+const CV_FIELDS = ["summary", "uploadedResume", "generatedCv", "generatedAt"] as const;
+const CV_LISTS = ["skills", "languages", "achievements", "profileEducation", "profileExperience"] as const;
+/** Shared with the worker page: cleared too when I never applied as a worker */
+const IDENTITY_FIELDS = ["profession", "photo", "city", "location"] as const;
+
+/**
+ * "Delete my CV": the CV text and both CV files go. A worker (who applied or is listed)
+ * keeps the trade, photo and city their worker page uses; the paid visibility, ratings and
+ * worker review stay. Recruiters keep the copy sent with an earlier application.
+ */
+const deleteMyCv = async (userId: string) => {
+  const profile = await ProfessionalProfile.findOne({ userId });
+  if (!profile) return getMyProfile(userId);
+  const isWorker = profile.isWorkerListed || (profile.approvalStatus && profile.approvalStatus !== ApprovalStatus.draft);
+  for (const key of CV_FIELDS) profile.set(key, undefined);
+  for (const key of CV_LISTS) profile.set(key, []);
+  if (!isWorker) for (const key of IDENTITY_FIELDS) profile.set(key, undefined);
+  await profile.save();
+  return profile;
+};
+
 /**
  * Toggles or updates the user's public worker listing.
  */
@@ -509,6 +531,7 @@ const approveLegacyListedWorkers = async () => {
 export const ProfessionalProfileServices = {
   getMyProfile,
   upsertProfile,
+  deleteMyCv,
   toggleWorkerListing,
   submitWorkerApplication,
   getWorkerSummary,

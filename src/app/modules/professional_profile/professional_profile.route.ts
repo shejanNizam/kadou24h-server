@@ -39,6 +39,25 @@ router.put(
   ProfessionalProfileControllers.upsertProfile,
 );
 
+/**
+ * @swagger
+ * /professional-profiles/me/cv:
+ *   delete:
+ *     tags: [Professional Profile]
+ *     summary: Delete my CV (text, skills, education, experience, imported and Kadou24h CV files)
+ *     description: |
+ *       A worker (applied or listed) keeps the trade, photo and city of their worker page;
+ *       the paid visibility, ratings and worker review stay. To remove only one file, send
+ *       `uploadedResume: null` or `generatedCv: null` to PUT /me. Recruiters keep the copy
+ *       sent with an earlier application.
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: The profile after deleting
+ */
+router.delete("/me/cv", checkAuth(...APP_ROLES), ProfessionalProfileControllers.deleteMyCv);
+
 router.patch(
   "/me/worker-listing",
   checkAuth(...APP_ROLES),

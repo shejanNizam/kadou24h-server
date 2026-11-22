@@ -37,6 +37,8 @@ const getPublicSettings = async () => {
     pricing: s.pricing,
     orders: s.orders,
     rides: s.rides,
+    // The app tells people how long their messages are kept
+    chat: s.chat,
   };
 };
 

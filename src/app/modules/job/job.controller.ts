@@ -49,6 +49,11 @@ const publishJob = catchAsync(async (req: Request, res: Response) => {
   });
 });
 
+const deleteMyJob = catchAsync(async (req: Request, res: Response) => {
+  const result = await JobServices.deleteMyJob(req.user._id, String(req.params.id));
+  sendResponse(res, { statusCode: httpStatus.OK, success: true, message: "Job deleted", data: result });
+});
+
 const closeJob = catchAsync(async (req: Request, res: Response) => {
   const result = await JobServices.closeJob(
     req.user._id,
@@ -276,6 +281,7 @@ const restoreJob = catchAsync(async (req: Request, res: Response) =>
 );
 
 export const JobControllers = {
+  deleteMyJob,
   getMyJobs,
   getApplication,
   withdrawApplication,

@@ -277,8 +277,21 @@ const updateReviewStatusAdmin = async (
   return review;
 };
 
+/**
+ * "Delete my review" (client, 2026-11-22): only its author; the store and product ratings are
+ * worked out again. The order can be reviewed again afterwards.
+ */
+const deleteMyReview = async (authorId: string, reviewId: string) => {
+  const review = Types.ObjectId.isValid(reviewId) ? await Review.findOneAndDelete({ _id: reviewId, authorId: new Types.ObjectId(authorId) }) : null;
+  if (!review) throw new AppError(404, "REVIEW_NOT_FOUND");
+  await recomputeVendorRating(review.vendorId);
+  for (const pid of review.productIds) await recomputeProductRating(pid);
+  return { deleted: true };
+};
+
 export const ReviewServices = {
   createReview,
+  deleteMyReview,
   getVendorReviews,
   getProductReviews,
   getMyReviews,

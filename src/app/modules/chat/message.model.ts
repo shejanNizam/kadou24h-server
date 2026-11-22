@@ -32,6 +32,9 @@ export const messageSchema = new Schema<IMessage>(
       type: Number,
       min: 0,
     },
+    // Store chat: the order this message is about (one chat per customer and store)
+    subOrderId: { type: Schema.Types.ObjectId, ref: "sub_orders" },
+    subOrderNumber: { type: String },
     moderationStatus: {
       type: String,
       enum: Object.values(ModerationStatus),
@@ -56,5 +59,7 @@ export const messageSchema = new Schema<IMessage>(
 
 messageSchema.index({ conversationId: 1, createdAt: 1 });
 messageSchema.index({ conversationId: 1, createdAt: -1 });
+// Old messages are deleted after the retention period (chat.retention.service)
+messageSchema.index({ createdAt: 1 });
 
 export const Message = model<IMessage>("Message", messageSchema);

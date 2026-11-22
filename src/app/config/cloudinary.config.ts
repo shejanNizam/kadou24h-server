@@ -47,7 +47,9 @@ export const deleteFromCloudinary = async (url: string): Promise<void> => {
   try {
     const public_id = extractPublicId(url);
     if (!public_id) return;
-    await cloudinary.uploader.destroy(public_id, { resource_type: "auto" });
+    // destroy needs the real type (voice notes are "video", documents "raw"); "auto" is not accepted
+    const resource_type = /\/(image|video|raw)\/upload\//.exec(url)?.[1] ?? "image";
+    await cloudinary.uploader.destroy(public_id, { resource_type });
   } catch (error: any) {
     logger.error("Cloudinary deletion failed", { error: error.message });
     throw new AppError(httpStatus.INTERNAL_SERVER_ERROR, "FILE_DELETE_FAILED");

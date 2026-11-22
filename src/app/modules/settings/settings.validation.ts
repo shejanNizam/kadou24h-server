@@ -55,6 +55,12 @@ export const updateSettingsZodSchema = z
       })
       .partial(),
 
+    chat: z
+      .object({
+        retentionDays: z.number().int().min(30, { message: "NUMBER_TOO_LOW" }).max(730, { message: "NUMBER_TOO_HIGH" }),
+      })
+      .partial(),
+
     moderation: z
       .object({
         restrictAfter: z.number().int().min(1),

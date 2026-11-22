@@ -26,6 +26,8 @@ const markDone = catchAsync(async (req, res) => ok(res, "Job marked as done", aw
 const confirmDone = catchAsync(async (req, res) => ok(res, "Job confirmed", await BookingServices.confirmDone(req.user._id, id(req))));
 const reportNotDone = catchAsync(async (req, res) => ok(res, "The worker was told the job is not finished", await BookingServices.reportNotDone(req.user._id, id(req), req.body.note)));
 const getWorkerReviews = catchAsync(async (req, res) => page(res, "Reviews retrieved", await WorkerReviewServices.getWorkerReviews(id(req), req.query as never)));
+const hideMyBooking = catchAsync(async (req, res) => ok(res, "Booking deleted from your history", await BookingServices.hideMyBooking(req.user._id, id(req))));
+const deleteMyReview = catchAsync(async (req, res) => ok(res, "Review deleted", await WorkerReviewServices.deleteMyReview(req.user._id, id(req))));
 const createReview = catchAsync(async (req, res) => ok(res, "Thank you for your review", await WorkerReviewServices.createReview(req.user._id, id(req), req.body), httpStatus.CREATED));
 
 // Admin
@@ -38,6 +40,8 @@ const getReviewsForAdmin = catchAsync(async (req, res) => page(res, "Reviews ret
 const setReviewStatus = catchAsync(async (req, res) => ok(res, "Review updated", await WorkerReviewServices.setReviewStatus(id(req), req.body.status, req.user._id)));
 
 export const BookingControllers = {
+  hideMyBooking,
+  deleteMyReview,
   createBooking,
   getMyBookings,
   getMyStanding,

@@ -68,6 +68,9 @@ export interface IBookingInitial {
   completedAt?: Date;
   completedBy?: BookingActor;
   reviewId?: Types.ObjectId;
+  /** "Delete from my history" (client, 2026-11-22): hidden for that side only, once finished */
+  hiddenByCustomerAt?: Date;
+  hiddenByWorkerAt?: Date;
   history: IBookingHistory[];
 }
 

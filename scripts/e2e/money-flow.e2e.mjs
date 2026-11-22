@@ -76,6 +76,7 @@ const server = spawn(process.execPath, ["--import", "tsx", "src/server.ts"], {
     DISPATCH_SWEEP_MS: "1000",
     RIDE_SWEEP_MS: "1000",
     ORDER_ACCEPT_SWEEP_MS: "1000",
+    CHAT_RETENTION_SWEEP_MS: "1000",
     REDIS_HOST: "localhost",
     REDIS_PORT: "6379",
     ...redisEnv,
@@ -770,6 +771,14 @@ const run = async () => {
   check("public reviews: the review with its photo, author name only", r.body.meta?.total === 1 && r.body.meta?.stars?.["5"] === 1 && r.body.data?.[0]?.photos?.length === 1 && r.body.data?.[0]?.authorId?.name === "Kadi Booker" && r.body.data?.[0]?.authorId?.phone === undefined, brief(r));
   r = await call("GET", `/professional-profiles/workers/${workerId}`);
   check("worker rating updated from the review", r.body.data?.ratingAvg === 5 && r.body.data?.ratingCount === 1, JSON.stringify([r.body.data?.ratingAvg, r.body.data?.ratingCount]));
+  // "Delete my review" (client, 2026-11-22)
+  r = await call("DELETE", `/bookings/${bk1?._id}/review`, null, C.token);
+  check("review delete: only its author", r.status === 404, brief(r));
+  r = await call("DELETE", `/bookings/${bk1?._id}/review`, null, K.token);
+  const afterDelete = (await call("GET", `/professional-profiles/workers/${workerId}`)).body.data;
+  check("review delete: the customer deletes it, the worker rating is redone", ok(r) && afterDelete?.ratingCount === 0 && afterDelete?.ratingAvg === 0, JSON.stringify([brief(r), afterDelete?.ratingCount]));
+  r = await call("POST", `/bookings/${bk1?._id}/review`, { rating: 5, comment: "Travail propre et rapide", photos: [file("work-done")] }, K.token);
+  check("review delete: …and may review again", r.status === 201, brief(r));
   r = await call("GET", "/professional-profiles/me/worker-summary", null, C.token);
   check("worker summary: completed jobs and estimated earnings", r.body.data?.bookings?.completed === 1 && r.body.data?.earnings?.total === 150000 && r.body.data?.earnings?.thisMonth === 150000, JSON.stringify([r.body.data?.bookings, r.body.data?.earnings]));
 
@@ -881,6 +890,20 @@ const run = async () => {
   r = await call("GET", "/professional-profiles/me/worker-summary", null, C.token);
   const paidDays = Math.round((new Date(r.body.data?.listing?.listedUntil).getTime() - Date.now()) / 86_400_000);
   check("service-provider plan paid: visible again for its 30 days", r.body.data?.isVisible === true && paidDays === 30 && (await publicIds()).includes(workerId), JSON.stringify(r.body.data?.listing ?? brief(r)));
+  // "Delete from my history" (client, 2026-11-22): a finished booking, for my side only
+  r = await call("DELETE", `/bookings/${bk1?._id}`, null, X.token);
+  check("booking history: nobody else can delete it", r.status === 404, brief(r));
+  r = await call("DELETE", `/bookings/${bk1?._id}`, null, K.token);
+  const kHistory = (await call("GET", "/bookings?as=customer&status=history&limit=50", null, K.token)).body.data ?? [];
+  const cHistory = (await call("GET", "/bookings?as=worker&status=history&limit=50", null, C.token)).body.data ?? [];
+  check("booking history: gone for the customer, still there for the worker", ok(r) && !kHistory.some((b) => b._id === bk1?._id) && cHistory.some((b) => b._id === bk1?._id), brief(r));
+  r = await book(L.token);
+  check("booking history: (another customer books)", r.status === 201, brief(r));
+  const openBooking = r.body.data?._id;
+  r = await call("DELETE", `/bookings/${openBooking}`, null, L.token);
+  check("booking history: not while it is going on", r.status === 400 && r.body.code === "BOOKING_DELETE_IN_PROGRESS", brief(r));
+  await call("PATCH", `/bookings/${openBooking}/cancel`, { reason: "Test" }, L.token);
+
   // ═════ 5d. Promo codes, cancelling one store's part, blocking in chat ═════
   const W = await signup("Second Store", `+22462${stamp}8`);
   await call("PUT", "/vendors/me/application", {
@@ -996,10 +1019,11 @@ const run = async () => {
   r = await call("POST", "/orders/checkout-summary", { ...cart({ couponCode: "WELCOME" }), items: [{ productId: oilId, qty: 1 }] }, P.token);
   check("promo: a cancelled order gives the code back", r.body.data?.coupon?.valid === true && r.body.data?.pricing?.discount === 5000, JSON.stringify(r.body.data?.coupon));
 
-  // Blocking in chat
-  r = await call("POST", "/conversations", { type: "buyer_seller", vendorId: storeB }, P.token);
+  // Blocking in chat (a customer with no order at this store: an order going on always gets through)
+  const Q = await signup("Block Buyer", `+22465${stamp}7`);
+  r = await call("POST", "/conversations", { type: "buyer_seller", vendorId: storeB }, Q.token);
   const shopChat = r.body.data?._id;
-  await call("POST", `/conversations/${shopChat}/messages`, { text: "Bonjour, vous livrez à Kipé ?" }, P.token);
+  await call("POST", `/conversations/${shopChat}/messages`, { text: "Bonjour, vous livrez à Kipé ?" }, Q.token);
   r = await call("POST", `/conversations/${shopChat}/block`, null, X.token);
   check("block: only people in the chat", r.status === 403, brief(r));
   r = await call("POST", `/conversations/${shopChat}/block`, null, W.token);
@@ -1007,35 +1031,77 @@ const run = async () => {
   r = await call("GET", `/conversations/${shopChat}`, null, W.token);
   const unreadBefore = r.body.data?.myUnread;
   check("block: the blocker sees blockedByMe", r.body.data?.blockedByMe === true, brief(r));
-  r = await call("GET", `/conversations/${shopChat}`, null, P.token);
+  r = await call("GET", `/conversations/${shopChat}`, null, Q.token);
   check("block: the blocked person is not told", r.body.data?.blockedByMe === false, brief(r));
-  r = await call("POST", `/conversations/${shopChat}/messages`, { text: "Vous êtes là ?" }, P.token);
+  r = await call("POST", `/conversations/${shopChat}/messages`, { text: "Vous êtes là ?" }, Q.token);
   check("block: the blocked person can still 'send' (nothing reveals the block)", r.status === 201 && r.body.data?.hiddenFor === undefined, brief(r));
-  r = await call("GET", `/conversations/${shopChat}/messages`, null, P.token);
+  r = await call("GET", `/conversations/${shopChat}/messages`, null, Q.token);
   check("block: …and sees their own message", r.body.data?.some((m) => m.text === "Vous êtes là ?") && r.body.data?.every((m) => m.hiddenFor === undefined), brief(r));
   r = await call("GET", `/conversations/${shopChat}/messages`, null, W.token);
   check("block: the blocker never gets it", !r.body.data?.some((m) => m.text === "Vous êtes là ?"), brief(r));
   r = await call("GET", `/conversations/${shopChat}`, null, W.token);
   check("block: no unread for the blocker", r.body.data?.myUnread === unreadBefore && r.body.data?.lastMessage?.text !== "Vous êtes là ?", JSON.stringify([unreadBefore, r.body.data?.myUnread, r.body.data?.lastMessage?.text]));
+  // One chat per customer and store (client, 2026-11-22): opened from an order, it is the store chat
   r = await call("POST", "/conversations", { type: "order", subOrderId: partB?._id, with: "vendor" }, P.token);
   const orderChat = r.body.data?._id;
-  await call("POST", `/conversations/${orderChat}/messages`, { text: "Ma commande est prête ?" }, P.token);
+  check(
+    "store chat: opened from an order → the one chat with this store, the order as topic",
+    ok(r) && r.body.data?.type === "buyer_seller" && r.body.data?.topic?.subOrderNumber === partB?.subOrderNumber && !r.body.data?.subOrderId,
+    JSON.stringify(r.body.data ?? brief(r)),
+  );
+  r = await call("POST", "/conversations", { type: "buyer_seller", vendorId: storeB }, P.token);
+  check("store chat: from the store page → the same chat", r.body.data?._id === orderChat && !r.body.data?.topic, brief(r));
+  r = await call("POST", "/conversations", { type: "order", subOrderId: partB?._id, with: "customer" }, W.token);
+  check("store chat: the store opening it from the order gets the same chat", r.body.data?._id === orderChat && r.body.data?.myMode === "vendor", brief(r));
+  await call("POST", `/conversations/${orderChat}/block`, null, W.token);
+  r = await call("POST", `/conversations/${orderChat}/messages`, { text: "Ma commande est prête ?", subOrderId: partB?._id }, P.token);
+  check("store chat: each message keeps its order number", ok(r) && r.body.data?.subOrderNumber === partB?.subOrderNumber, brief(r));
   r = await call("GET", `/conversations/${orderChat}/messages`, null, W.token);
-  check("block: an order in progress can still be discussed", r.body.data?.some((m) => m.text === "Ma commande est prête ?"), brief(r));
+  check("block: an order in progress can still be discussed (even blocked)", r.body.data?.some((m) => m.text === "Ma commande est prête ?" && m.subOrderNumber === partB?.subOrderNumber), brief(r));
+  await call("DELETE", `/conversations/${orderChat}/block`, null, W.token);
+  r = await call("POST", `/conversations/${orderChat}/messages`, { text: "Et l'autre ?", subOrderId: partA?._id }, P.token);
+  check("store chat: an order from another store can't be the topic", r.status === 400 && r.body.code === "CHAT_ORDER_NOT_IN_CHAT", brief(r));
+  r = await call("GET", "/conversations?mode=customer", null, P.token);
+  check(
+    "store chat: the store shows once in the list, with the last order number",
+    (r.body.data ?? []).filter((c) => c.peer?.vendorId === storeB).length === 1 && r.body.data?.find((c) => c._id === orderChat)?.lastMessage?.subOrderNumber === partB?.subOrderNumber,
+    JSON.stringify((r.body.data ?? []).map((c) => [c.peer?.name, c.type, c.lastMessage?.subOrderNumber])),
+  );
+  // "Delete the chat" (client, 2026-11-22): for me only, like WhatsApp
+  r = await call("DELETE", `/conversations/${orderChat}`, null, X.token);
+  check("chat delete: only someone in the chat", r.status === 404, brief(r));
+  r = await call("DELETE", `/conversations/${orderChat}`, null, P.token);
+  const listAfter = (await call("GET", "/conversations?mode=customer", null, P.token)).body.data ?? [];
+  const mineAfter = (await call("GET", `/conversations/${orderChat}/messages`, null, P.token)).body.data ?? [];
+  const storeAfter = (await call("GET", `/conversations/${orderChat}/messages`, null, W.token)).body.data ?? [];
+  check(
+    "chat delete: gone from my list and my messages, the store keeps its own",
+    ok(r) && !listAfter.some((c) => c._id === orderChat) && mineAfter.length === 0 && storeAfter.some((m) => m.text === "Ma commande est prête ?"),
+    JSON.stringify([listAfter.length, mineAfter.length, storeAfter.length]),
+  );
+  await call("POST", `/conversations/${orderChat}/messages`, { text: "Elle part demain", subOrderId: partB?._id }, W.token);
+  r = await call("GET", "/conversations?mode=customer", null, P.token);
+  const backAgain = (r.body.data ?? []).find((c) => c._id === orderChat);
+  const mineNow = (await call("GET", `/conversations/${orderChat}/messages`, null, P.token)).body.data ?? [];
+  check(
+    "chat delete: a new message brings it back, with only what came after",
+    backAgain?.myUnread === 1 && mineNow.length === 1 && mineNow[0]?.text === "Elle part demain",
+    JSON.stringify([backAgain?.myUnread, mineNow.map((m) => m.text)]),
+  );
   r = await call("GET", "/conversations/blocked", null, W.token);
-  check("blocked list: the customer, name only", r.body.data?.length === 1 && r.body.data?.[0]?.name === "Promo Buyer" && r.body.data?.[0]?.phone === undefined, brief(r));
+  check("blocked list: the customer, name only", r.body.data?.length === 1 && r.body.data?.[0]?.name === "Block Buyer" && r.body.data?.[0]?.phone === undefined, brief(r));
   r = await call("DELETE", `/conversations/${shopChat}/block`, null, W.token);
   check("unblock", ok(r) && r.body.data?.blocked === false, brief(r));
-  await call("POST", `/conversations/${shopChat}/messages`, { text: "Re-bonjour" }, P.token);
+  await call("POST", `/conversations/${shopChat}/messages`, { text: "Re-bonjour" }, Q.token);
   r = await call("GET", `/conversations/${shopChat}/messages`, null, W.token);
   check("unblocked: messages arrive again (the hidden one stays hidden)", r.body.data?.some((m) => m.text === "Re-bonjour") && !r.body.data?.some((m) => m.text === "Vous êtes là ?"), brief(r));
 
   // The team opens a flagged message with the messages around it
-  r = await call("POST", `/conversations/${shopChat}/messages`, { text: "Appelle moi au 622 12 34 56 pour payer" }, P.token);
+  r = await call("POST", `/conversations/${shopChat}/messages`, { text: "Appelle moi au 622 12 34 56 pour payer" }, Q.token);
   const flaggedId = r.body.data?._id;
   check("flagged: a phone number is masked", r.body.data?.moderationStatus === "masked", brief(r));
   await call("POST", `/conversations/${shopChat}/messages`, { text: "Merci, je vous réponds ici" }, W.token);
-  r = await call("GET", `/conversations/admin/moderation-violations?userId=${P.id}`, null, admin);
+  r = await call("GET", `/conversations/admin/moderation-violations?userId=${Q.id}`, null, admin);
   const flag = r.body.data?.find((v) => v.messageId === flaggedId);
   check("flagged: the violation points to its message", Boolean(flag), JSON.stringify(r.body.data?.map((v) => v.messageId)));
   r = await call("GET", `/conversations/admin/moderation-violations/${flag?._id}/context?around=3`, null, admin);
@@ -1055,8 +1121,45 @@ const run = async () => {
   check("reported: opened from the report, with its report count", ok(r) && r.body.data?.focusId === flaggedId && r.body.data?.messages?.find((m) => m._id === flaggedId)?.reportCount === 1, brief(r));
   r = await call("GET", `/conversations/admin/messages/${flaggedId}/context`, null, W.token);
   check("reported: only the team can open it", r.status === 403, brief(r));
-  r = await call("GET", "/notifications?mode=customer&limit=50", null, P.token);
+  r = await call("GET", "/notifications?mode=customer&limit=50", null, Q.token);
   check("flagged: the chat warning is in the user's notification list (account-wide)", (r.body.data ?? []).some((n) => n.type === "moderation_warning"), brief(r));
+
+  // Chat retention (client, 2026-11-22): messages older than 90 days go; proof still needed stays
+  r = await call("GET", "/settings", null, admin);
+  check("chat retention: 90 days by default (admin setting)", r.body.data?.chat?.retentionDays === 90, JSON.stringify(r.body.data?.chat));
+  r = await call("PATCH", "/settings", { chat: { retentionDays: 10 } }, admin);
+  check("chat retention: under 30 days is refused", r.status === 400, brief(r));
+  const ageMessages = async (filter, days) => {
+    await mongoose.connect(DATABASE_URL);
+    await mongoose.connection.collection("messages").updateMany(filter, { $set: { createdAt: new Date(Date.now() - days * 86_400_000) } });
+    await mongoose.disconnect();
+    await sleep(3500);
+  };
+  const oldie = await signup("Old Chat", `+22465${stamp}9`);
+  r = await call("POST", "/conversations", { type: "buyer_seller", vendorId: storeB }, oldie.token);
+  const oldChat = r.body.data?._id;
+  r = await call("POST", `/conversations/${oldChat}/messages`, { text: "Vieux message" }, oldie.token);
+  const oldMsg = r.body.data?._id;
+  await call("POST", `/conversations/${oldChat}/messages`, { text: "Message récent" }, oldie.token);
+  await ageMessages({ conversationId: oid(oldChat), _id: { $ne: oid(oldMsg) }, text: { $ne: "Message récent" } }, 100);
+  await ageMessages({ _id: oid(oldMsg) }, 100);
+  r = await call("GET", `/conversations/${oldChat}/messages`, null, W.token);
+  check(
+    "chat retention: a message older than 90 days is deleted, a recent one stays",
+    ok(r) && !(r.body.data ?? []).some((m) => m.text === "Vieux message") && (r.body.data ?? []).some((m) => m.text === "Message récent"),
+    JSON.stringify((r.body.data ?? []).map((m) => m.text)),
+  );
+  r = await call("GET", `/conversations/${oldChat}`, null, W.token);
+  check("chat retention: …the unread count only counts what is left", r.body.data?.myUnread === 1 && r.body.data?.lastMessage?.text === "Message récent", JSON.stringify([r.body.data?.myUnread, r.body.data?.lastMessage?.text]));
+  await ageMessages({ conversationId: oid(oldChat) }, 100);
+  r = await call("GET", `/conversations/${oldChat}`, null, oldie.token);
+  check("chat retention: a chat with nothing left is deleted", r.status === 404, brief(r));
+  await ageMessages({ conversationId: oid(orderChat), subOrderId: oid(partB?._id) }, 100);
+  r = await call("GET", `/conversations/${orderChat}/messages`, null, W.token);
+  check("chat retention: messages about an order still going stay", (r.body.data ?? []).some((m) => m.text === "Ma commande est prête ?"), JSON.stringify((r.body.data ?? []).map((m) => m.text)));
+  await ageMessages({ conversationId: oid(shopChat) }, 100);
+  r = await call("GET", `/conversations/${shopChat}/messages`, null, Q.token);
+  check("chat retention: a chat with a report the team hasn't handled stays", (r.body.data ?? []).some((m) => m.text === "Re-bonjour"), brief(r));
 
   // The Kadou24h team writes to one user
   r = await call("POST", "/notifications/admin/team-message", { userId: P.id, title: "Équipe Kadou24h", message: "" }, admin);
@@ -1208,6 +1311,17 @@ const run = async () => {
   check("restored offer is open again", r.body.data?.isOpen === true, brief(r));
   r = await call("POST", `/conversations/${jobChat}/messages`, { text: "Toujours intéressé" }, C.token);
   check("its chat works again", ok(r), brief(r));
+  // "Delete my job offer" (client, 2026-11-22)
+  r = await call("DELETE", `/jobs/${jobId}`, null, V.token);
+  check("job delete: a live offer must be closed first", r.status === 400 && r.body.code === "JOB_DELETE_NOT_ALLOWED", brief(r));
+  r = await call("DELETE", `/jobs/${jobId}`, null, C.token);
+  check("job delete: only its poster", r.status === 404, brief(r));
+  await call("POST", `/jobs/${jobId}/close`, null, V.token);
+  r = await call("DELETE", `/jobs/${jobId}`, null, V.token);
+  const myJobsNow = (await call("GET", "/jobs/my?limit=50", null, V.token)).body.data ?? [];
+  check("job delete: a closed offer leaves the poster's list", ok(r) && !myJobsNow.some((j) => j._id === jobId), brief(r));
+  r = await call("GET", "/jobs/applications/my?limit=50", null, C.token);
+  check("job delete: the candidate keeps their application", (r.body.data ?? []).some((a) => String(a.jobId?._id ?? a.jobId) === jobId), brief(r));
 
   // ═════ 8c. One team message to whole groups ═════
   r = await call("GET", "/notifications/admin/broadcasts/audience?audiences=vendors", null, C.token);
@@ -1242,6 +1356,28 @@ const run = async () => {
   // ═════ 9. Worker directory & pagination ═════
   r = await call("GET", "/professional-profiles/workers?limit=5");
   check("worker directory is public & has no phone/email", r.status === 200 && JSON.stringify(r.body.data).includes('"phone"') === false, brief(r));
+
+  // "Delete my CV" (client, 2026-11-22): the CV and both files go; a worker keeps their worker page
+  const cvFile = (name) => ({ url: `https://example.com/${name}.pdf`, publicId: `e2e/${name}` });
+  r = await call("PUT", "/professional-profiles/me", { uploadedResume: null }, C.token);
+  check("CV: the imported CV alone can be removed", ok(r) && r.body.data?.uploadedResume === undefined, brief(r));
+  await call("PUT", "/professional-profiles/me", { summary: "Électricien sérieux", skills: ["Câblage"], uploadedResume: cvFile("cv-c"), generatedCv: cvFile("cv-c-k24") }, C.token);
+  r = await call("DELETE", "/professional-profiles/me/cv", null, C.token);
+  const cvAfter = r.body.data;
+  check(
+    "CV: delete clears the text, skills and both files",
+    ok(r) && !cvAfter?.summary && cvAfter?.skills?.length === 0 && !cvAfter?.uploadedResume && !cvAfter?.generatedCv && (cvAfter?.profileExperience ?? []).length === 0,
+    JSON.stringify(cvAfter ?? brief(r)),
+  );
+  check("CV: …a worker keeps their trade and approval", cvAfter?.profession === "Électricien" && cvAfter?.approvalStatus === "approved", JSON.stringify({ p: cvAfter?.profession, s: cvAfter?.approvalStatus }));
+  r = await call("GET", `/professional-profiles/workers/${workerId}`);
+  check("CV: …and their public worker page", ok(r), brief(r));
+  const cvOnly = await signup("CV Only", `+22465${stamp}6`);
+  await call("PUT", "/professional-profiles/me", { profession: "Comptable", summary: "Rigoureux", city: "Conakry", generatedCv: cvFile("cv-only") }, cvOnly.token);
+  r = await call("DELETE", "/professional-profiles/me/cv", null, cvOnly.token);
+  check("CV: someone who is not a worker loses the whole CV (trade and city too)", ok(r) && !r.body.data?.profession && !r.body.data?.city && !r.body.data?.generatedCv, JSON.stringify(r.body.data ?? brief(r)));
+  r = await call("DELETE", "/professional-profiles/me/cv", null, cvOnly.token);
+  check("CV: deleting again is harmless", ok(r), brief(r));
   r = await call("GET", "/orders/my-orders?limit=2", null, C.token);
   check("pagination meta has totalPage (+ totalPages alias)", r.body.meta?.totalPage >= 1 && r.body.meta?.totalPages === r.body.meta?.totalPage, JSON.stringify(r.body.meta));
   // "Delete from my history": a finished order is hidden for the customer only
@@ -1732,6 +1868,17 @@ const run = async () => {
   check("ride chat: the rider answers", ok(r), brief(r));
   r = await call("GET", "/conversations?mode=rider", null, driver.token);
   check("ride chat: in the rider's chat list, with the ride number", (r.body.data ?? []).some((c) => c._id === rideChat?._id && c.rideId?.rideNumber === ride?.rideNumber && c.myUnread === 2), brief(r));
+  // Unread count on the ride screen's chat button (client, 2026-11-22: "I am at home" went unseen)
+  r = await call("GET", "/rides/rider/current", null, driver.token);
+  check("ride chat: the rider's ride screen shows 2 unread messages", r.body.data?.chatUnread === 2, JSON.stringify(r.body.data?.chatUnread ?? brief(r)));
+  r = await call("GET", `/rides/${ride?._id}`, null, PA.token);
+  check("ride chat: the passenger's ride screen shows 1 unread message", r.body.data?.chatUnread === 1, JSON.stringify(r.body.data?.chatUnread ?? brief(r)));
+  await sleep(300);
+  r = await call("GET", "/notifications?mode=customer&limit=20", null, PA.token);
+  check("ride chat: the passenger gets a new-message notification (push + in-app banner)", (r.body.data ?? []).some((n) => n.type === "new_message" && n.data?.conversationId === rideChat?._id), brief(r));
+  r = await call("PATCH", `/conversations/${rideChat?._id}/read?mode=customer`, null, PA.token);
+  r = await call("GET", `/rides/${ride?._id}`, null, PA.token);
+  check("ride chat: opening the chat clears the count", r.body.data?.chatUnread === 0, JSON.stringify(r.body.data?.chatUnread ?? brief(r)));
 
   // "Share my trip": a close one follows the ride from a link, no account
   r = await call("POST", `/rides/${ride?._id}/share`, null, driver.token);

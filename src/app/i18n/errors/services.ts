@@ -133,6 +133,10 @@ export const serviceErrors = {
   },
 
   // Job board
+  JOB_DELETE_NOT_ALLOWED: {
+    en: "Only a draft, closed or expired offer can be deleted. Close this offer first.",
+    fr: "Seule une offre en brouillon, fermée ou expirée peut être supprimée. Fermez d’abord cette offre.",
+  },
   JOB_NOT_FOUND: {
     en: "Job not found.",
     fr: "Offre d'emploi introuvable.",
@@ -226,6 +230,10 @@ export const serviceErrors = {
   RIDE_IN_PROGRESS: {
     en: "You already have a ride in progress.",
     fr: "Vous avez déjà une course en cours.",
+  },
+  BOOKING_DELETE_IN_PROGRESS: {
+    en: "This booking is still going on: you can delete it once it is finished.",
+    fr: "Cette réservation est encore en cours : vous pourrez la supprimer une fois terminée.",
   },
   RIDE_DELETE_IN_PROGRESS: {
     en: "This ride is still in progress: you can delete it once it is over.",

@@ -5,7 +5,9 @@
 import httpStatus from "http-status";
 import { Types } from "mongoose";
 import AppError from "../../errorHelpers/AppError";
+import { deleteFromCloudinary } from "../../config/cloudinary.config";
 import { IFileRef } from "../../interfaces/common.types";
+import { logger } from "../../utils/logger";
 import { AuditLogServices } from "../audit_log/audit_log.service";
 import { ProfessionalProfile } from "../professional_profile/professional_profile.model";
 import { BookingStatus, WorkerReviewStatus } from "./booking.interface";
@@ -51,6 +53,20 @@ const createReview = async (customerId: string, bookingId: string, payload: { ra
   await recomputeWorkerRating(booking.workerProfileId);
   BookingNotify.reviewed(booking, payload.rating);
   return review;
+};
+
+/** "Delete my review" (client, 2026-11-22): the customer who wrote it; photos go too, the rating is redone */
+const deleteMyReview = async (customerId: string, bookingId: string) => {
+  const booking = Types.ObjectId.isValid(bookingId) ? await Booking.findOne({ _id: bookingId, customerId }) : null;
+  const review = booking?.reviewId ? await WorkerReview.findOneAndDelete({ _id: booking.reviewId, authorId: booking.customerId }) : null;
+  if (!booking || !review) throw new AppError(httpStatus.NOT_FOUND, "REVIEW_NOT_FOUND");
+  booking.set("reviewId", undefined);
+  await booking.save();
+  await recomputeWorkerRating(booking.workerProfileId);
+  await Promise.all(
+    (review.photos ?? []).map((p) => deleteFromCloudinary(p.url).catch((error) => logger.warn("Review photo not deleted", { error: error instanceof Error ? error.message : error }))),
+  );
+  return { deleted: true };
 };
 
 /** Public: a worker's visible reviews (author name + avatar only). */
@@ -112,6 +128,7 @@ const setReviewStatus = async (id: string, status: WorkerReviewStatus, actorId: 
 
 export const WorkerReviewServices = {
   createReview,
+  deleteMyReview,
   getWorkerReviews,
   getReviewsForAdmin,
   setReviewStatus,

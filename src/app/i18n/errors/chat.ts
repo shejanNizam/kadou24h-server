@@ -47,6 +47,10 @@ export const chatErrors = {
     en: "workerProfileId or bookingId is required.",
     fr: "workerProfileId ou bookingId est obligatoire.",
   },
+  CHAT_ORDER_NOT_IN_CHAT: {
+    en: "This order is not one of yours with this store.",
+    fr: "Cette commande ne fait pas partie de vos commandes avec cette boutique.",
+  },
   CHAT_ORDER_UNPAID: {
     en: "Pay for this order first — the store receives it once paid.",
     fr: "Payez d'abord la commande : la boutique la reçoit dès le paiement.",

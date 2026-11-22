@@ -51,6 +51,8 @@ export interface ResolvedConversation {
   };
   /** See voiceAllowedFor */
   allowVoice: boolean;
+  /** Store chat opened from an order: the app tags the messages it sends with this order */
+  topic?: { subOrderId: Types.ObjectId; subOrderNumber: string };
 }
 
 /**
@@ -120,7 +122,7 @@ export const resolveConversation = async (
   }
 
   if (input.type === ConversationType.order) {
-    const subOrder = await SubOrder.findById(input.subOrderId).select("orderId customerId vendorId currentRiderId status");
+    const subOrder = await SubOrder.findById(input.subOrderId).select("orderId customerId vendorId currentRiderId status subOrderNumber");
     if (!subOrder) throw notFound("ORDER_NOT_FOUND");
     // The store only receives an online order once it is paid
     if (subOrder.status === SubOrderStatus.pending_payment) {
@@ -160,6 +162,19 @@ export const resolveConversation = async (
     const myMode = myModes.find((m) => m !== other.mode);
     if (!myMode || String(other.userId) === userId) {
       throw new AppError(httpStatus.BAD_REQUEST, "CHAT_SELF");
+    }
+    // Customer ↔ store: ONE chat per customer and store (client, 2026-11-22), whatever the
+    // order; the order becomes the topic of the messages sent from here
+    const modes = [myMode, other.mode];
+    if (modes.includes(AppMode.customer) && modes.includes(AppMode.vendor)) {
+      return {
+        type: ConversationType.buyer_seller,
+        me: { userId: me, mode: myMode },
+        other,
+        context: {},
+        allowVoice: voiceAllowedFor(ConversationType.buyer_seller),
+        topic: { subOrderId: subOrder._id as Types.ObjectId, subOrderNumber: subOrder.subOrderNumber },
+      };
     }
     return {
       type: input.type,

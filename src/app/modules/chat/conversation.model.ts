@@ -14,6 +14,9 @@ const participantSchema = new Schema<IParticipant>(
     mode: { type: String, enum: Object.values(AppMode), required: true },
     unreadCount: { type: Number, default: 0, min: 0 },
     lastReadAt: { type: Date },
+    // "Delete the chat" for me only: older messages hidden for me, out of my list until a new one
+    clearedAt: { type: Date },
+    hidden: { type: Boolean },
   },
   { _id: true },
 );
@@ -24,6 +27,7 @@ const lastMessageSchema = new Schema<ILastMessage>(
     type: { type: String, enum: Object.values(MessageType), default: MessageType.text },
     senderId: { type: Schema.Types.ObjectId, ref: "User" },
     at: { type: Date, default: Date.now },
+    subOrderNumber: { type: String },
   },
   { _id: false },
 );

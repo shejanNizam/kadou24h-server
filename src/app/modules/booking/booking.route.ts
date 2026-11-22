@@ -116,6 +116,8 @@ router.post("/", app, validateRequest(createBookingZodSchema), BookingController
 router.get("/", app, BookingControllers.getMyBookings);
 router.get("/me/standing", app, BookingControllers.getMyStanding);
 router.get("/:id", app, BookingControllers.getMyBooking);
+// "Delete from my history": a finished booking, hidden for my side only (client, 2026-11-22)
+router.delete("/:id", app, BookingControllers.hideMyBooking);
 router.patch("/:id/accept", app, BookingControllers.accept);
 router.patch("/:id/decline", app, validateRequest(declineBookingZodSchema), BookingControllers.decline);
 router.patch("/:id/cancel", app, validateRequest(cancelBookingZodSchema), BookingControllers.cancel);
@@ -123,5 +125,7 @@ router.patch("/:id/done", app, validateRequest(doneBookingZodSchema), BookingCon
 router.patch("/:id/confirm", app, BookingControllers.confirmDone);
 router.patch("/:id/not-done", app, validateRequest(notDoneBookingZodSchema), BookingControllers.reportNotDone);
 router.post("/:id/review", app, validateRequest(createWorkerReviewZodSchema), BookingControllers.createReview);
+// "Delete my review": the customer who wrote it (photos go, the worker's rating is redone)
+router.delete("/:id/review", app, BookingControllers.deleteMyReview);
 
 export const BookingRoutes = router;

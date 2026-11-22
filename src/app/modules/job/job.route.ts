@@ -104,6 +104,16 @@ router.post(
   JobControllers.closeJob,
 );
 
+/**
+ * @swagger
+ * /jobs/{id}:
+ *   delete:
+ *     tags: [Jobs]
+ *     summary: Delete my job offer (draft, closed or expired; close a live one first)
+ *     security: [{ bearerAuth: [] }]
+ */
+router.delete("/:id", checkAuth(...APP_ROLES), JobControllers.deleteMyJob);
+
 router.get(
   "/:id/applicants",
   checkAuth(...APP_ROLES),

@@ -14,6 +14,8 @@ import { DeliveryDispatch } from "./app/modules/delivery/delivery.dispatch.servi
 import { RideServices } from "./app/modules/ride/ride.service";
 import { ProfessionalProfileServices } from "./app/modules/professional_profile/professional_profile.service";
 import { TeamBroadcastServices } from "./app/modules/notification/team_broadcast.service";
+import { ChatMergeServices } from "./app/modules/chat/chat.merge.service";
+import { ChatRetentionServices } from "./app/modules/chat/chat.retention.service";
 
 let server: Server;
 
@@ -28,6 +30,9 @@ async function main() {
     // Workers listed before the approval step stay visible
     const legacyWorkers = await ProfessionalProfileServices.approveLegacyListedWorkers();
     if (legacyWorkers) logger.info(`Marked ${legacyWorkers} existing listed worker(s) as approved`);
+    // One chat per customer and store: chats opened per order are merged (once)
+    const mergedChats = await ChatMergeServices.mergeStoreChats();
+    if (mergedChats) logger.info(`Merged ${mergedChats} per-order store chat(s) into store chats`);
 
     const httpServer = http.createServer(app);
     await initSocket(httpServer);
@@ -45,6 +50,8 @@ async function main() {
     DeliveryDispatch.startDispatchSweep();
     // Moto-taxi: requests reach farther riders, unanswered ones expire
     RideServices.startRideSweep();
+    // Chat messages older than the retention period are deleted (proof still needed stays)
+    ChatRetentionServices.startRetentionSweep();
     // Team broadcasts cut short by a restart carry on
     const broadcasts = await TeamBroadcastServices.resumeUnfinished();
     if (broadcasts) logger.info(`Resuming ${broadcasts} team broadcast(s)`);

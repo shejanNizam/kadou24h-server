@@ -1377,6 +1377,7 @@ Money paid online (Orange Money / MoMo / card) goes back only after an admin app
 | `GET /conversations` | Signed-in | list my conversations filtered by participant `mode` (`?mode=customer\|vendor\|rider&page=&limit=`). Segregates vendor and customer inboxes. |
 | `GET /conversations/:id` | Participant | get conversation details with populated participant profiles and context. |
 | `PATCH /conversations/:id/read` | Participant | mark conversation as read for active mode; resets `unreadCount = 0` and emits `message_read` socket event. |
+| `DELETE /conversations/:id` | Participant | delete the chat **for me only**: older messages hidden for me, out of my list until a new message arrives (the other person and the team keep theirs). |
 | `GET /conversations/:id/messages` | Participant | paginated message history (`?page=&limit=`). |
 | `POST /conversations/:id/messages` | Participant | send message: `{ type: "text" \| "voice" \| "image", text?, mediaUrl?, mediaDurationSec? }`. Anti-circumvention filter inspects phone, email, URL, and social keywords. Flags violations with progressive penalties (warn → restrict 24h → suspend). Voice notes restricted to allowed conversations. |
 | `GET /conversations/admin/moderation-violations` | Admin | view content moderation violations log with rule triggers and actions taken (`?rule=&action=&userId=&page=&limit=`). |
@@ -1504,6 +1505,13 @@ const socket = io("http://localhost:5000", { auth: { token: accessToken } });
 ---
 
 ## Changelog
+
+### Client feedback (2026-11-22): store chat, chat alerts, retention, delete
+- **One chat per customer and store** (like WhatsApp). `POST /conversations { type: "order", subOrderId, with: "vendor" }` (customer) or `with: "customer"` (store) now returns the pair's `buyer_seller` chat with `topic: { subOrderId, subOrderNumber }`. Send `subOrderId` with `POST /conversations/:id/messages` to tag a message with its order: messages carry `subOrderId` + `subOrderNumber`, `lastMessage.subOrderNumber` too. A `subOrderId` that isn't this customer's order at this store → 400 `CHAT_ORDER_NOT_IN_CHAT`. Rider chats stay per delivery. At start-up the server merges the old per-order store chats into the store chat (messages keep their order; unread counts, reports, flags and notifications follow). Blocking: while any order between the customer and the store is going on, messages still get through.
+- **Ride chat unread:** `GET /rides/:id`, `/rides/my/current` and `/rides/rider/current` include `chatUnread` (badge on the chat button).
+- **Chat retention:** messages older than `settings.chat.retentionDays` (default 90, admin 30–730; public settings expose `chat`) are deleted every few hours with their photos and voice notes; a chat with nothing left is deleted. Kept: a chat with a pending report, messages about an order still going or with an open dispute / pending refund, a ride chat while the ride is going on. Env `CHAT_RETENTION_SWEEP_MS` (default 6 h).
+- **Delete:** `DELETE /conversations/:id` (for me only: messages hidden for me, out of my list until a new message), `DELETE /professional-profiles/me/cv` (CV text + both files; a worker keeps trade, photo, city; `uploadedResume: null` / `generatedCv: null` on `PUT /me` removes one file), `DELETE /reviews/:id` (my store/product review; ratings redone), `DELETE /bookings/:id/review` (my worker review + photos), `DELETE /bookings/:id` (finished booking out of my history, my side only; 400 `BOOKING_DELETE_IN_PROGRESS`), `DELETE /jobs/:id` (draft / closed / expired offer; 400 `JOB_DELETE_NOT_ALLOWED`; candidates keep their application).
+- `GET /user/me/alerts` (red dot on my other modes) — see 7.x User.
 
 ### Security & money fixes (2026-10-10)
 - **COD:** vendor earnings are released only after the rider's cash is settled (`settlement: "awaiting_cod"`, FIFO allocation, `releasedSubOrders` in settlement responses). Riders can't declare more cash than they owe.

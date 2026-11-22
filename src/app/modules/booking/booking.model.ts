@@ -44,6 +44,8 @@ const bookingSchema = new Schema<IBooking>(
     completedAt: { type: Date },
     completedBy: { type: String, enum: ACTORS },
     reviewId: { type: Schema.Types.ObjectId, ref: "WorkerReview" },
+    hiddenByCustomerAt: { type: Date },
+    hiddenByWorkerAt: { type: Date },
     history: {
       type: [
         new Schema(

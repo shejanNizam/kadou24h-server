@@ -115,6 +115,15 @@ router.delete("/blocked/:userId", checkAuth(...ALL_ROLES), ChatControllers.unblo
 router.post("/:id/block", checkAuth(...ALL_ROLES), ChatControllers.blockPeer);
 router.delete("/:id/block", checkAuth(...ALL_ROLES), ChatControllers.unblockPeer);
 router.get("/:id", checkAuth(...ALL_ROLES), ChatControllers.getConversationById);
+/**
+ * @swagger
+ * /conversations/{id}:
+ *   delete:
+ *     tags: [Chat]
+ *     summary: Delete the chat for me only (its messages are gone for me; it comes back with a new message)
+ *     security: [{ bearerAuth: [] }]
+ */
+router.delete("/:id", checkAuth(...ALL_ROLES), ChatControllers.deleteForMe);
 router.patch("/:id/read", checkAuth(...ALL_ROLES), ChatControllers.markConversationAsRead);
 
 // Messages in conversation

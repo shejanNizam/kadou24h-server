@@ -130,7 +130,8 @@ const getMyBookings = async (
   const limit = Math.max(1, Math.min(50, Number(query.limit) || 20));
   const as = query.as === "worker" ? "worker" : "customer";
   const me = new Types.ObjectId(userId);
-  const base = as === "worker" ? { workerId: me } : { customerId: me };
+  // A booking I deleted from my history is gone for me only
+  const base = as === "worker" ? { workerId: me, hiddenByWorkerAt: { $exists: false } } : { customerId: me, hiddenByCustomerAt: { $exists: false } };
 
   const filter: Record<string, unknown> = { ...base };
   const single = Object.values(BookingStatus).find((s) => s === query.status);
@@ -510,8 +511,19 @@ const cancelByAdmin = async (id: string, reason: string, actorId: string) => {
   return getBookingForAdmin(id);
 };
 
+/** "Delete from my history" (client, 2026-11-22): a finished booking, hidden for my side only */
+const hideMyBooking = async (userId: string, id: string) => {
+  const booking = Types.ObjectId.isValid(id) ? await Booking.findById(id).select("customerId workerId status").lean() : null;
+  const side = booking && (String(booking.customerId) === userId ? "hiddenByCustomerAt" : String(booking.workerId) === userId ? "hiddenByWorkerAt" : null);
+  if (!booking || !side) throw new AppError(httpStatus.NOT_FOUND, "BOOKING_NOT_FOUND");
+  if (!HISTORY.includes(booking.status)) throw new AppError(httpStatus.BAD_REQUEST, "BOOKING_DELETE_IN_PROGRESS");
+  await Booking.updateOne({ _id: booking._id }, { $set: { [side]: new Date() } });
+  return { deleted: true };
+};
+
 export const BookingServices = {
   createBooking,
+  hideMyBooking,
   getMyBookings,
   getMyBooking,
   accept,

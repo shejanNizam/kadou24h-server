@@ -84,6 +84,11 @@ const sendMessage = catchAsync(async (req: Request, res: Response) => {
   });
 });
 
+const deleteForMe = catchAsync(async (req: Request, res: Response) => {
+  const result = await ChatServices.deleteForMe(req.user._id, String(req.params.id));
+  sendResponse(res, { statusCode: 200, success: true, message: "Conversation deleted", data: result });
+});
+
 const markConversationAsRead = catchAsync(async (req: Request, res: Response) => {
   const userId = req.user._id;
   const mode = (req.query.mode as string) || req.user.lastActiveMode;
@@ -154,6 +159,7 @@ const liftUserChatRestrictionAdmin = catchAsync(async (req: Request, res: Respon
 });
 
 export const ChatControllers = {
+  deleteForMe,
   blockPeer,
   unblockPeer,
   getBlocked,

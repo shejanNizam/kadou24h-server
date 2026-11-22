@@ -4,6 +4,12 @@ import catchAsync from "../../utils/catchAsync";
 import sendResponse from "../../utils/sendResponse";
 import { ProfessionalProfileServices } from "./professional_profile.service";
 
+/** "Delete my CV" (the CV text and both files; a worker keeps their worker page) */
+const deleteMyCv = catchAsync(async (req: Request, res: Response) => {
+  const result = await ProfessionalProfileServices.deleteMyCv(req.user._id);
+  sendResponse(res, { statusCode: httpStatus.OK, success: true, message: "CV deleted", data: result });
+});
+
 const getMyProfile = catchAsync(async (req: Request, res: Response) => {
   const result = await ProfessionalProfileServices.getMyProfile(req.user._id);
   sendResponse(res, {
@@ -111,6 +117,7 @@ const reviewWorker = catchAsync(async (req: Request, res: Response) => {
 });
 
 export const ProfessionalProfileControllers = {
+  deleteMyCv,
   submitWorkerApplication,
   getWorkerSummary,
   getWorkersForAdmin,

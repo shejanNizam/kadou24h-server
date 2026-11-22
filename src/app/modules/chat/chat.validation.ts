@@ -27,6 +27,8 @@ const sendMessageZodSchema = z.object({
       text: z.string().optional(),
       mediaUrl: z.string().optional(),
       mediaDurationSec: z.number().min(0).optional(),
+      // Store chat: the order this message is about (one chat per customer and store)
+      subOrderId: objectId.optional(),
     })
     .refine(
       (data) => {

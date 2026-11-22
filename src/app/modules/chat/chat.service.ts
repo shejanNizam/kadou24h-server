@@ -2,6 +2,8 @@ import { Types } from "mongoose";
 import { emitToConversation, emitToUser } from "../../../socket/socket";
 import AppError from "../../errorHelpers/AppError";
 import { NotificationType } from "../notification/notification.interface";
+import { SubOrderStatus } from "../order/order.interface";
+import { SubOrder } from "../order/sub_order.model";
 import { NotificationServices } from "../notification/notification.service";
 import { Settings } from "../settings/settings.model";
 import { AppMode, UserStatus } from "../user/user.interface";
@@ -34,7 +36,7 @@ import { ChatBlockServices } from "./chat.block.service";
 const CHAT_SUSPENSION_REASON =
   "Suspended for repeated off-platform contact sharing / circumvention violations.";
 
-const SYSTEM_SAFETY_WARNING =
+export const SYSTEM_SAFETY_WARNING =
   "Notice: Pour votre sécurité, effectuez tous vos paiements via Kadou24h. Ne partagez jamais vos coordonnées bancaires ou numéros de téléphone en dehors de l'application.";
 
 // Participants as the app may see them: never a phone or email (client rule —
@@ -121,7 +123,25 @@ const startOrGetConversation = async (userId: string, input: StartConversationIn
       moderationRules: [],
     });
   }
-  return getConversationById(userId, String(conversation._id));
+  const presented = await getConversationById(userId, String(conversation._id));
+  // Opened from an order: the app tags the messages it sends with it
+  return resolved.topic ? { ...presented, topic: resolved.topic } : presented;
+};
+
+/** A store chat message about one of this customer's orders at this store (else refused) */
+const orderTopic = async (conversation: IConversation, subOrderId?: string) => {
+  if (!subOrderId || conversation.type !== ConversationType.buyer_seller) return undefined;
+  const customer = conversation.participants.find((p) => p.mode === AppMode.customer);
+  const seller = conversation.participants.find((p) => p.mode === AppMode.vendor);
+  const store = seller ? await VendorProfile.findOne({ userId: seller.userId }).select("_id").lean() : null;
+  const subOrder =
+    store && customer && Types.ObjectId.isValid(subOrderId)
+      ? await SubOrder.findOne({ _id: subOrderId, customerId: customer.userId, vendorId: store._id, status: { $ne: SubOrderStatus.pending_payment } })
+          .select("subOrderNumber")
+          .lean()
+      : null;
+  if (!subOrder) throw new AppError(400, "CHAT_ORDER_NOT_IN_CHAT");
+  return { subOrderId: subOrder._id as Types.ObjectId, subOrderNumber: subOrder.subOrderNumber };
 };
 
 const getMyConversations = async (
@@ -138,6 +158,8 @@ const getMyConversations = async (
       $elemMatch: {
         userId: new Types.ObjectId(userId),
         mode,
+        // A chat I deleted comes back with its next message
+        hidden: { $ne: true },
       },
     },
   };
@@ -222,8 +244,13 @@ const getMessages = async (
   const limit = Math.min(100, Math.max(1, Number(query.limit) || 50));
   const skip = (page - 1) * limit;
 
-  // Messages from someone I blocked were never meant for me
-  const filter = { conversationId: new Types.ObjectId(conversationId), hiddenFor: { $ne: new Types.ObjectId(userId) } };
+  // Messages from someone I blocked were never meant for me; a chat I deleted starts again after that
+  const clearedAt = conversation.participants.find((p) => p.userId.toString() === userId.toString())?.clearedAt;
+  const filter = {
+    conversationId: new Types.ObjectId(conversationId),
+    hiddenFor: { $ne: new Types.ObjectId(userId) },
+    ...(clearedAt && { createdAt: { $gt: clearedAt } }),
+  };
 
   // Page 1 = the latest messages (a chat opens at the bottom); older pages on scroll-up.
   // Inside a page, oldest → newest.
@@ -254,6 +281,8 @@ interface ISendMessagePayload {
   text?: string;
   mediaUrl?: string;
   mediaDurationSec?: number;
+  /** Store chat: the order this message is about */
+  subOrderId?: string;
 }
 
 const sendMessage = async (
@@ -301,6 +330,9 @@ const sendMessage = async (
   if (conversation.type === ConversationType.ride && conversation.rideId) {
     await assertRideChatOpen(conversation.rideId);
   }
+
+  // Store chat: the order this message is about must be this customer's, at this store
+  const topic = await orderTopic(conversation, payload.subOrderId);
 
   // 3. Voice note policy check
   if (payload.type === MessageType.voice) {
@@ -413,6 +445,7 @@ const sendMessage = async (
     text: textToSave,
     mediaUrl: payload.mediaUrl,
     mediaDurationSec: payload.mediaDurationSec,
+    ...topic,
     moderationStatus,
     moderationRules,
   });
@@ -438,13 +471,17 @@ const sendMessage = async (
       type: message.type,
       senderId: sender._id,
       at: message.createdAt || new Date(),
+      ...(topic && { subOrderNumber: topic.subOrderNumber }),
     };
   }
 
   conversation.participants.forEach((p) => {
-    if (p.userId.toString() !== senderId.toString() && !isHidden(p.userId)) {
+    const isSender = p.userId.toString() === senderId.toString();
+    if (!isSender && !isHidden(p.userId)) {
       p.unreadCount = (p.unreadCount || 0) + 1;
     }
+    // A chat someone deleted comes back in their list with this message
+    if (isSender || !isHidden(p.userId)) p.hidden = false;
   });
 
   await conversation.save();
@@ -484,6 +521,22 @@ const sendMessage = async (
   }
 
   return message;
+};
+
+/**
+ * "Delete the chat" (client, 2026-11-22): for me only, like WhatsApp. Its messages are gone for
+ * me and it leaves my list until a new message arrives; the other person keeps theirs, and the
+ * team keeps what it needs as proof (see chat.retention.service).
+ */
+const deleteForMe = async (userId: string, conversationId: string) => {
+  const conversation = Types.ObjectId.isValid(conversationId) ? await Conversation.findById(conversationId) : null;
+  const mine = conversation?.participants.find((p) => p.userId.toString() === userId.toString());
+  if (!conversation || !mine) throw new AppError(404, "CONVERSATION_NOT_FOUND");
+  mine.clearedAt = new Date();
+  mine.hidden = true;
+  mine.unreadCount = 0;
+  await conversation.save({ timestamps: false });
+  return { deleted: true };
 };
 
 const markConversationAsRead = async (
@@ -585,6 +638,7 @@ export const ChatServices = {
   getMessages,
   sendMessage,
   markConversationAsRead,
+  deleteForMe,
   getModerationViolationsAdmin,
   liftUserChatRestrictionAdmin,
 };

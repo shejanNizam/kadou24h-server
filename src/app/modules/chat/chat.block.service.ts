@@ -12,7 +12,9 @@ import { Booking } from "../booking/booking.model";
 import { SubOrderStatus } from "../order/order.interface";
 import { SubOrder } from "../order/sub_order.model";
 import { Ride } from "../ride/ride.model";
+import { AppMode } from "../user/user.interface";
 import { User } from "../user/user.model";
+import { VendorProfile } from "../vendor_profile/vendor_profile.model";
 import { ConversationType, IConversation } from "./chat.interface";
 import { RIDE_CHAT_OPEN } from "./chat.start.service";
 import { Conversation } from "./conversation.model";
@@ -83,12 +85,22 @@ const blockedAmong = async (viewerId: string, otherIds: string[]) => {
 };
 
 /** An order, booking or ride between them is still going: messages always get through */
-const inProgress = async (conversation: Pick<IConversation, "type" | "subOrderId" | "rideId">, a: Types.ObjectId, b: Types.ObjectId) => {
+const inProgress = async (conversation: Pick<IConversation, "type" | "subOrderId" | "rideId" | "participants">, a: Types.ObjectId, b: Types.ObjectId) => {
   if (conversation.type === ConversationType.ride && conversation.rideId) {
     return Boolean(await Ride.exists({ _id: conversation.rideId, status: { $in: RIDE_CHAT_OPEN } }));
   }
   if (conversation.type === ConversationType.order && conversation.subOrderId) {
     return Boolean(await SubOrder.exists({ _id: conversation.subOrderId, status: { $nin: FINISHED_ORDER } }));
+  }
+  // Store chat (one per customer and store): any of their orders still going
+  if (conversation.type === ConversationType.buyer_seller) {
+    const customer = conversation.participants.find((p) => p.mode === AppMode.customer);
+    const seller = conversation.participants.find((p) => p.mode === AppMode.vendor);
+    const store = seller ? await VendorProfile.findOne({ userId: seller.userId }).select("_id").lean() : null;
+    if (!customer || !store) return false;
+    return Boolean(
+      await SubOrder.exists({ customerId: customer.userId, vendorId: store._id, status: { $nin: [...FINISHED_ORDER, SubOrderStatus.pending_payment] } }),
+    );
   }
   if (conversation.type === ConversationType.worker) {
     return Boolean(

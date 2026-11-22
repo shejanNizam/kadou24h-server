@@ -167,6 +167,21 @@ const closeJob = async (userId: string, jobId: string) => {
 };
 
 /**
+ * "Delete my job offer" (client, 2026-11-22): a draft, closed or expired offer leaves my list.
+ * A live one must be closed first; one the team removed stays (their decision is on record).
+ * Candidates who applied keep their application and its job title.
+ */
+const DELETABLE_JOB = [JobStatus.draft, JobStatus.closed, JobStatus.expired];
+const deleteMyJob = async (userId: string, jobId: string) => {
+  const job = Types.ObjectId.isValid(jobId) ? await Job.findOne({ _id: jobId, postedBy: userId, isDeleted: false }) : null;
+  if (!job) throw new AppError(httpStatus.NOT_FOUND, "JOB_NOT_FOUND");
+  if (!DELETABLE_JOB.includes(job.status)) throw new AppError(httpStatus.BAD_REQUEST, "JOB_DELETE_NOT_ALLOWED");
+  job.isDeleted = true;
+  await job.save();
+  return { deleted: true };
+};
+
+/**
  * Public search for active jobs.
  */
 const searchJobs = async (query: {
@@ -855,6 +870,7 @@ const unlockCandidateCv = async (
 };
 
 export const JobServices = {
+  deleteMyJob,
   calculateMatchScore,
   createJob,
   updateJob,

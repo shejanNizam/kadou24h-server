@@ -42,6 +42,10 @@ export interface IParticipant {
   mode: AppMode;
   unreadCount: number;
   lastReadAt?: Date;
+  /** "Delete the chat" (for me only, client 2026-11-22): what came before is gone for me */
+  clearedAt?: Date;
+  /** Out of my list until a new message arrives */
+  hidden?: boolean;
 }
 
 export interface ILastMessage {
@@ -49,6 +53,8 @@ export interface ILastMessage {
   type: MessageType;
   senderId?: Types.ObjectId;
   at: Date;
+  /** The order the last message was about (store chat) */
+  subOrderNumber?: string;
 }
 
 export interface IConversationInitial {
@@ -75,6 +81,12 @@ export interface IMessageInitial {
   text?: string;
   mediaUrl?: string;
   mediaDurationSec?: number;
+  /**
+   * Store chat (client, 2026-11-22): one chat per customer and store, like WhatsApp; each
+   * message keeps the order it was written about (shown on the message)
+   */
+  subOrderId?: Types.ObjectId;
+  subOrderNumber?: string;
   moderationStatus: ModerationStatus;
   moderationRules: string[];
   /** Blocked sender: the message is kept for the sender only (never sent to these users) */
