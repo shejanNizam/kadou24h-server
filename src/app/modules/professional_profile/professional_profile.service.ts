@@ -6,7 +6,7 @@ import { IProfessionalProfile } from "./professional_profile.interface";
 import { ProfessionalProfile } from "./professional_profile.model";
 import { escapeRegex } from "../../utils/queryParams";
 import { AuditLogServices } from "../audit_log/audit_log.service";
-import { ConversationType } from "../chat/chat.interface";
+import { ConversationType, MessageType } from "../chat/chat.interface";
 import { Conversation } from "../chat/conversation.model";
 import { Notify } from "../notification/notification.events";
 import { ApprovalStatus, ReviewAction, applyReview, markSubmitted } from "../profile_common/profile.common";
@@ -340,7 +340,15 @@ const submitWorkerApplication = async (userId: string) => {
  */
 const getWorkerSummary = async (userId: string) => {
   const profile = await getMyProfile(userId);
-  const chats = { type: ConversationType.worker, workerProfileId: profile._id, "lastMessage.at": { $exists: true } };
+  // Customer requests (client, 2026-11-23): only chats where someone wrote (not just the
+  // opening safety notice), and not the ones the worker deleted (they come back with a new message)
+  const chats = {
+    type: ConversationType.worker,
+    workerProfileId: profile._id,
+    "lastMessage.at": { $exists: true },
+    "lastMessage.type": { $ne: MessageType.system },
+    participants: { $elemMatch: { userId: profile.userId, hidden: { $ne: true } } },
+  };
   const [conversations, unreadAgg, recent] = await Promise.all([
     Conversation.countDocuments(chats),
     Conversation.aggregate<{ unread: number; unreadChats: number }>([

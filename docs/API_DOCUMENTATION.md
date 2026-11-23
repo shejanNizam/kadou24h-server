@@ -1506,6 +1506,9 @@ const socket = io("http://localhost:5000", { auth: { token: accessToken } });
 
 ## Changelog
 
+### Client feedback (2026-11-23): worker "Customer requests"
+- `GET /professional-profiles/me/worker-summary` → `messages` and `recent` now only count worker chats where someone wrote (not just the opening safety notice), and leave out the chats the worker deleted for themselves (`DELETE /conversations/:id`). A deleted chat comes back with the customer's next message; the customer keeps theirs, and reports / the team still see every message.
+
 ### Client feedback (2026-11-22): store chat, chat alerts, retention, delete
 - **One chat per customer and store** (like WhatsApp). `POST /conversations { type: "order", subOrderId, with: "vendor" }` (customer) or `with: "customer"` (store) now returns the pair's `buyer_seller` chat with `topic: { subOrderId, subOrderNumber }`. Send `subOrderId` with `POST /conversations/:id/messages` to tag a message with its order: messages carry `subOrderId` + `subOrderNumber`, `lastMessage.subOrderNumber` too. A `subOrderId` that isn't this customer's order at this store → 400 `CHAT_ORDER_NOT_IN_CHAT`. Rider chats stay per delivery. At start-up the server merges the old per-order store chats into the store chat (messages keep their order; unread counts, reports, flags and notifications follow). Blocking: while any order between the customer and the store is going on, messages still get through.
 - **Ride chat unread:** `GET /rides/:id`, `/rides/my/current` and `/rides/rider/current` include `chatUnread` (badge on the chat button).

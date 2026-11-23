@@ -677,6 +677,29 @@ const run = async () => {
     r.body.data?.messages?.conversations === 1 && r.body.data?.messages?.unread >= 1 && r.body.data?.recent?.[0]?.peer?.name === "Stranger" && r.body.data?.recent?.[0]?.peer?.phone === undefined,
     JSON.stringify(r.body.data?.messages ?? brief(r)),
   );
+  // Customer requests (client, 2026-11-23): an empty chat isn't a request; the worker can remove one
+  const emptyChat = (await call("POST", "/conversations", { type: "worker", workerProfileId: workerId }, V.token)).body.data?._id;
+  r = await call("GET", "/professional-profiles/me/worker-summary", null, C.token);
+  check(
+    "worker requests: a chat nobody wrote in is not listed",
+    Boolean(emptyChat) && r.body.data?.messages?.conversations === 1 && !(r.body.data?.recent ?? []).some((c) => c._id === emptyChat),
+    JSON.stringify((r.body.data?.recent ?? []).map((c) => c.peer?.name)),
+  );
+  await call("DELETE", `/conversations/${workerChat}`, null, C.token);
+  r = await call("GET", "/professional-profiles/me/worker-summary", null, C.token);
+  const customerKeeps = (await call("GET", `/conversations/${workerChat}/messages`, null, X.token)).body.data ?? [];
+  check(
+    "worker requests: removed from the worker's list, the customer keeps the chat",
+    r.body.data?.messages?.conversations === 0 && (r.body.data?.recent ?? []).length === 0 && customerKeeps.some((m) => m.text === "Bonjour, pouvez-vous venir demain ?"),
+    JSON.stringify([r.body.data?.messages, customerKeeps.length]),
+  );
+  await call("POST", `/conversations/${workerChat}/messages`, { text: "Toujours disponible ?" }, X.token);
+  r = await call("GET", "/professional-profiles/me/worker-summary", null, C.token);
+  check(
+    "worker requests: the customer's next message brings it back",
+    r.body.data?.messages?.conversations === 1 && r.body.data?.recent?.[0]?._id === workerChat && r.body.data?.recent?.[0]?.unreadCount === 1,
+    JSON.stringify(r.body.data?.recent?.[0] ?? brief(r)),
+  );
   r = await call("PUT", "/professional-profiles/me", { idDocument: file("worker-id-new") }, C.token);
   check("new ID document → back to review, hidden meanwhile", r.body.data?.approvalStatus === "pending" && !(await publicIds()).includes(workerId), brief(r));
   await call("PATCH", `/professional-profiles/admin/workers/${workerId}/review`, { action: "approve" }, admin);
