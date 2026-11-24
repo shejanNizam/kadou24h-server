@@ -151,6 +151,7 @@ const getAllRefundsAdmin = catchAsync(async (req: Request, res: Response) => {
     page: Number(req.query.page),
     limit: Number(req.query.limit),
     status: enumQuery(req.query.status, RefundStatus, "status"),
+    overdue: req.query.overdue === "true" ? "true" : undefined,
   });
   sendResponse(res, {
     statusCode: httpStatus.OK,

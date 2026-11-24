@@ -164,6 +164,8 @@ const savedAddress = async (userId: string, addressId?: string): Promise<IAddres
   if (!address?.location) {
     throw new AppError(httpStatus.BAD_REQUEST, "BOOKING_ADDRESS_REQUIRED");
   }
+  // The worker finds the customer by their quartier (client, 2026-11-24)
+  if (!address.neighborhood?.trim()) throw new AppError(httpStatus.BAD_REQUEST, "ADDRESS_NEIGHBORHOOD_REQUIRED");
   return {
     fullName: address.fullName,
     phone: address.phone,

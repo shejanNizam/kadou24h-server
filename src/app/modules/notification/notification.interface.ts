@@ -28,6 +28,20 @@ export enum NotificationType {
   team_message = "team_message",
 }
 
+/**
+ * Important notifications the user can't delete (client, 2026-11-24): refunds, cancellations,
+ * money sent out, security warnings, suspension and messages from the Kadou24h team.
+ * Simple ones (messages, offers, status updates…) can still be deleted.
+ */
+export const KEPT_NOTIFICATIONS: readonly NotificationType[] = [
+  NotificationType.refund_update,
+  NotificationType.order_cancelled,
+  NotificationType.withdrawal_update,
+  NotificationType.moderation_warning,
+  NotificationType.account_suspended,
+  NotificationType.team_message,
+];
+
 export interface ILocalizedMessage {
   fr: string;
   en: string;

@@ -91,6 +91,10 @@ export const partnerErrors = {
   },
 
   // Addresses
+  ADDRESS_NEIGHBORHOOD_REQUIRED: {
+    en: "Add your neighbourhood (quartier) to this address before continuing.",
+    fr: "Ajoutez votre quartier à cette adresse avant de continuer.",
+  },
   ADDRESS_NOT_FOUND: {
     en: "Address not found.",
     fr: "Adresse introuvable.",

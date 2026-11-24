@@ -230,7 +230,11 @@ const run = async () => {
 
   const C = await signup("Customer One", `+22462${stamp}3`);
   r = await call("POST", "/addresses", { fullName: "Customer One", phone: `+22462${stamp}3`, city: "Conakry", location: { lat: 9.53, lng: -13.68 } }, C.token);
+  check("address: the quartier is mandatory (client, 2026-11-24)", r.status === 400, brief(r));
+  r = await call("POST", "/addresses", { fullName: "Customer One", phone: `+22462${stamp}3`, city: "Conakry", neighborhood: "Kipé", location: { lat: 9.53, lng: -13.68 } }, C.token);
   const addressId = r.body.data._id;
+  r = await call("PATCH", `/addresses/${addressId}`, { neighborhood: "" }, C.token);
+  check("address: …and can't be emptied later", r.status === 400, brief(r));
   const X = await signup("Stranger", `+22462${stamp}4`);
   const order = async (items, extra = {}) =>
     payFees(await call("POST", "/orders", { items, addressId, deliveryType: "local", paymentMethod: "cod", ...extra }, C.token), C.token);
@@ -279,6 +283,14 @@ const run = async () => {
     check(`${label}: once delivered, the rider's position is no longer shown`, doneTrack && doneTrack.riderId && doneTrack.riderId.lastLocation === undefined, JSON.stringify(doneTrack?.riderId));
     return legId;
   };
+
+  // An address without a quartier (saved before it was mandatory): seen in the summary, not ordered
+  const noQuartier = { fullName: "Customer One", phone: `+22462${stamp}3`, city: "Conakry", location: { lat: 9.53, lng: -13.68 } };
+  const noQuartierOrder = { items: [{ productId, qty: 1 }], addressSnapshot: noQuartier, deliveryType: "local", paymentMethod: "cod" };
+  r = await call("POST", "/orders/checkout-summary", noQuartierOrder, C.token);
+  check("address: an old one without quartier still gets a summary", ok(r), brief(r));
+  r = await call("POST", "/orders", noQuartierOrder, C.token);
+  check("address: …but no order until the quartier is added", r.status === 400 && r.body.code === "ADDRESS_NEIGHBORHOOD_REQUIRED", brief(r));
 
   // ═════ 1. COD: vendor paid only after the rider's cash is settled ═════
   r = await order([{ productId, qty: 2 }]);
@@ -523,7 +535,7 @@ const run = async () => {
 
   // ═════ 3e. A store that doesn't accept in time loses the order (client, 2026-11-21) ═════
   r = await call("GET", "/settings", null, admin);
-  check("accept delay: 30 minutes by default (admin setting)", r.body.data?.orders?.acceptMinutes === 30, JSON.stringify(r.body.data?.orders));
+  check("accept delay: 8 hours by default (admin setting, client 2026-11-24)", r.body.data?.orders?.acceptMinutes === 480, JSON.stringify(r.body.data?.orders));
   r = await call("PATCH", "/settings", { orders: { acceptMinutes: 2 } }, admin);
   check("accept delay: under 5 minutes is refused", r.status === 400, brief(r));
   const stockLate = await stockOf(productId);
@@ -547,17 +559,17 @@ const run = async () => {
     await mongoose.disconnect();
     await sleep(2500);
   };
-  await ageSub(16);
+  await ageSub(241);
   r = await call("GET", "/notifications?mode=vendor&limit=100", null, V.token);
-  const reminders = (r.body.data ?? []).filter((n) => n.data?.subOrderId === lateSub?._id && /dans les \d+ minutes|within \d+ minutes/.test(`${n.body?.fr ?? n.body} ${n.body?.en ?? ""}`));
+  const reminders = (r.body.data ?? []).filter((n) => n.data?.subOrderId === lateSub?._id && /dans les \d+ h \d\d, sinon|within \d+ h \d\d, or/.test(`${n.body?.fr ?? n.body} ${n.body?.en ?? ""}`));
   check("accept delay: half-way, the store is reminded once", reminders.length === 1, JSON.stringify(reminders.map((n) => n.body)));
   r = await call("GET", `/orders/${lateOrderId}`, null, C.token);
   check("accept delay: …and the order still waits", r.body.data?.subOrders?.[0]?.status === "new", JSON.stringify(r.body.data?.subOrders?.[0]?.status));
-  await ageSub(31);
+  await ageSub(481);
   r = await call("GET", `/orders/${lateOrderId}`, null, C.token);
   const lateNow = r.body.data?.subOrders?.[0];
   check(
-    "accept delay: past 30 minutes → cancelled by the system (code not_accepted)",
+    "accept delay: past 8 hours → cancelled by the system (code not_accepted)",
     lateNow?.status === "cancelled" && lateNow?.cancellation?.by === "system" && lateNow?.cancellation?.code === "not_accepted",
     JSON.stringify(lateNow?.cancellation ?? lateNow?.status),
   );
@@ -943,7 +955,7 @@ const run = async () => {
   const oilId = r.body.data?._id;
   await call("PATCH", `/products/${oilId}/approval`, { approvalStatus: "approved" }, admin);
   const P = await signup("Promo Buyer", `+22462${stamp}9`);
-  r = await call("POST", "/addresses", { fullName: "Promo Buyer", phone: `+22462${stamp}9`, city: "Conakry", location: { lat: 9.55, lng: -13.67 } }, P.token);
+  r = await call("POST", "/addresses", { fullName: "Promo Buyer", phone: `+22462${stamp}9`, city: "Conakry", neighborhood: "Dixinn", location: { lat: 9.55, lng: -13.67 } }, P.token);
   const pAddr = r.body.data?._id;
   const basket = [{ productId, qty: 1 }, { productId: oilId, qty: 2 }]; // 100 000 + 2 × 50 000
   const cart = (extra = {}) => ({ items: basket, addressId: pAddr, deliveryType: "local", paymentMethod: "cod", ...extra });
@@ -1023,6 +1035,19 @@ const run = async () => {
   r = await call("GET", "/payments/admin/refunds?limit=100", null, admin);
   const partRefund = (r.body.data ?? []).find((x) => String(x.orderId?._id ?? x.orderId) === promoOrder?._id);
   check("part cancel (COD): that store's delivery fee, paid online, comes back", partRefund?.status === "pending" && partRefund?.amount === partA?.deliveryFee, JSON.stringify(partRefund ?? brief(r)));
+  // Refunded within 1 to 7 days (client, 2026-11-24)
+  const dueDays = (new Date(partRefund?.dueBy).getTime() - new Date(partRefund?.createdAt).getTime()) / 86_400_000;
+  check("refund: due within 7 days of the request", Math.abs(dueDays - 7) < 0.01, JSON.stringify([partRefund?.createdAt, partRefund?.dueBy]));
+  r = await call("GET", `/orders/${promoOrder?._id}`, null, P.token);
+  check("refund: the customer sees the latest date", (r.body.data?.refunds ?? []).some((x) => x.status === "pending" && x.dueBy === partRefund?.dueBy), JSON.stringify(r.body.data?.refunds ?? brief(r)));
+  check("refund: the customer is told 1 to 7 days", (await call("GET", "/notifications?mode=customer&limit=50", null, P.token)).body.data?.some((n) => n.type === "refund_update" && n.body?.fr?.includes("sous 1 à 7 jours")));
+  r = await call("GET", "/payments/admin/refunds?overdue=true&limit=100", null, admin);
+  check("refund: not late yet", ok(r) && !(r.body.data ?? []).some((x) => x._id === partRefund?._id), brief(r));
+  await db((c) => c.collection("refunds").updateOne({ _id: oid(partRefund?._id) }, { $set: { dueBy: new Date(Date.now() - 3_600_000) } }));
+  r = await call("GET", "/payments/admin/refunds?overdue=true&limit=100", null, admin);
+  check("refund: past 7 days it shows as late for the team", (r.body.data ?? []).some((x) => x._id === partRefund?._id), brief(r));
+  r = await call("GET", "/payments/admin/refunds?status=pending&limit=100", null, admin);
+  check("refund: open requests, the most urgent first", r.body.data?.[0]?._id === partRefund?._id, JSON.stringify((r.body.data ?? []).map((x) => x.dueBy)));
   check("part cancel: the store is told", (await notificationTypes(V.token, "vendor")).includes("order_cancelled"));
   await call("PATCH", `/orders/vendor/sub-orders/${partB?._id}/status`, { status: "accepted" }, W.token);
   await call("PATCH", `/orders/vendor/sub-orders/${partB?._id}/status`, { status: "preparing" }, W.token);
@@ -1198,16 +1223,31 @@ const run = async () => {
   check("team message: the team sees what was sent to that user", ok(r) && r.body.data?.[0]?.title?.fr === "Rappel", brief(r));
 
   // The user deletes their own notifications (client, 2026-10-30)
+  // …but not the important ones: refunds, cancellations, payments, security, team (client, 2026-11-24)
+  const KEPT = ["refund_update", "order_cancelled", "withdrawal_update", "moderation_warning", "account_suspended", "team_message"];
   let mine = (await call("GET", "/notifications?mode=customer&limit=50", null, P.token)).body.data ?? [];
-  r = await call("DELETE", `/notifications/${mine[0]?._id}`, null, W.token);
+  const simple = mine.find((n) => n.canDelete === true);
+  const important = mine.find((n) => n.canDelete === false);
+  check(
+    "notifications: the list says which ones can be deleted",
+    mine.length > 0 && mine.every((n) => n.canDelete === !KEPT.includes(n.type)) && Boolean(simple) && Boolean(important),
+    JSON.stringify(mine.map((n) => [n.type, n.canDelete])),
+  );
+  r = await call("DELETE", `/notifications/${simple?._id}`, null, W.token);
   check("notifications: nobody else can delete mine", r.status === 404, brief(r));
-  r = await call("DELETE", `/notifications/${mine[0]?._id}`, null, P.token);
+  r = await call("DELETE", `/notifications/${important?._id}`, null, P.token);
+  check("notifications: an important one can't be deleted", r.status === 403 && r.body.code === "NOTIFICATION_KEPT", brief(r));
+  r = await call("DELETE", `/notifications/${simple?._id}`, null, P.token);
   check("notifications: delete one", ok(r), brief(r));
   const afterOne = (await call("GET", "/notifications?mode=customer&limit=50", null, P.token)).body.data ?? [];
-  check("notifications: …it is gone", afterOne.length === mine.length - 1 && !afterOne.some((n) => n._id === mine[0]?._id), JSON.stringify([mine.length, afterOne.length]));
+  check("notifications: …it is gone", afterOne.length === mine.length - 1 && !afterOne.some((n) => n._id === simple?._id), JSON.stringify([mine.length, afterOne.length]));
   r = await call("DELETE", "/notifications?mode=customer", null, P.token);
   mine = (await call("GET", "/notifications?mode=customer&limit=50", null, P.token)).body.data ?? [];
-  check("notifications: delete all", ok(r) && r.body.data?.deletedCount === afterOne.length && mine.length === 0, brief(r));
+  check(
+    "notifications: delete all keeps the important ones",
+    ok(r) && r.body.data?.deletedCount === afterOne.filter((n) => n.canDelete).length && mine.length > 0 && mine.every((n) => KEPT.includes(n.type)) && mine.some((n) => n.type === "team_message"),
+    JSON.stringify([r.body.data, mine.map((n) => n.type)]),
+  );
   // ═════ 6. Access control ═════
   r = await call("GET", `/deliveries/${legId}/track`, null, X.token);
   check("stranger cannot track a delivery", r.status === 403, brief(r));

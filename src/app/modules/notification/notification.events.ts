@@ -19,6 +19,14 @@ type SubOrderRef = Pick<ISubOrder, "_id" | "orderId" | "subOrderNumber" | "custo
 export type CancelledBy = "customer" | "vendor" | "admin" | "system";
 
 const gnf = (amount: number) => `${amount.toLocaleString("fr-FR")} GNF`;
+/** 45 → "45 minutes", 240 → "4 h", 270 → "4 h 30" */
+const duration = (minutes: number) => {
+  const h = Math.floor(minutes / 60);
+  const m = Math.round(minutes % 60);
+  if (!h) return { fr: `${m} minutes`, en: `${m} minutes` };
+  const text = m ? `${h} h ${String(m).padStart(2, "0")}` : `${h} h`;
+  return { fr: text, en: text };
+};
 
 const send = (payload: ICreateNotificationPayload) => {
   NotificationServices.createNotification(payload).catch((error) =>
@@ -82,8 +90,8 @@ const orderAcceptReminder = (subOrder: SubOrderRef, minutesLeft: number) =>
       type: NotificationType.order_placed,
       title: { fr: "Commande en attente", en: "Order waiting" },
       body: {
-        fr: `Acceptez la commande ${subOrder.subOrderNumber} dans les ${minutesLeft} minutes, sinon elle sera annulée automatiquement.`,
-        en: `Accept order ${subOrder.subOrderNumber} within ${minutesLeft} minutes, or it will be cancelled automatically.`,
+        fr: `Acceptez la commande ${subOrder.subOrderNumber} dans les ${duration(minutesLeft).fr}, sinon elle sera annulée automatiquement.`,
+        en: `Accept order ${subOrder.subOrderNumber} within ${duration(minutesLeft).en}, or it will be cancelled automatically.`,
       },
       data: orderData(subOrder),
     });
@@ -141,8 +149,8 @@ const refundRequested = (refund: { customerId: Id; orderId: Id; amount: number }
     type: NotificationType.refund_update,
     title: { fr: "Remboursement en cours", en: "Refund in progress" },
     body: {
-      fr: `Commande ${orderNumber} : un remboursement de ${gnf(refund.amount)} est en cours de vérification par l'équipe Kadou24h.`,
-      en: `Order ${orderNumber}: a refund of ${gnf(refund.amount)} is being reviewed by the Kadou24h team.`,
+      fr: `Commande ${orderNumber} : un remboursement de ${gnf(refund.amount)} est en cours. L'équipe Kadou24h vous rembourse sous 1 à 7 jours.`,
+      en: `Order ${orderNumber}: a refund of ${gnf(refund.amount)} is on its way. The Kadou24h team refunds you within 1 to 7 days.`,
     },
     data: { orderId: String(refund.orderId) },
   });

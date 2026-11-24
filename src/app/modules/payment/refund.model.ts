@@ -38,6 +38,7 @@ const refundSchema = new Schema<IRefund>(
     rejectionReason: { type: String, trim: true },
     issuedBy: { type: Schema.Types.ObjectId, ref: "User" },
     processedAt: { type: Date },
+    dueBy: { type: Date },
   },
   {
     timestamps: true,
@@ -47,6 +48,7 @@ const refundSchema = new Schema<IRefund>(
 
 refundSchema.index({ status: 1, createdAt: -1 });
 refundSchema.index({ orderId: 1 });
+refundSchema.index({ status: 1, dueBy: 1 });
 // At most one open request per order: new cancellations / changes add to it
 refundSchema.index(
   { orderId: 1 },

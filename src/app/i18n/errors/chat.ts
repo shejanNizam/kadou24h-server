@@ -89,6 +89,10 @@ export const chatErrors = {
     en: "Notification not found.",
     fr: "Notification introuvable.",
   },
+  NOTIFICATION_KEPT: {
+    en: "This notification is important (refund, cancellation, payment or security) and is kept in your history.",
+    fr: "Cette notification est importante (remboursement, annulation, paiement ou sécurité) et reste dans votre historique.",
+  },
   BROADCAST_NO_RECIPIENTS: {
     en: "Nobody to send it to: no approved account in the chosen groups.",
     fr: "Personne à qui l'envoyer : aucun compte approuvé dans les groupes choisis.",

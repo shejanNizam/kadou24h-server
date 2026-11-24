@@ -1506,6 +1506,12 @@ const socket = io("http://localhost:5000", { auth: { token: accessToken } });
 
 ## Changelog
 
+### Client feedback (2026-11-24): quartier, refunds within 7 days, 8-hour accept delay, kept notifications
+- **Quartier mandatory.** `POST /addresses` needs `neighborhood` (2–80 chars); `PATCH` can't empty it. Addresses saved before stay usable for `POST /orders/checkout-summary`, but `POST /orders` and `POST /bookings` answer 400 `ADDRESS_NEIGHBORHOOD_REQUIRED` until the quartier is added (the app asks to complete the address).
+- **Refunds within 1 to 7 days.** Each refund request gets `dueBy` (opening + 7 days; open requests from before get it at start-up). The customer sees it on `GET /orders/:id` → `refunds[].dueBy` and in the notification. `GET /payments/admin/refunds?overdue=true` lists open requests past `dueBy`; with `status=pending` the most urgent come first.
+- **A store has 8 hours to accept** a new order by default (`settings.orders.acceptMinutes` default 480; the dashboard types it in hours). The half-way reminder speaks in hours ("dans les 3 h 59").
+- **Important notifications can't be deleted:** `refund_update`, `order_cancelled`, `withdrawal_update`, `moderation_warning`, `account_suspended`, `team_message`. `GET /notifications` → each item has `canDelete`; `DELETE /notifications/:id` on one of them → 403 `NOTIFICATION_KEPT`; `DELETE /notifications` (all) skips them.
+
 ### Client feedback (2026-11-23): worker "Customer requests"
 - `GET /professional-profiles/me/worker-summary` → `messages` and `recent` now only count worker chats where someone wrote (not just the opening safety notice), and leave out the chats the worker deleted for themselves (`DELETE /conversations/:id`). A deleted chat comes back with the customer's next message; the customer keeps theirs, and reports / the team still see every message.
 

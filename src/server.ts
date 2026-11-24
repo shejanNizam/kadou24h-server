@@ -16,6 +16,7 @@ import { ProfessionalProfileServices } from "./app/modules/professional_profile/
 import { TeamBroadcastServices } from "./app/modules/notification/team_broadcast.service";
 import { ChatMergeServices } from "./app/modules/chat/chat.merge.service";
 import { ChatRetentionServices } from "./app/modules/chat/chat.retention.service";
+import { RefundServices } from "./app/modules/payment/refund.service";
 
 let server: Server;
 
@@ -33,6 +34,8 @@ async function main() {
     // One chat per customer and store: chats opened per order are merged (once)
     const mergedChats = await ChatMergeServices.mergeStoreChats();
     if (mergedChats) logger.info(`Merged ${mergedChats} per-order store chat(s) into store chats`);
+    // Refunds within 7 days: open requests from before get their due date
+    await RefundServices.backfillDueDates();
 
     const httpServer = http.createServer(app);
     await initSocket(httpServer);

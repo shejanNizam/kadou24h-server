@@ -96,6 +96,8 @@ export interface IRefund extends Document {
   rejectionReason?: string;
   issuedBy?: Types.ObjectId;
   processedAt?: Date;
+  /** The customer is refunded within 1 to 7 days (client, 2026-11-24): the team must send it by then */
+  dueBy?: Date;
   createdAt: Date;
   updatedAt: Date;
 }

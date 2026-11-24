@@ -13,7 +13,8 @@ const addressFields = {
   region: text(60),
   city: text(60).min(2, { message: "TEXT_TOO_SHORT" }),
   commune: text(60),
-  neighborhood: text(80),
+  // Mandatory (client, 2026-11-24): riders and workers find the customer by their quartier
+  neighborhood: text(80).min(2, { message: "TEXT_TOO_SHORT" }),
   landmark: text(200),
   directions: text(500),
   location: latLngSchema,
@@ -24,7 +25,7 @@ const addressFields = {
 export const createAddressZodSchema = z
   .object(addressFields)
   .partial()
-  .required({ fullName: true, phone: true, city: true, location: true })
+  .required({ fullName: true, phone: true, city: true, neighborhood: true, location: true })
   .strict();
 
 export const updateAddressZodSchema = z.object(addressFields).partial().strict();

@@ -592,6 +592,8 @@ const getAllRefundsAdmin = async (query: {
   page?: number;
   limit?: number;
   status?: RefundStatus;
+  /** "true": open requests past their 7-day due date */
+  overdue?: string;
 }) => {
   const page = Math.max(1, Number(query.page) || 1);
   const limit = Math.max(1, Math.min(50, Number(query.limit) || 20));
@@ -599,6 +601,9 @@ const getAllRefundsAdmin = async (query: {
 
   const filter: Record<string, unknown> = {};
   if (query.status) filter.status = query.status;
+  if (query.overdue === "true") Object.assign(filter, { status: RefundStatus.pending, dueBy: { $lt: new Date() } });
+  // Open requests: the most urgent (due first) on top
+  const open = filter.status === RefundStatus.pending;
 
   const [refunds, total] = await Promise.all([
     Refund.find(filter)
@@ -606,7 +611,7 @@ const getAllRefundsAdmin = async (query: {
       .populate("orderId", "orderNumber total paymentMethod paymentStatus status")
       .populate("lines.subOrderId", "subOrderNumber")
       .populate("issuedBy", "name")
-      .sort({ createdAt: -1 })
+      .sort(open ? { dueBy: 1, createdAt: 1 } : { createdAt: -1 })
       .skip(skip)
       .limit(limit),
     Refund.countDocuments(filter),

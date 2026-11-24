@@ -2,7 +2,7 @@
  * A store must accept a new order in time (client, 2026-11-21: "an unaccepted order should be
  * cancelled automatically after a delay you recommend, and the customer notified").
  *
- * - The delay is settings.orders.acceptMinutes (default 30), counted from `awaitingSince`
+ * - The delay is settings.orders.acceptMinutes (default 8 hours, client 2026-11-24), counted from `awaitingSince`
  *   (when the store got the order: placed, or paid for online orders).
  * - Half-way, the store gets one reminder.
  * - Past the delay the sub-order is cancelled by the system through the usual cancel path:
@@ -20,7 +20,7 @@ import { SubOrder } from "./sub_order.model";
 
 const MINUTE = 60_000;
 const BATCH = 200;
-const DEFAULT_ACCEPT_MINUTES = 30;
+const DEFAULT_ACCEPT_MINUTES = 8 * 60;
 
 /** Orders made before `awaitingSince` existed count from their creation */
 const waitingSince = (cutoff: Date) => ({

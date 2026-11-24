@@ -1,7 +1,7 @@
 import { Types } from "mongoose";
 import { emitToUser } from "../../../socket/socket";
 import AppError from "../../errorHelpers/AppError";
-import { INotification, ILocalizedMessage, NotificationType } from "./notification.interface";
+import { INotification, ILocalizedMessage, KEPT_NOTIFICATIONS, NotificationType } from "./notification.interface";
 import { Notification } from "./notification.model";
 import { logger } from "../../utils/logger";
 import { sendPushToUser } from "../../utils/pushNotification";
@@ -144,7 +144,8 @@ const getMyNotifications = async (
       totalPage: Math.ceil(total / limit),
       unreadCount,
     },
-    data,
+    // The app shows a lock instead of the delete button on the important ones
+    data: data.map((n) => ({ ...n, canDelete: !KEPT_NOTIFICATIONS.includes(n.type) })),
   };
 };
 
@@ -175,17 +176,19 @@ const markAllAsRead = async (userId: string, mode?: string) => {
   return { modifiedCount: result.modifiedCount };
 };
 
-/** The user deletes one of their notifications (client, 2026-10-30) */
+/** The user deletes one of their notifications (client, 2026-10-30); important ones stay (2026-11-24) */
 const deleteNotification = async (userId: string, notificationId: string) => {
-  const result = Types.ObjectId.isValid(notificationId)
-    ? await Notification.deleteOne({ _id: notificationId, userId: new Types.ObjectId(userId) })
-    : { deletedCount: 0 };
-  if (!result.deletedCount) throw new AppError(httpStatus.NOT_FOUND, "NOTIFICATION_NOT_FOUND");
+  const notification = Types.ObjectId.isValid(notificationId)
+    ? await Notification.findOne({ _id: notificationId, userId: new Types.ObjectId(userId) }).select("type").lean()
+    : null;
+  if (!notification) throw new AppError(httpStatus.NOT_FOUND, "NOTIFICATION_NOT_FOUND");
+  if (KEPT_NOTIFICATIONS.includes(notification.type)) throw new AppError(httpStatus.FORBIDDEN, "NOTIFICATION_KEPT");
+  await Notification.deleteOne({ _id: notification._id });
 };
 
-/** "Delete all" in one mode's list (with the account-wide ones that list shows) */
+/** "Delete all" in one mode's list (with the account-wide ones that list shows); important ones stay */
 const deleteAllNotifications = async (userId: string, mode?: string) => {
-  const filter: Record<string, unknown> = { userId: new Types.ObjectId(userId) };
+  const filter: Record<string, unknown> = { userId: new Types.ObjectId(userId), type: { $nin: KEPT_NOTIFICATIONS } };
   if (mode) Object.assign(filter, modeFilter(mode));
   const result = await Notification.deleteMany(filter);
   return { deletedCount: result.deletedCount };

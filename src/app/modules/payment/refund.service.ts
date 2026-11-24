@@ -9,6 +9,8 @@
  * - Disputes and manual refunds are created already approved (`issueRefund`).
  *
  * Never more than the customer actually paid: paid − refunded − already requested.
+ * The customer is refunded within 1 to 7 days (client, 2026-11-24): each request has a
+ * `dueBy` date the team sees in the dashboard (late ones stand out), the customer sees it too.
  */
 import httpStatus from "http-status";
 import { Types } from "mongoose";
@@ -35,6 +37,10 @@ import { Refund } from "./refund.model";
 type OrderDoc = IOrder;
 
 const PAID = [OrderPaymentStatus.paid, OrderPaymentStatus.partially_refunded];
+
+const DAY = 24 * 60 * 60 * 1000;
+export const REFUND_DUE_DAYS = 7;
+const dueFrom = (from: Date) => new Date(from.getTime() + REFUND_DUE_DAYS * DAY);
 
 // refId is Mixed: payments started from the app store the order id as a string
 const findOrderPayment = (orderId: Types.ObjectId) =>
@@ -112,6 +118,7 @@ const requestRefund = async (params: {
             source: params.source,
             reason: params.reason,
             ...(params.subOrderId && { subOrderId: line.subOrderId }),
+            dueBy: dueFrom(line.at),
           },
         },
         { upsert: true, returnDocument: "after" },
@@ -313,11 +320,20 @@ const issueRefund = async (
 /** The customer's view on the order screen (no admin notes). */
 const getOrderRefunds = (orderId: Types.ObjectId | string) =>
   Refund.find({ orderId })
-    .select("amount requestedAmount status source transactionId rejectionReason processedAt createdAt")
+    .select("amount requestedAmount status source transactionId rejectionReason processedAt dueBy createdAt")
     .sort({ createdAt: -1 })
     .lean();
 
+/** Requests opened before `dueBy` existed: 7 days from their opening (runs at start-up) */
+const backfillDueDates = async () => {
+  const result = await Refund.updateMany({ status: RefundStatus.pending, dueBy: { $exists: false } }, [
+    { $set: { dueBy: { $add: ["$createdAt", REFUND_DUE_DAYS * DAY] } } },
+  ], { updatePipeline: true });
+  if (result.modifiedCount) logger.info(`Refunds: due date set on ${result.modifiedCount} open request(s)`);
+};
+
 export const RefundServices = {
+  backfillDueDates,
   requestRefund,
   requestRemainingIfCancelled,
   processRefund,

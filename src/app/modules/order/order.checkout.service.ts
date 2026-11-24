@@ -159,12 +159,14 @@ const calculateCheckout = async (
   customerId: string,
   payload: ICheckoutSummaryInput,
   /** Placing the order: a bad promo code is an error (the summary only reports it) */
-  opts: { strictCoupon?: boolean } = {},
+  opts: { strictCoupon?: boolean; placing?: boolean } = {},
 ) => {
   const addressSnapshot = await resolveAddress(customerId, {
     addressId: payload.addressId,
     addressSnapshot: payload.addressSnapshot,
   });
+  // The quartier is mandatory (client, 2026-11-24); the summary still shows, the app asks to complete it
+  if (opts.placing && !addressSnapshot.neighborhood?.trim()) throw new AppError(httpStatus.BAD_REQUEST, "ADDRESS_NEIGHBORHOOD_REQUIRED");
 
   // Determine items to checkout
   let itemInputs: ICheckoutItemInput[];
@@ -466,7 +468,7 @@ const placeOrder = async (
   customerId: string,
   payload: ICheckoutSummaryInput,
 ) => {
-  const calculation = await calculateCheckout(customerId, payload, { strictCoupon: true });
+  const calculation = await calculateCheckout(customerId, payload, { strictCoupon: true, placing: true });
   if (calculation.paymentMethod === PaymentMethod.cod && !calculation.cod.allowed) {
     throw new AppError(
       httpStatus.BAD_REQUEST,

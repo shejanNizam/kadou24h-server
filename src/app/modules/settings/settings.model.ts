@@ -47,7 +47,7 @@ const settingsSchema = new Schema<ISettings>(
     },
 
     orders: {
-      acceptMinutes: { type: Number, default: 30, min: 5, max: 1440 },
+      acceptMinutes: { type: Number, default: 480, min: 5, max: 1440 },
     },
 
     rides: {
