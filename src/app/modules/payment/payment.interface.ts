@@ -108,12 +108,27 @@ export enum DisputeStatus {
   rejected = "rejected",
 }
 
+/**
+ * What went wrong (client, 2026-11-24): a delivery problem only on a store part that was
+ * delivered; "payment" only when money was paid online. Older disputes have no type.
+ */
+export enum DisputeType {
+  not_received = "not_received",
+  damaged = "damaged",
+  wrong_item = "wrong_item",
+  missing_item = "missing_item",
+  payment = "payment",
+}
+
 export interface IDispute extends Document {
   _id: Types.ObjectId;
   orderId: Types.ObjectId;
   subOrderId?: Types.ObjectId;
   customerId: Types.ObjectId;
+  /** What the customer paid for the part in question (never more) */
   amount?: number;
+  type?: DisputeType;
+  /** The customer's words */
   reason: string;
   adminResolution?: string;
   status: DisputeStatus;

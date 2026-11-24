@@ -22,6 +22,7 @@ import { ApplicationStatus, JobStatus } from "../job/job.interface";
 import { JobApplication } from "../job/job_application.model";
 import {
   DisputeStatus,
+  DisputeType,
   PaymentMethod,
   PaymentPurpose,
   PaymentStatus,
@@ -30,6 +31,8 @@ import {
 import { Payment } from "./payment.model";
 import { Refund } from "./refund.model";
 import { Dispute } from "./dispute.model";
+import { DELIVERY_PROBLEMS, disputeTargets } from "./dispute.rules";
+import { SubOrder } from "../order/sub_order.model";
 import { gatewayForWebhook, isDemoPayments, paymentGateway } from "./gateway";
 import type { WebhookRequest } from "./gateway/gateway.interface";
 import { User } from "../user/user.model";
@@ -330,13 +333,15 @@ const issueRefund = (adminUserId: string, payload: Parameters<typeof RefundServi
   RefundServices.issueRefund(adminUserId, payload);
 
 /**
- * Customer files a dispute for an order or sub-order.
+ * Customer files a dispute for an order or one store part. The rules (what can be
+ * reported where, one open at a time, amount ≤ what was paid) live in dispute.rules.
  */
 const createDispute = async (
   customerId: string,
   payload: {
     orderId: string;
     subOrderId?: string;
+    type?: DisputeType;
     amount?: number;
     reason: string;
     notes?: string;
@@ -349,17 +354,47 @@ const createDispute = async (
     throw new AppError(httpStatus.FORBIDDEN, "DISPUTE_FORBIDDEN");
   }
 
-  const dispute = await Dispute.create({
+  const subOrders = await SubOrder.find({ orderId: order._id }).select("status total").lean();
+  // One store: the dispute is about that store's part
+  const subOrderId = payload.subOrderId ?? (subOrders.length === 1 ? String(subOrders[0]._id) : null);
+  if (subOrderId && !subOrders.some((s) => String(s._id) === subOrderId)) {
+    throw new AppError(httpStatus.NOT_FOUND, "ORDER_NOT_FOUND");
+  }
+  // Apps from before the type existed: treated as a delivery problem (the strictest rule)
+  const type = payload.type ?? DisputeType.missing_item;
+
+  const targets = await disputeTargets(order, subOrders);
+  const target = targets.find((t) => t.subOrderId === subOrderId);
+  const open = await Dispute.exists({
     orderId: order._id,
-    subOrderId: payload.subOrderId ? new Types.ObjectId(payload.subOrderId) : undefined,
-    customerId: new Types.ObjectId(customerId),
-    amount: payload.amount || order.total,
-    reason: payload.reason,
-    notes: payload.notes,
+    subOrderId: subOrderId ? new Types.ObjectId(subOrderId) : { $exists: false },
     status: DisputeStatus.open,
   });
+  if (open) throw new AppError(httpStatus.CONFLICT, "DISPUTE_ALREADY_OPEN");
+  if (!target?.types.includes(type)) {
+    throw new AppError(
+      httpStatus.BAD_REQUEST,
+      DELIVERY_PROBLEMS.includes(type) ? "DISPUTE_NOT_DELIVERED" : "DISPUTE_NOTHING_PAID",
+    );
+  }
+  const maxAmount = target.maxAmount[type] as number;
 
-  return dispute;
+  try {
+    return await Dispute.create({
+      orderId: order._id,
+      ...(subOrderId && { subOrderId: new Types.ObjectId(subOrderId) }),
+      customerId: new Types.ObjectId(customerId),
+      type,
+      amount: Math.min(payload.amount ?? maxAmount, maxAmount),
+      reason: payload.reason,
+      notes: payload.notes,
+      status: DisputeStatus.open,
+    });
+  } catch (error) {
+    // Sent twice at the same time: the unique index kept one
+    if ((error as { code?: number }).code === 11000) throw new AppError(httpStatus.CONFLICT, "DISPUTE_ALREADY_OPEN");
+    throw error;
+  }
 };
 
 /**

@@ -445,6 +445,33 @@ const run = async () => {
   check("prepaid: vendor paid at delivery", vw.availableBalance === before + paidSub.vendorEarning, JSON.stringify([before, vw.availableBalance]));
   r = await call("POST", `/orders/admin/sub-orders/${paidSub._id}/cancel`, { reason: "Too late to cancel" }, admin);
   check("admin cannot cancel a delivered sub-order (refund instead)", r.status === 400, brief(r));
+  // Delivered and paid online: every kind of problem; amount capped at what was paid; one open at a time
+  r = await call("GET", `/orders/${paidOrder._id}`, null, C.token);
+  const paidTargets = r.body.data?.disputable ?? [];
+  check(
+    "dispute: delivered + paid online → delivery and payment problems offered",
+    paidTargets.length === 1 && ["not_received", "damaged", "wrong_item", "missing_item", "payment"].every((x) => paidTargets[0].types.includes(x)),
+    JSON.stringify(paidTargets),
+  );
+  check("dispute: a finished order with nothing open can be deleted", r.body.data?.canDelete === true && !r.body.data?.deleteBlock, JSON.stringify(r.body.data?.deleteBlock));
+  r = await call("POST", "/payments/disputes", { orderId: paidOrder._id, subOrderId: paidSub._id, type: "missing_item", amount: 99_000_000, reason: "Article manquant — one bottle" }, C.token);
+  const paidDispute = r.body.data;
+  check("dispute: amount never above what was paid for that part", r.status === 201 && paidDispute?.type === "missing_item" && paidDispute?.amount === paidSubNow.total, brief(r));
+  r = await call("POST", "/payments/disputes", { orderId: paidOrder._id, type: "damaged", reason: "Also damaged here" }, C.token);
+  check("dispute: a second open one on the same part is refused", r.status === 409 && r.body.code === "DISPUTE_ALREADY_OPEN", brief(r));
+  r = await call("GET", `/orders/${paidOrder._id}`, null, C.token);
+  check(
+    "dispute: while open → nothing more to report, no delete",
+    (r.body.data?.disputable ?? []).length === 0 && r.body.data?.canDelete === false && r.body.data?.deleteBlock === "ORDER_DELETE_DISPUTE_OPEN",
+    JSON.stringify([r.body.data?.disputable, r.body.data?.deleteBlock]),
+  );
+  r = await call("DELETE", `/orders/my-orders/${paidOrder._id}`, null, C.token);
+  check("order history: refused while a reported problem is open", r.status === 400 && r.body.code === "ORDER_DELETE_DISPUTE_OPEN", brief(r));
+  r = await call("GET", "/payments/admin/disputes?status=open&limit=50", null, admin);
+  check("admin: the dispute shows its type", (r.body.data ?? []).some((d) => d._id === paidDispute?._id && d.type === "missing_item"), brief(r));
+  await call("PATCH", `/payments/admin/disputes/${paidDispute?._id}/resolve`, { status: "rejected", adminResolution: "Checked with the store" }, admin);
+  r = await call("GET", `/orders/${paidOrder._id}`, null, C.token);
+  check("dispute: once handled → can report again and delete", (r.body.data?.disputable ?? []).length === 1 && r.body.data?.canDelete === true, JSON.stringify([r.body.data?.disputable, r.body.data?.canDelete]));
 
   // ═════ 3b. Unpaid online order: cancelled when the payment window is over ═════
   const stockB = await stockOf(productId);
@@ -596,6 +623,25 @@ const run = async () => {
     feeSteps.length > 1 && feeSteps.every((s) => s.note === undefined || s.note === "Changed my mind") && feeSteps.at(-1)?.params?.by === "customer",
     JSON.stringify(feeSteps),
   );
+  // Client, 2026-11-24 (AP21): cancelled before delivery → only a payment problem; no delete while the refund runs
+  const feeDetails = r.body.data;
+  const feeTargets = feeDetails?.disputable ?? [];
+  check(
+    "dispute: nothing delivered → only a payment problem is offered",
+    feeTargets.length === 1 && feeTargets[0].subOrderId === feeDetails?.subOrders?.[0]?._id && feeTargets[0].types.join() === "payment",
+    JSON.stringify(feeTargets),
+  );
+  r = await call("POST", "/payments/disputes", { orderId: feeOrder?._id, type: "missing_item", reason: "Article manquant" }, C.token);
+  check("dispute: 'missing item' on an order never delivered is refused", r.status === 400 && r.body.code === "DISPUTE_NOT_DELIVERED", brief(r));
+  r = await call("POST", "/payments/disputes", { orderId: feeOrder?._id, reason: "Old app, no type sent" }, C.token);
+  check("dispute: an older app (no type) gets the delivery rule", r.status === 400 && r.body.code === "DISPUTE_NOT_DELIVERED", brief(r));
+  check(
+    "order history: no delete while the refund is pending (shown to the app)",
+    feeDetails?.canDelete === false && feeDetails?.deleteBlock === "ORDER_DELETE_REFUND_PENDING",
+    JSON.stringify([feeDetails?.canDelete, feeDetails?.deleteBlock]),
+  );
+  r = await call("DELETE", `/orders/my-orders/${feeOrder?._id}`, null, C.token);
+  check("order history: …and the server refuses it", r.status === 400 && r.body.code === "ORDER_DELETE_REFUND_PENDING", brief(r));
 
   // ═════ 4. Cancellations: stock and escrow restored exactly once ═════
   let stock = await stockOf(productId);
@@ -1448,6 +1494,14 @@ const run = async () => {
   check("order history: nobody else can delete my order", r.status === 404 && r.body.code === "ORDER_NOT_FOUND", brief(r));
   r = await call("DELETE", `/orders/my-orders/${cancelOrder._id}`, null, W.token, { "Accept-Language": "fr" });
   check("i18n: ORDER_NOT_FOUND in French", r.body.message === "Commande introuvable.", brief(r));
+  // Its fees were paid online: the refund must be done first (client, 2026-11-24)
+  r = await call("GET", `/orders/${cancelOrder._id}`, null, C.token);
+  const cancelRefund = (r.body.data?.refunds ?? []).find((x) => x.status === "pending");
+  r = await call("DELETE", `/orders/my-orders/${cancelOrder._id}`, null, C.token);
+  check("order history: a cancelled order waits for its refund", r.status === 400 && r.body.code === "ORDER_DELETE_REFUND_PENDING" && Boolean(cancelRefund), brief(r));
+  await call("PATCH", `/payments/admin/refunds/${cancelRefund?._id}`, { status: "completed", transactionId: "OM-HIST-1" }, admin);
+  r = await call("GET", `/orders/${cancelOrder._id}`, null, C.token);
+  check("refund done: a cancelled order shows its refund state (not 'to pay')", r.body.data?.order?.status === "cancelled" && r.body.data?.canDelete === true, JSON.stringify([r.body.data?.order?.status, r.body.data?.canDelete]));
   r = await call("DELETE", `/orders/my-orders/${cancelOrder._id}`, null, C.token);
   check("order history: the customer deletes a cancelled order", ok(r), brief(r));
   r = await call("GET", "/orders/my-orders?limit=50", null, C.token);
@@ -1627,8 +1681,18 @@ const run = async () => {
   const unpaid = r.body.data.order;
   r = await call("POST", "/payments/admin/refunds", { orderId: unpaid._id, amount: 1000, reason: "Test" }, admin);
   check("admin: no refund for an unpaid order", r.status === 400, brief(r));
-  r = await call("POST", "/payments/disputes", { orderId: unpaid._id, reason: "Never arrived here" }, C.token);
-  const disputeId = r.body.data?._id;
+  r = await order([{ productId, qty: 1 }], { paymentMethod: "orange_money" });
+  const notPaid = r.body.data.order;
+  r = await call("GET", `/orders/${notPaid._id}`, null, C.token);
+  check("dispute: online order not paid yet → nothing to report", (r.body.data?.disputable ?? []).length === 0, JSON.stringify(r.body.data?.disputable));
+  r = await call("POST", "/payments/disputes", { orderId: notPaid._id, type: "payment", reason: "Charged twice?" }, C.token);
+  check("dispute: a payment problem without any payment is refused", r.status === 400 && r.body.code === "DISPUTE_NOTHING_PAID", brief(r));
+  await call("POST", `/orders/${notPaid._id}/cancel`, { reason: "Cleanup run" }, C.token);
+  // A dispute from before the rules (like AP21's): the admin can still handle it
+  const disputeId = await db(async (c) => {
+    const res = await c.collection("disputes").insertOne({ orderId: oid(unpaid._id), customerId: oid(C.id), amount: 1000, reason: "Never arrived here", status: "open", createdAt: new Date(), updatedAt: new Date() });
+    return String(res.insertedId);
+  });
   r = await call("PATCH", `/payments/admin/disputes/${disputeId}/resolve`, { status: "resolved", adminResolution: "Refunding", issueRefund: true, refundAmount: 1000 }, admin);
   const disputeAfter = (await call("GET", "/payments/admin/disputes?status=open", null, admin)).body.data?.find((d) => d._id === disputeId);
   check("admin: a failed refund keeps the dispute open", r.status === 400 && !!disputeAfter, brief(r));

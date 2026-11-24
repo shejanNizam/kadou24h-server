@@ -113,6 +113,18 @@ export const paymentErrors = {
     en: "You cannot open a dispute on this order.",
     fr: "Vous ne pouvez pas ouvrir de litige sur cette commande.",
   },
+  DISPUTE_NOT_DELIVERED: {
+    en: "This part of the order was not delivered: you can only report a delivery problem once it has been delivered.",
+    fr: "Cette partie de la commande n'a pas été livrée : un problème de livraison ne peut être signalé qu'après la livraison.",
+  },
+  DISPUTE_NOTHING_PAID: {
+    en: "Nothing was paid online for this order: there is no payment to dispute.",
+    fr: "Rien n'a été payé en ligne pour cette commande : il n'y a pas de paiement à contester.",
+  },
+  DISPUTE_ALREADY_OPEN: {
+    en: "You already reported a problem here: our team is looking into it.",
+    fr: "Vous avez déjà signalé un problème ici : notre équipe s'en occupe.",
+  },
   DISPUTE_NOT_FOUND: {
     en: "Dispute not found.",
     fr: "Litige introuvable.",

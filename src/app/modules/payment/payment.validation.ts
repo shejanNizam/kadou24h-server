@@ -1,6 +1,7 @@
 import z from "zod";
 import {
   DisputeStatus,
+  DisputeType,
   PaymentMethod,
   PaymentPurpose,
 } from "./payment.interface";
@@ -61,8 +62,10 @@ export const createDisputeSchema = z.object({
     .string()
     .regex(/^[0-9a-fA-F]{24}$/, "INVALID_ID")
     .optional(),
+  // Optional only for apps from before it existed (then treated as a delivery problem)
+  type: z.enum(DisputeType).optional(),
   amount: z.number().int().min(1).optional(),
-  reason: z.string().trim().min(5, "REASON_TOO_SHORT"),
+  reason: z.string().trim().min(5, "REASON_TOO_SHORT").max(1000),
   notes: z.string().optional(),
 });
 

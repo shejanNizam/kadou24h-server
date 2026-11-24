@@ -1506,6 +1506,18 @@ const socket = io("http://localhost:5000", { auth: { token: accessToken } });
 
 ## Changelog
 
+### Client feedback (2026-11-24, AP21): disputes only where they make sense, no delete while money is pending
+- **Disputes have a `type`:** `not_received`, `damaged`, `wrong_item`, `missing_item` (delivery problems) or `payment`. `POST /payments/disputes { orderId, subOrderId?, type, reason }`:
+  - a delivery problem only on a store part that was **delivered** → else 400 `DISPUTE_NOT_DELIVERED`;
+  - `payment` only when money was paid online (COD: the fees) → else 400 `DISPUTE_NOTHING_PAID`;
+  - one open dispute per store part (or per whole order) → 409 `DISPUTE_ALREADY_OPEN` (unique index);
+  - `amount` is capped at what was paid for that part (no longer the order total);
+  - a `subOrderId` from another order → 404; one-store orders default to that store's part;
+  - no `type` (older apps) = treated as a delivery problem.
+- `GET /orders/:id` (customer) also returns `disputable: [{ subOrderId | null, types, maxAmount }]` (empty → nothing to report; the app hides "Signaler un problème"), `canDelete` and `deleteBlock`.
+- `DELETE /orders/my-orders/:id` → 400 `ORDER_DELETE_REFUND_PENDING` while a refund is pending, 400 `ORDER_DELETE_DISPUTE_OPEN` while a dispute is open (besides `ORDER_DELETE_IN_PROGRESS`).
+- Admin `GET /payments/admin/disputes` items carry `type` (older ones have none).
+
 ### Client feedback (2026-11-24): quartier, refunds within 7 days, 8-hour accept delay, kept notifications
 - **Quartier mandatory.** `POST /addresses` needs `neighborhood` (2–80 chars); `PATCH` can't empty it. Addresses saved before stay usable for `POST /orders/checkout-summary`, but `POST /orders` and `POST /bookings` answer 400 `ADDRESS_NEIGHBORHOOD_REQUIRED` until the quartier is added (the app asks to complete the address).
 - **Refunds within 1 to 7 days.** Each refund request gets `dueBy` (opening + 7 days; open requests from before get it at start-up). The customer sees it on `GET /orders/:id` → `refunds[].dueBy` and in the notification. `GET /payments/admin/refunds?overdue=true` lists open requests past `dueBy`; with `status=pending` the most urgent come first.

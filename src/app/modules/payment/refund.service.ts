@@ -52,6 +52,17 @@ const findOrderPayment = (orderId: Types.ObjectId) =>
  */
 const paidAmount = async (order: OrderDoc) => (await findOrderPayment(order._id))?.amount ?? order.total;
 
+/**
+ * Money the customer paid online for this order, 0 if none (cash on delivery: only the
+ * fees, once paid). Used to cap a payment dispute.
+ */
+const paidOnlineAmount = async (order: OrderDoc) => {
+  const isCod = order.paymentMethod === OrderPaymentMethod.cod;
+  const paid = isCod ? Boolean(order.feesPaidAt) : order.paymentStatus !== OrderPaymentStatus.unpaid;
+  if (!paid) return 0;
+  return (await findOrderPayment(order._id))?.amount ?? (isCod ? (order.upfrontAmount ?? 0) : order.total);
+};
+
 const sumRefunds = async (orderId: Types.ObjectId, statuses: RefundStatus[], excludeId?: Types.ObjectId) => {
   const [row] = await Refund.aggregate<{ total: number }>([
     { $match: { orderId, status: { $in: statuses }, ...(excludeId && { _id: { $ne: excludeId } }) } },
@@ -339,4 +350,5 @@ export const RefundServices = {
   processRefund,
   issueRefund,
   getOrderRefunds,
+  paidOnlineAmount,
 };

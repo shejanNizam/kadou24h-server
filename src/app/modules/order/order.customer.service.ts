@@ -7,11 +7,30 @@ import AppError from "../../errorHelpers/AppError";
 import { DeliveryStatus } from "../delivery/delivery.interface";
 import { Delivery } from "../delivery/delivery.model";
 import { Review } from "../review/review.model";
-import { OrderStatus, SubOrderStatus } from "./order.interface";
+import { IOrder, OrderStatus, SubOrderStatus } from "./order.interface";
 import { Order } from "./order.model";
 import { SubOrder } from "./sub_order.model";
 import { cancelSubOrder, syncOrderStatus, codCashBase } from "./order.utils";
 import { RefundServices } from "../payment/refund.service";
+import { Dispute } from "../payment/dispute.model";
+import { Refund } from "../payment/refund.model";
+import { disputeTargets } from "../payment/dispute.rules";
+import { DisputeStatus, RefundStatus } from "../payment/payment.interface";
+
+/**
+ * Why the customer cannot delete it from their history yet (null = they can): still in
+ * progress, money still coming back, or a reported problem still open (client, 2026-11-24).
+ */
+const deleteBlock = async (order: IOrder) => {
+  if (order.status === OrderStatus.active) return "ORDER_DELETE_IN_PROGRESS";
+  const [refund, dispute] = await Promise.all([
+    Refund.exists({ orderId: order._id, status: RefundStatus.pending }),
+    Dispute.exists({ orderId: order._id, status: DisputeStatus.open }),
+  ]);
+  if (refund) return "ORDER_DELETE_REFUND_PENDING";
+  if (dispute) return "ORDER_DELETE_DISPUTE_OPEN";
+  return null;
+};
 
 /**
  * Customer fetches their orders with pagination.
@@ -153,9 +172,16 @@ const getOrderDetails = async (
   // Money going back (cancellations, store changes, disputes): status shown on the order
   const refunds = await RefundServices.getOrderRefunds(order._id);
 
+  // What the buyer may still do: report a problem (where, which kind), delete it from history
+  const buyer = customerId && !options.admin;
+  const [disputable, blocked] = buyer
+    ? await Promise.all([disputeTargets(order, subOrders), deleteBlock(order)])
+    : [undefined, undefined];
+
   return {
     order,
     refunds,
+    ...(buyer && { disputable, canDelete: !blocked, ...(blocked && { deleteBlock: blocked }) }),
     subOrders: subOrders.map((so) => ({
       ...so.toObject(),
       ...(customerId && !options.admin && { reviewed: reviewed.has(String(so._id)) }),
@@ -280,14 +306,14 @@ const cancelStorePart = async (orderId: string, subOrderId: string, customerId: 
 
 /**
  * "Delete from my history" (client, 2026-10-30): the order is hidden for the customer
- * only. The store, riders, admin and the accounting keep it. Only a finished order.
+ * only. The store, riders, admin and the accounting keep it. Only a finished order, with
+ * no refund pending and no reported problem open (it would hide where they stand).
  */
 const hideMyOrder = async (customerId: string, orderId: string) => {
   const order = Types.ObjectId.isValid(orderId) ? await Order.findOne({ _id: orderId, customerId }) : null;
   if (!order) throw new AppError(httpStatus.NOT_FOUND, "ORDER_NOT_FOUND");
-  if (order.status === OrderStatus.active) {
-    throw new AppError(httpStatus.BAD_REQUEST, "ORDER_DELETE_IN_PROGRESS");
-  }
+  const blocked = await deleteBlock(order);
+  if (blocked) throw new AppError(httpStatus.BAD_REQUEST, blocked);
   await Order.updateOne({ _id: order._id }, { $set: { hiddenByCustomerAt: new Date() } });
 };
 

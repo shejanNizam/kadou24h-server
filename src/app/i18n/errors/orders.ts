@@ -114,6 +114,14 @@ export const orderErrors = {
     en: "This order is still in progress: you can delete it once it is finished.",
     fr: "Cette commande est encore en cours : vous pourrez la supprimer une fois terminée.",
   },
+  ORDER_DELETE_REFUND_PENDING: {
+    en: "A refund for this order is still being processed: you can delete it once it is done.",
+    fr: "Un remboursement est en cours pour cette commande : vous pourrez la supprimer une fois terminé.",
+  },
+  ORDER_DELETE_DISPUTE_OPEN: {
+    en: "A problem you reported on this order is still being handled: you can delete it once it is closed.",
+    fr: "Un problème signalé sur cette commande est en cours de traitement : vous pourrez la supprimer une fois clos.",
+  },
 
   // The store works on its part (sub-order)
   SUB_ORDER_ALREADY_CANCELLED: {
