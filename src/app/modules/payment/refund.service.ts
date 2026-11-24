@@ -335,6 +335,31 @@ const getOrderRefunds = (orderId: Types.ObjectId | string) =>
     .sort({ createdAt: -1 })
     .lean();
 
+export interface RefundSummary {
+  status: RefundStatus;
+  amount: number;
+}
+
+/**
+ * One line per order for the "My orders" list (client, 2026-11-25: the customer must see
+ * at once that their money comes back): money being refunded if any is pending, else
+ * what was refunded, else the last refusal.
+ */
+const summarizeForOrders = async (orderIds: Types.ObjectId[]) => {
+  const rows = await Refund.aggregate<{ _id: { orderId: Types.ObjectId; status: RefundStatus }; amount: number; last: Date }>([
+    { $match: { orderId: { $in: orderIds } } },
+    { $group: { _id: { orderId: "$orderId", status: "$status" }, amount: { $sum: "$amount" }, last: { $max: "$createdAt" } } },
+  ]);
+  const summaries = new Map<string, RefundSummary>();
+  for (const status of [RefundStatus.pending, RefundStatus.completed, RefundStatus.rejected]) {
+    for (const row of rows) {
+      const key = String(row._id.orderId);
+      if (row._id.status === status && !summaries.has(key)) summaries.set(key, { status, amount: row.amount });
+    }
+  }
+  return summaries;
+};
+
 /** Requests opened before `dueBy` existed: 7 days from their opening (runs at start-up) */
 const backfillDueDates = async () => {
   const result = await Refund.updateMany({ status: RefundStatus.pending, dueBy: { $exists: false } }, [
@@ -351,4 +376,5 @@ export const RefundServices = {
   issueRefund,
   getOrderRefunds,
   paidOnlineAmount,
+  summarizeForOrders,
 };

@@ -1506,6 +1506,9 @@ const socket = io("http://localhost:5000", { auth: { token: accessToken } });
 
 ## Changelog
 
+### Client feedback (2026-11-25): refunds visible at once
+- `GET /orders/my-orders` items carry `refund: { status, amount }` when the order has refunds: the pending amount if any is pending, else the refunded amount, else the last refusal. The app shows "Remboursement 8 800 GNF en cours" / "Remboursé 8 800 GNF" on the card and at the top of the order.
+
 ### Client feedback (2026-11-24, AP21): disputes only where they make sense, no delete while money is pending
 - **Disputes have a `type`:** `not_received`, `damaged`, `wrong_item`, `missing_item` (delivery problems) or `payment`. `POST /payments/disputes { orderId, subOrderId?, type, reason }`:
   - a delivery problem only on a store part that was **delivered** → else 400 `DISPUTE_NOT_DELIVERED`;

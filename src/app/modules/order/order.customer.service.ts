@@ -70,9 +70,13 @@ const getMyOrders = async (
     subOrderMap.get(key)!.push(so);
   }
 
+  // Money coming back shows on the card (pending → amount being refunded)
+  const refunds = await RefundServices.summarizeForOrders(orderIds);
+
   const data = orders.map((o) => ({
     ...o.toObject(),
     subOrders: subOrderMap.get(String(o._id)) || [],
+    ...(refunds.has(String(o._id)) && { refund: refunds.get(String(o._id)) }),
   }));
 
   return {

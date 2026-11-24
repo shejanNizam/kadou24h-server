@@ -1499,7 +1499,13 @@ const run = async () => {
   const cancelRefund = (r.body.data?.refunds ?? []).find((x) => x.status === "pending");
   r = await call("DELETE", `/orders/my-orders/${cancelOrder._id}`, null, C.token);
   check("order history: a cancelled order waits for its refund", r.status === 400 && r.body.code === "ORDER_DELETE_REFUND_PENDING" && Boolean(cancelRefund), brief(r));
+  r = await call("GET", "/orders/my-orders?limit=50", null, C.token);
+  let listed = (r.body.data ?? []).find((o) => o._id === cancelOrder._id);
+  check("my orders: the card says the money is being refunded, with the amount", listed?.refund?.status === "pending" && listed.refund.amount === cancelRefund?.amount, JSON.stringify(listed?.refund));
   await call("PATCH", `/payments/admin/refunds/${cancelRefund?._id}`, { status: "completed", transactionId: "OM-HIST-1" }, admin);
+  r = await call("GET", "/orders/my-orders?limit=50", null, C.token);
+  listed = (r.body.data ?? []).find((o) => o._id === cancelOrder._id);
+  check("my orders: …then that it was refunded", listed?.refund?.status === "completed" && listed.refund.amount === cancelRefund?.amount, JSON.stringify(listed?.refund));
   r = await call("GET", `/orders/${cancelOrder._id}`, null, C.token);
   check("refund done: a cancelled order shows its refund state (not 'to pay')", r.body.data?.order?.status === "cancelled" && r.body.data?.canDelete === true, JSON.stringify([r.body.data?.order?.status, r.body.data?.canDelete]));
   r = await call("DELETE", `/orders/my-orders/${cancelOrder._id}`, null, C.token);
