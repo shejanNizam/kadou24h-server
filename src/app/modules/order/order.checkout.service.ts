@@ -13,7 +13,7 @@ import { CounterServices } from "../counter/counter.service";
 import { CouponServices, normalizeCode } from "../coupon/coupon.service";
 import { codCashBase } from "./order.utils";
 import { DeliveryRateType, DeliveryVehicleType } from "../delivery_rate/delivery_rate.interface";
-import { DeliveryRateServices } from "../delivery_rate/delivery_rate.service";
+import { calculateDistanceKm, DeliveryRateServices, splitIntercityFare, type IntercityLegFees } from "../delivery_rate/delivery_rate.service";
 import { Product } from "../product/product.model";
 import { IProduct, ProductApprovalStatus } from "../product/product.interface";
 import { ApprovalStatus } from "../profile_common/profile.common";
@@ -103,12 +103,8 @@ const resolveAddress = async (
   };
 };
 
-// Moto legs to/from the bus stations (the delivery legs use the same amounts)
 /** Online orders must be paid within this window, or they are cancelled (stock released). */
 export const PAYMENT_WINDOW_MINUTES = 30;
-
-const FIRST_MILE_FEE = 10000;
-const LAST_MILE_FEE = 10000;
 
 interface IStationRoute {
   fromStationName: string;
@@ -116,6 +112,8 @@ interface IStationRoute {
   toStationName: string;
   toCity: string;
   estimatedHours?: number;
+  /** Who gets what (moto → bus → moto); kept on the sub-order for its delivery legs */
+  legFees: IntercityLegFees;
 }
 
 /**
@@ -342,17 +340,30 @@ const calculateCheckout = async (
         ?.coordinates || [-13.6785, 9.537];
       const route = await resolveStationRoute(vendorCoords, payload.destinationStationId);
 
+      // Delivered to the door from the arrival station (client, 2026-11-25): the address must
+      // be in that city, or the last moto would drive to the old (default) address elsewhere
+      if (payload.deliveryType === DeliveryType.intercity) {
+        const km = calculateDistanceKm(addressSnapshot.location.coordinates, route.to.location.coordinates as [number, number]);
+        const maxKm = settings.intercity?.maxAddressKm ?? 30;
+        if (km > maxKm) {
+          throw new AppError(httpStatus.BAD_REQUEST, "ADDRESS_NOT_IN_DESTINATION_CITY", {
+            km: Math.round(km),
+            station: route.to.name,
+            city: route.to.city,
+          });
+        }
+      }
+
       const rateResult = await DeliveryRateServices.calculateDeliveryFee({
         type: DeliveryRateType.intercity,
         fromStationId: String(route.from._id),
         toStationId: String(route.to._id),
       });
       // Pickup at the station has no last moto leg
-      vendorDeliveryFee =
-        payload.deliveryType === DeliveryType.station_pickup
-          ? Math.max(rateResult.fee - LAST_MILE_FEE, FIRST_MILE_FEE)
-          : rateResult.fee;
+      const share = await splitIntercityFare(rateResult.fee, payload.deliveryType === DeliveryType.station_pickup);
+      vendorDeliveryFee = share.total;
       stationRoute = {
+        legFees: share.legs,
         fromStationName: route.from.name,
         fromCity: route.from.city,
         toStationName: route.to.name,
@@ -640,6 +651,7 @@ const createOrderRecords = async (
       modifications: [],
       subtotal: split.subtotal,
       deliveryFee: split.deliveryFee,
+      ...(split.stationRoute && { legFees: split.stationRoute.legFees }),
       discountShare: split.discountShare,
       total: split.total,
       commissionRate: split.commissionRate,

@@ -85,6 +85,21 @@ router.put(
   validateRequest(saveRiderApplicationZodSchema),
   RiderProfileControllers.saveApplication,
 );
+/**
+ * @openapi
+ * /riders/me/application:
+ *   delete:
+ *     tags: [Rider]
+ *     summary: Delete my application while it is still a draft (never sent)
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Deleted; the profile shows "Become a rider" again
+ *       400:
+ *         description: Already sent (RIDER_APPLICATION_NOT_DRAFT)
+ */
+router.delete("/me/application", checkAuth(...APP_ROLES), RiderProfileControllers.deleteDraftApplication);
 router.post(
   "/me/application/submit",
   checkAuth(...APP_ROLES),

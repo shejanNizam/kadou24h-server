@@ -36,6 +36,11 @@ const submitApplication = catchAsync(async (req: Request, res: Response) => {
   });
 });
 
+const deleteDraftApplication = catchAsync(async (req: Request, res: Response) => {
+  await RiderProfileServices.deleteDraftApplication(req.user._id);
+  sendResponse(res, { statusCode: httpStatus.OK, success: true, message: "Draft application deleted", data: null });
+});
+
 const updateMyRiderProfile = catchAsync(async (req: Request, res: Response) => {
   const result = await RiderProfileServices.updateMyRiderProfile(req.user._id, req.body);
   sendResponse(res, {
@@ -119,6 +124,7 @@ export const RiderProfileControllers = {
   getMyRiderProfile,
   saveApplication,
   submitApplication,
+  deleteDraftApplication,
   updateMyRiderProfile,
   searchRiders,
   getRidersForAdmin,

@@ -1506,6 +1506,12 @@ const socket = io("http://localhost:5000", { auth: { token: accessToken } });
 
 ## Changelog
 
+### Client feedback (2026-11-25): another-city address, fare shared between the three partners, delete a rider draft
+- **Address in the arrival city.** `deliveryType: "intercity"`: the address must be within `settings.intercity.maxAddressKm` (default 30 km) of the arrival station, else `POST /orders/checkout-summary` and `POST /orders` answer 400 `ADDRESS_NOT_IN_DESTINATION_CITY` (`{km, station, city}`). `station_pickup` keeps any address (contact only).
+- **Fare sharing.** New `settings.intercity: { firstMileFee, lastMileFee, maxAddressKm }` (defaults 10 000 / 10 000 / 30; in `GET /settings/public`). The route fare pays the moto to the departure station and the moto from the arrival station; the bus gets the rest; pickup at the station has no last moto (customer pays fare − lastMileFee). The share is fixed at checkout on the sub-order (`legFees: { firstMile, lineHaul, lastMile }`) and in the summary (`vendorSplits[].stationRoute.legFees`); the delivery legs are paid from it. An intercity rate must be above the two motos → 400 `INTERCITY_FARE_TOO_LOW`; settings that would make the motos take a whole route fare → 400 `INTERCITY_MOTOS_ABOVE_FARE`.
+- Vendor sub-order detail: each leg also has `fee`, `pickedUpAt`, `deliveredAt` (the app shows moto → bus → moto with who carries it and what they earn).
+- `DELETE /riders/me/application`: deletes my rider application while it is still a draft (never sent); 400 `RIDER_APPLICATION_NOT_DRAFT` once sent, 404 `RIDER_APPLICATION_NOT_STARTED` if none.
+
 ### Client feedback (2026-11-25): refunds visible at once
 - `GET /orders/my-orders` items carry `refund: { status, amount }` when the order has refunds: the pending amount if any is pending, else the refunded amount, else the last refusal. The app shows "Remboursement 8 800 GNF en cours" / "Remboursé 8 800 GNF" on the card and at the top of the order.
 

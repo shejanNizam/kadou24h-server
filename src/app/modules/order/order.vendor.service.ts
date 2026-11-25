@@ -126,7 +126,7 @@ const getVendorSubOrderDetail = async (
   // All legs up front: for intercity the vendor assigns the bus driver (leg 2)
   // before leg 1 reaches the station, so the station PIN relay works
   const deliveries = await Delivery.find({ subOrderId: subOrder._id })
-    .select("legNumber legType status fromKind fromName toKind toName riderId offerOpenedAt reservedUntil noRiderAlertedAt")
+    .select("legNumber legType status fromKind fromName toKind toName riderId fee pickedUpAt deliveredAt offerOpenedAt reservedUntil noRiderAlertedAt")
     .populate({ path: "riderId", select: "userId partnerType vehicle", populate: { path: "userId", select: "name avatar" } })
     .sort({ legNumber: 1 })
     .lean();

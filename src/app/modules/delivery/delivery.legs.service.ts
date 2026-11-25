@@ -17,6 +17,21 @@ import {
 } from "./delivery.interface";
 import { Delivery } from "./delivery.model";
 import { generatePinPair } from "./delivery.utils";
+import { SettingsServices } from "../settings/settings.service";
+import type { ISubOrder } from "../order/order.interface";
+
+/**
+ * What each partner earns on another-city delivery: fixed at checkout (client, 2026-11-25).
+ * Older sub-orders: today's moto amounts, the bus gets the rest; the sum is always what
+ * the customer paid for delivery.
+ */
+const legFeesOf = async (subOrder: ISubOrder, stationPickup: boolean) => {
+  if (subOrder.legFees) return subOrder.legFees;
+  const { intercity } = await SettingsServices.getSettings();
+  const firstMile = Math.min(intercity?.firstMileFee ?? 10000, subOrder.deliveryFee);
+  const lastMile = stationPickup ? 0 : Math.min(intercity?.lastMileFee ?? 10000, subOrder.deliveryFee - firstMile);
+  return { firstMile, lastMile, lineHaul: Math.max(0, subOrder.deliveryFee - firstMile - lastMile) };
+};
 
 /**
  * Creates the delivery legs for a sub-order based on order delivery type.
@@ -119,9 +134,7 @@ const createDeliveryLegsForSubOrder = async (
     const pin3Pickup = await generatePinPair();
     const pin3Handover = await generatePinPair();
 
-    const firstMileFee = 10000;
-    const lastMileFee = 10000;
-    const lineHaulFee = Math.max(0, subOrder.deliveryFee - firstMileFee - lastMileFee);
+    const fees = await legFeesOf(subOrder, false);
 
     // Leg 1: Vendor -> Departure Station
     const leg1 = await Delivery.create({
@@ -141,7 +154,7 @@ const createDeliveryLegsForSubOrder = async (
       toLocation: { type: "Point", coordinates: depStationCoords },
       toAddressText: departureStation?.city || "",
       status: DeliveryStatus.pending_assignment,
-      fee: firstMileFee,
+      fee: fees.firstMile,
       pickupPin: pin1Pickup.pin,
       pickupPinHash: pin1Pickup.hash,
       handoverPin: pin1Handover.pin,
@@ -164,7 +177,7 @@ const createDeliveryLegsForSubOrder = async (
       toName: destinationStation?.name || "Destination Station",
       toLocation: { type: "Point", coordinates: destStationCoords },
       status: DeliveryStatus.pending_assignment,
-      fee: lineHaulFee,
+      fee: fees.lineHaul,
       pickupPin: pin2Pickup.pin,
       pickupPinHash: pin2Pickup.hash,
       handoverPin: pin2Handover.pin,
@@ -189,7 +202,7 @@ const createDeliveryLegsForSubOrder = async (
       toAddressText: `${order.addressSnapshot.city}, ${order.addressSnapshot.neighborhood || ""}`,
       toPhone: order.addressSnapshot.phone,
       status: DeliveryStatus.pending_assignment,
-      fee: lastMileFee,
+      fee: fees.lastMile,
       pickupPin: pin3Pickup.pin,
       pickupPinHash: pin3Pickup.hash,
       handoverPin: pin3Handover.pin,
@@ -234,6 +247,7 @@ const createDeliveryLegsForSubOrder = async (
     const pin1Handover = await generatePinPair();
     const pin2Pickup = await generatePinPair();
     const pin2Handover = await generatePinPair();
+    const pickupFees = await legFeesOf(subOrder, true);
 
     const leg1 = await Delivery.create({
       subOrderId: subOrder._id,
@@ -249,7 +263,7 @@ const createDeliveryLegsForSubOrder = async (
       toName: departureStation?.name || "Departure Station",
       toLocation: { type: "Point", coordinates: depStationCoords },
       status: DeliveryStatus.pending_assignment,
-      fee: 10000,
+      fee: pickupFees.firstMile,
       pickupPin: pin1Pickup.pin,
       pickupPinHash: pin1Pickup.hash,
       handoverPin: pin1Handover.pin,
@@ -271,7 +285,7 @@ const createDeliveryLegsForSubOrder = async (
       toName: destinationStation?.name || "Destination Station",
       toLocation: { type: "Point", coordinates: destStationCoords },
       status: DeliveryStatus.pending_assignment,
-      fee: Math.max(0, subOrder.deliveryFee - 10000),
+      fee: pickupFees.lineHaul,
       pickupPin: pin2Pickup.pin,
       pickupPinHash: pin2Pickup.hash,
       handoverPin: pin2Handover.pin,

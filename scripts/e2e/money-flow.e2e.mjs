@@ -1526,6 +1526,26 @@ const run = async () => {
   const stB = r.body.data._id;
   r = await call("POST", "/delivery-rates", { type: "intercity", fromStationId: stA, toStationId: stB, fee: 60000, estimatedHours: 12 }, admin);
   check("admin sets the Conakry → Labé fare", ok(r), brief(r));
+  // Client, 2026-11-25: the fare is shared moto → bus → moto; the motos come from settings
+  r = await call("POST", "/delivery-rates", { type: "intercity", fromStationId: stB, toStationId: stA, fee: 15000 }, admin);
+  check("intercity: a fare that doesn't cover both motos is refused", r.status === 400 && r.body.code === "INTERCITY_FARE_TOO_LOW", brief(r));
+  r = await call("PATCH", "/settings", { intercity: { firstMileFee: 55000 } }, admin);
+  check("intercity: motos taking a whole route fare are refused", r.status === 400 && r.body.code === "INTERCITY_MOTOS_ABOVE_FARE", brief(r));
+  r = await call("GET", "/settings/public");
+  check("intercity: the app reads the moto amounts and the address distance", r.body.data?.intercity?.firstMileFee === 10000 && r.body.data?.intercity?.maxAddressKm === 30, JSON.stringify(r.body.data?.intercity));
+  // A rider application started but never sent can be deleted (client, 2026-11-25)
+  const draftRider = await signup("Draft Rider", `+22467${stamp}1`);
+  await call("PUT", "/riders/me/application", { partnerType: "moto", vehicle: { type: "motorbike" } }, draftRider.token);
+  r = await call("GET", "/user/me", null, draftRider.token);
+  check("rider draft: shown as a draft on the profile", r.body.data?.applications?.rider?.status === "draft", JSON.stringify(r.body.data?.applications));
+  r = await call("DELETE", "/riders/me/application", null, draftRider.token);
+  check("rider draft: the applicant deletes it", ok(r), brief(r));
+  r = await call("GET", "/user/me", null, draftRider.token);
+  check("rider draft: …the profile offers 'become a rider' again", !r.body.data?.applications?.rider, JSON.stringify(r.body.data?.applications));
+  r = await call("DELETE", "/riders/me/application", null, draftRider.token);
+  check("rider draft: nothing left to delete → 404", r.status === 404 && r.body.code === "RIDER_APPLICATION_NOT_STARTED", brief(r));
+  r = await call("DELETE", "/riders/me/application", null, R.token);
+  check("rider draft: an application already sent can't be deleted", r.status === 400 && r.body.code === "RIDER_APPLICATION_NOT_DRAFT", brief(r));
   const B = await signup("Bus Driver", `+22462${stamp}5`);
   await call("PUT", "/riders/me/application", { partnerType: "transit", vehicle: { type: "bus" }, cityArea: "Conakry", nationalIdNumber: "9999-1", transitRoutes: [{ fromStationId: stA, toStationId: stB }] }, B.token);
   r = await call("POST", "/riders/me/application/submit", null, B.token);
@@ -1533,7 +1553,26 @@ const run = async () => {
   await call("PATCH", `/riders/admin/${busId}/review`, { action: "approve" }, admin);
   await call("PATCH", "/deliveries/rider/online-status", { isOnline: true }, B.token);
 
-  r = await order([{ productId, qty: 1 }], { deliveryType: "intercity", destinationStationId: stB });
+  // The address must be in the arrival city, not the old default one (client, 2026-11-25)
+  r = await call("POST", "/orders/checkout-summary", { items: [{ productId, qty: 1 }], addressId, deliveryType: "intercity", paymentMethod: "cod", destinationStationId: stB }, C.token);
+  check("intercity: a Conakry address for Labé is refused (km and city said)", r.status === 400 && r.body.code === "ADDRESS_NOT_IN_DESTINATION_CITY" && /Labé/.test(r.body.message), brief(r));
+  r = await call("POST", "/orders/checkout-summary", { items: [{ productId, qty: 1 }], addressId, deliveryType: "station_pickup", paymentMethod: "cod", destinationStationId: stB }, C.token);
+  const pickupRoute = r.body.data?.vendorSplits?.[0];
+  check(
+    "intercity: pickup at the station keeps any address (contact only), no last moto",
+    ok(r) && pickupRoute?.deliveryFee === 50000 && pickupRoute?.stationRoute?.legFees?.lastMile === 0 && pickupRoute.stationRoute.legFees.lineHaul === 40000,
+    JSON.stringify(pickupRoute?.stationRoute ?? brief(r)),
+  );
+  r = await call("POST", "/addresses", { fullName: "Customer One", phone: `+22462${stamp}3`, city: "Labé", neighborhood: "Daka", location: { lat: 11.32, lng: -12.29 } }, C.token);
+  const labeAddress = r.body.data?._id;
+  r = await call("POST", "/orders/checkout-summary", { items: [{ productId, qty: 1 }], addressId: labeAddress, deliveryType: "intercity", paymentMethod: "cod", destinationStationId: stB }, C.token);
+  const icRoute = r.body.data?.vendorSplits?.[0];
+  check(
+    "intercity: the summary shows who gets what (10 000 + 40 000 + 10 000)",
+    icRoute?.deliveryFee === 60000 && JSON.stringify(icRoute?.stationRoute?.legFees) === JSON.stringify({ firstMile: 10000, lineHaul: 40000, lastMile: 10000 }),
+    JSON.stringify(icRoute?.stationRoute ?? brief(r)),
+  );
+  r = await order([{ productId, qty: 1 }], { deliveryType: "intercity", destinationStationId: stB, addressId: labeAddress });
   check("place intercity order", ok(r), brief(r));
   const icSub = r.body.data?.subOrders?.[0];
   const icOrder = r.body.data?.order;
@@ -1556,6 +1595,8 @@ const run = async () => {
   const leg2 = legList?.find((d) => d.legNumber === 2)?._id;
   const leg3 = legList?.find((d) => d.legNumber === 3)?._id;
   check("relay: vendor detail lists all 3 legs", legList?.length === 3 && Boolean(leg2 && leg3), JSON.stringify(legList?.map((l) => l.legType)));
+  const legFees = [1, 2, 3].map((n) => legList?.find((d) => d.legNumber === n)?.fee);
+  check("intercity: each leg is paid its share, the sum is the delivery fee", legFees.join() === "10000,40000,10000" && det.body.data.subOrder.legFees?.lineHaul === 40000, JSON.stringify(legFees));
   const cust = (await call("GET", `/orders/${icSub.orderId}`, null, C.token)).body.data;
   check("customer order detail shows legs, no store phone", cust?.subOrders?.[0]?.deliveries?.length === 3 && cust.subOrders[0].vendorId?.businessPhone === undefined, JSON.stringify(cust?.subOrders?.[0]?.vendorId));
   const custLeg1 = await call("GET", `/deliveries/${leg1}/track`, null, C.token);

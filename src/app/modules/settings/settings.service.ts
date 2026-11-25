@@ -1,6 +1,10 @@
 import { AuditLogServices } from "../audit_log/audit_log.service";
 import { ISettings, ISettingsInitial } from "./settings.interface";
 import { Settings } from "./settings.model";
+import httpStatus from "http-status";
+import AppError from "../../errorHelpers/AppError";
+import { DeliveryRate } from "../delivery_rate/delivery_rate.model";
+import { DeliveryRateType } from "../delivery_rate/delivery_rate.interface";
 
 // Settings are read on almost every money calculation — cache briefly in memory.
 const CACHE_TTL_MS = 30 * 1000;
@@ -36,6 +40,8 @@ const getPublicSettings = async () => {
     withdrawalFees: s.withdrawalFees,
     pricing: s.pricing,
     orders: s.orders,
+    // The app keeps "another city" addresses near the arrival station
+    intercity: s.intercity,
     rides: s.rides,
     // The app tells people how long their messages are kept
     chat: s.chat,
@@ -59,6 +65,18 @@ const updateSettings = async (
   actorId: string,
 ) => {
   const before = (await getSettings()).toObject();
+
+  // The two motos are paid from each route fare: a route must still leave something for the bus
+  if (payload.intercity?.firstMileFee !== undefined || payload.intercity?.lastMileFee !== undefined) {
+    const motos =
+      (payload.intercity.firstMileFee ?? before.intercity?.firstMileFee ?? 0) + (payload.intercity.lastMileFee ?? before.intercity?.lastMileFee ?? 0);
+    const cheapest = await DeliveryRate.findOne({ type: DeliveryRateType.intercity, isActive: true, fee: { $lte: motos } })
+      .sort({ fee: 1 })
+      .select("fee");
+    if (cheapest) {
+      throw new AppError(httpStatus.BAD_REQUEST, "INTERCITY_MOTOS_ABOVE_FARE", { fare: cheapest.fee ?? 0, motos });
+    }
+  }
 
   const updated = await Settings.findOneAndUpdate(
     {},

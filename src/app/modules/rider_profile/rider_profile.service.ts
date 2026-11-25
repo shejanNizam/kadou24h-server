@@ -125,6 +125,19 @@ const saveApplication = async (userId: string, payload: RiderInput) => {
   return present(profile);
 };
 
+/**
+ * "Supprimer la demande" (client, 2026-11-25): a draft never sent can be thrown away, so the
+ * profile shows "Devenir livreur" again. Once sent (reviewed, approved…) it stays.
+ */
+const deleteDraftApplication = async (userId: string) => {
+  const deleted = await RiderProfile.findOneAndDelete({ userId, approvalStatus: ApprovalStatus.draft });
+  if (deleted) return;
+  const exists = await RiderProfile.exists({ userId });
+  throw exists
+    ? new AppError(httpStatus.BAD_REQUEST, "RIDER_APPLICATION_NOT_DRAFT")
+    : new AppError(httpStatus.NOT_FOUND, "RIDER_APPLICATION_NOT_STARTED");
+};
+
 const submitApplication = async (userId: string) => {
   const profile = await findMyProfile(userId);
 
@@ -312,6 +325,7 @@ export const RiderProfileServices = {
   getMyRiderProfile,
   saveApplication,
   submitApplication,
+  deleteDraftApplication,
   updateMyRiderProfile,
   searchRiders,
   getRidersForAdmin,

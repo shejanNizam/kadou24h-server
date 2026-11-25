@@ -10,6 +10,38 @@ import {
 } from "./delivery_rate.interface";
 import { DeliveryRate } from "./delivery_rate.model";
 import { containsRegex, escapeRegex } from "../../utils/queryParams";
+import { SettingsServices } from "../settings/settings.service";
+
+export interface IntercityLegFees {
+  firstMile: number;
+  lineHaul: number;
+  lastMile: number;
+}
+
+/**
+ * How a route fare is shared (client, 2026-11-25): the two motos get the amounts set in
+ * settings.intercity, the bus gets the rest. Pickup at the station has no last moto, so
+ * the customer pays the fare minus that moto. Total = what the customer pays.
+ */
+export const splitIntercityFare = async (fare: number, stationPickup: boolean) => {
+  const { intercity } = await SettingsServices.getSettings();
+  const firstMile = intercity?.firstMileFee ?? 10000;
+  const lastMile = intercity?.lastMileFee ?? 10000;
+  const legs: IntercityLegFees = {
+    firstMile,
+    lineHaul: Math.max(0, fare - firstMile - lastMile),
+    lastMile: stationPickup ? 0 : lastMile,
+  };
+  return { legs, total: legs.firstMile + legs.lineHaul + legs.lastMile };
+};
+
+/** A route fare must leave something for the bus after paying both motos */
+const checkFareCoversMotos = async (type?: DeliveryRateType, fee?: number) => {
+  if (type !== DeliveryRateType.intercity || fee === undefined) return;
+  const { intercity } = await SettingsServices.getSettings();
+  const motos = (intercity?.firstMileFee ?? 10000) + (intercity?.lastMileFee ?? 10000);
+  if (fee <= motos) throw new AppError(httpStatus.BAD_REQUEST, "INTERCITY_FARE_TOO_LOW", { motos });
+};
 
 /**
  * Calculates Haversine distance in KM between two [lng, lat] coordinates.
@@ -128,6 +160,7 @@ const createDeliveryRate = async (
   payload: IDeliveryRateInitial,
   actorId: string,
 ) => {
+  await checkFareCoversMotos(payload.type, payload.fee);
   const rate = await DeliveryRate.create({
     ...payload,
     updatedBy: actorId,
@@ -182,6 +215,10 @@ const updateDeliveryRate = async (
   payload: Partial<IDeliveryRateInitial>,
   actorId: string,
 ) => {
+  if (payload.fee !== undefined) {
+    const current = await DeliveryRate.findById(id).select("type");
+    await checkFareCoversMotos(payload.type ?? current?.type, payload.fee);
+  }
   const rate = await DeliveryRate.findByIdAndUpdate(
     id,
     { $set: { ...payload, updatedBy: actorId } },

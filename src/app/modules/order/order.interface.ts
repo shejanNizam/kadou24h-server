@@ -124,6 +124,8 @@ export interface ISubOrderInitial {
   modifications: ISubOrderModification[];
   subtotal: number;
   deliveryFee: number;
+  /** Another city: the fare shared moto → bus → moto, fixed at checkout (client, 2026-11-25) */
+  legFees?: { firstMile: number; lineHaul: number; lastMile: number };
   discountShare: number;
   total: number;
   commissionRate: number;

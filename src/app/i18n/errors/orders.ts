@@ -38,6 +38,10 @@ export const orderErrors = {
     en: "No active transit stations configured for intercity delivery.",
     fr: "Aucune gare routière n'est disponible pour la livraison interurbaine.",
   },
+  ADDRESS_NOT_IN_DESTINATION_CITY: {
+    en: "This address is {km, number} km from {station}: for a delivery to another city, choose or add an address in {city}.",
+    fr: "Cette adresse est à {km, number} km de {station} : pour une livraison dans une autre ville, choisissez ou ajoutez une adresse à {city}.",
+  },
   STATION_SAME_CITY: {
     en: "This station is in the store's own city — choose home delivery instead.",
     fr: "Cette gare est dans la ville de la boutique : choisissez plutôt la livraison à domicile.",

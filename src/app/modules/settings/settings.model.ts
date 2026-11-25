@@ -50,6 +50,12 @@ const settingsSchema = new Schema<ISettings>(
       acceptMinutes: { type: Number, default: 480, min: 5, max: 1440 },
     },
 
+    intercity: {
+      firstMileFee: { type: Number, default: 10000, min: 0 },
+      lastMileFee: { type: Number, default: 10000, min: 0 },
+      maxAddressKm: { type: Number, default: 30, min: 5, max: 200 },
+    },
+
     rides: {
       enabled: { type: Boolean, default: true },
       baseFare: { type: Number, default: 3000 },

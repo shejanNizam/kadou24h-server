@@ -7,6 +7,10 @@ export const partnerErrors = {
     en: "You have not started a vendor application.",
     fr: "Vous n'avez pas encore commencé de demande vendeur.",
   },
+  RIDER_APPLICATION_NOT_DRAFT: {
+    en: "This application was already sent: it can no longer be deleted.",
+    fr: "Cette demande a déjà été envoyée : elle ne peut plus être supprimée.",
+  },
   RIDER_APPLICATION_NOT_STARTED: {
     en: "You have not started a delivery partner application.",
     fr: "Vous n'avez pas encore commencé de demande livreur.",
@@ -116,6 +120,14 @@ export const partnerErrors = {
   LOCATIONS_REQUIRED: {
     en: "The store and customer locations are required for local delivery.",
     fr: "Les positions de la boutique et du client sont obligatoires pour la livraison locale.",
+  },
+  INTERCITY_FARE_TOO_LOW: {
+    en: "The route fare must be more than {motos, number} GNF: the two motos (to and from the stations) are paid from it, the bus gets the rest.",
+    fr: "Le tarif du trajet doit dépasser {motos, number} GNF : les deux motos (vers et depuis les gares) sont payées dessus, le car reçoit le reste.",
+  },
+  INTERCITY_MOTOS_ABOVE_FARE: {
+    en: "The two motos ({motos, number} GNF) would take the whole fare of a route ({fare, number} GNF). Raise that route's fare first.",
+    fr: "Les deux motos ({motos, number} GNF) prendraient tout le tarif d'un trajet ({fare, number} GNF). Augmentez d'abord le tarif de ce trajet.",
   },
   DELIVERY_RATE_NOT_FOUND: {
     en: "Delivery rate not found.",

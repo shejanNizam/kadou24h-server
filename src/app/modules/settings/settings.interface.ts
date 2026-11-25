@@ -40,6 +40,15 @@ export interface ISettingsInitial {
     acceptMinutes: number;
   };
 
+  // Delivery to another city (client, 2026-11-25): the route fare is shared between the moto
+  // to the departure station, the bus, and the moto from the arrival station to the door
+  intercity: {
+    firstMileFee: number; // GNF, the moto from the store to the departure station
+    lastMileFee: number; // GNF, the moto from the arrival station to the customer
+    // The delivery address must be this close to the arrival station (else the parcel goes wrong)
+    maxAddressKm: number;
+  };
+
   // Moto-taxi (A → B): Kadou24h suggests the price, riders may ask more, paid in cash to the rider
   rides: {
     enabled: boolean;

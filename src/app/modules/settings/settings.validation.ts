@@ -42,6 +42,14 @@ export const updateSettingsZodSchema = z
       })
       .partial(),
 
+    intercity: z
+      .object({
+        firstMileFee: gnf(),
+        lastMileFee: gnf(),
+        maxAddressKm: z.number().int({ message: "WHOLE_NUMBER" }).min(5, { message: "NUMBER_TOO_LOW" }).max(200, { message: "NUMBER_TOO_HIGH" }),
+      })
+      .partial(),
+
     rides: z
       .object({
         enabled: z.boolean(),

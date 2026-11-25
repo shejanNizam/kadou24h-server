@@ -147,6 +147,17 @@ const subOrderSchema = new Schema<ISubOrder>(
       required: true,
       min: 0,
     },
+    legFees: {
+      type: new Schema(
+        {
+          firstMile: { type: Number, min: 0, required: true },
+          lineHaul: { type: Number, min: 0, required: true },
+          lastMile: { type: Number, min: 0, required: true },
+        },
+        { _id: false },
+      ),
+      required: false,
+    },
     discountShare: {
       type: Number,
       default: 0,
