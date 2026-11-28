@@ -58,6 +58,13 @@ const envSchema = z.object({
   SMTP_PASS: z.string().optional(),
   SMTP_FROM: z.string().optional(),
 
+  // Help assistant (in-app AI). Empty key = the assistant is off and the app hides it.
+  OPENAI_API_KEY: z.string().optional(),
+  // A small, cheap chat model is enough for support answers
+  OPENAI_MODEL: z.string().default("gpt-4.1-mini"),
+  // Only for tests (a local fake of the API); production talks to OpenAI directly
+  OPENAI_BASE_URL: z.string().url().optional(),
+
   REDIS_HOST: z.string().optional(),
   REDIS_PORT: z.string().optional(),
   REDIS_USERNAME: z.string().optional(),
@@ -148,6 +155,12 @@ export const configs = {
     smtp_user: env.SMTP_USER,
     smtp_pass: env.SMTP_PASS,
     smtp_from: env.SMTP_FROM,
+  },
+
+  OPENAI: {
+    api_key: env.OPENAI_API_KEY?.trim() || undefined,
+    model: env.OPENAI_MODEL,
+    base_url: env.OPENAI_BASE_URL,
   },
 
   REDIS: {

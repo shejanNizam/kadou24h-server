@@ -1506,6 +1506,14 @@ const socket = io("http://localhost:5000", { auth: { token: accessToken } });
 
 ## Changelog
 
+### Help assistant (AI, 2026-11-28)
+- New module `/assistant` (OpenAI, server-side only; key `OPENAI_API_KEY`, model `OPENAI_MODEL` default `gpt-4.1-mini`). No key = off.
+- `GET /assistant/conversation` → `{ available, conversation | null, quota: { used, limit } }`. `DELETE /assistant/conversation` = start again (kept for the team).
+- `POST /assistant/messages { text (2–500), mode? }` → `{ conversation, quota }`. The answer is `{ reply, needsHuman }`; the model sees the live settings (fees, delays), the team's notes and the person's own context (customer: last 5 orders; seller: store; rider: profile). Never their name, phone, email or address; OpenAI gets a hashed id. Errors: 503 `ASSISTANT_UNAVAILABLE`, 429 `ASSISTANT_DAILY_LIMIT {limit}` / `ASSISTANT_BUSY` (platform cap) / `ASSISTANT_TOO_FAST` (10 a minute), 502 `ASSISTANT_FAILED` (not counted, not kept).
+- `POST /assistant/conversation/hand-off { note?, mode? }` → 201 `{ ticketId, ticketNumber }`: a support ticket (first question as subject, note or last question as text) with `assistantConversationId`; 400 `ASSISTANT_NOTHING_TO_SEND`.
+- Admin: `GET /assistant/admin/usage` (today's questions / conversations / hand-overs, key set, model), `GET /assistant/admin/conversations/:id`.
+- Settings: `assistant: { enabled (true), dailyLimitPerUser (20, 1–200), dailyLimitTotal (2000, 10–100 000), knowledge (≤ 8000 chars) }`; public settings expose `assistant: { available, dailyLimitPerUser }`.
+
 ### Client feedback (2026-11-25): another-city address, fare shared between the three partners, delete a rider draft
 - **Address in the arrival city.** `deliveryType: "intercity"`: the address must be within `settings.intercity.maxAddressKm` (default 30 km) of the arrival station, else `POST /orders/checkout-summary` and `POST /orders` answer 400 `ADDRESS_NOT_IN_DESTINATION_CITY` (`{km, station, city}`). `station_pickup` keeps any address (contact only).
 - **Fare sharing.** New `settings.intercity: { firstMileFee, lastMileFee, maxAddressKm }` (defaults 10 000 / 10 000 / 30; in `GET /settings/public`). The route fare pays the moto to the departure station and the moto from the arrival station; the bus gets the rest; pickup at the station has no last moto (customer pays fare − lastMileFee). The share is fixed at checkout on the sub-order (`legFees: { firstMile, lineHaul, lastMile }`) and in the summary (`vendorSplits[].stationRoute.legFees`); the delivery legs are paid from it. An intercity rate must be above the two motos → 400 `INTERCITY_FARE_TOO_LOW`; settings that would make the motos take a whole route fare → 400 `INTERCITY_MOTOS_ABOVE_FARE`.

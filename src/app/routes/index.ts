@@ -33,6 +33,7 @@ import { BookingRoutes } from "../modules/booking/booking.route";
 import { CouponRoutes } from "../modules/coupon/coupon.route";
 import { RideRoutes } from "../modules/ride/ride.route";
 import { AppErrorRoutes } from "../modules/app_error/app_error.route";
+import { AssistantRoutes } from "../modules/ai_assistant/ai_assistant.route";
 
 const router = Router();
 
@@ -71,6 +72,7 @@ const moduleRoutes = [
   { path: "/coupons", route: CouponRoutes },
   { path: "/rides", route: RideRoutes },
   { path: "/app-errors", route: AppErrorRoutes },
+  { path: "/assistant", route: AssistantRoutes },
 ];
 
 moduleRoutes.forEach((route) => {

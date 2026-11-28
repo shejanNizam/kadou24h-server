@@ -1,3 +1,4 @@
+import { assistantErrors } from "./assistant";
 import { authErrors } from "./auth";
 import { catalogErrors } from "./catalog";
 import { chatErrors } from "./chat";
@@ -29,6 +30,7 @@ export const errorCatalogParts = [
   partnerErrors,
   serviceErrors,
   chatErrors,
+  assistantErrors,
 ] as const;
 
 type MergeParts<T extends readonly object[]> = T extends readonly [infer Head, ...infer Rest extends readonly object[]]

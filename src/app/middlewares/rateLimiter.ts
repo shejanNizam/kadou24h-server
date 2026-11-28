@@ -111,6 +111,18 @@ export const uploadLimiter = rateLimit({
   message: limitedAnswer("TOO_MANY_UPLOADS"),
 });
 
+/** Help assistant: each question costs an AI call (the daily allowance is counted in the service) */
+export const assistantLimiter = rateLimit({
+  ...common,
+  windowMs: 60 * 1000,
+  limit: 10,
+  keyGenerator: (req: Request) => {
+    const account = accountOf(req);
+    return account ? `ai:${account}` : `ai-ip:${ipKey(req)}`;
+  },
+  message: limitedAnswer("ASSISTANT_TOO_FAST"),
+});
+
 /** Crash reports from the app: a phone stuck in a crash loop must not flood the database */
 export const appErrorLimiter = rateLimit({
   ...common,

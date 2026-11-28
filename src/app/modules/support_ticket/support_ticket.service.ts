@@ -23,6 +23,8 @@ interface ICreateTicketPayload {
   urgency?: TicketUrgency;
   description: string;
   attachments?: string[];
+  /** Server only (help assistant hand-over), never from the request body */
+  assistantConversationId?: Types.ObjectId;
 }
 
 const createTicket = async (
@@ -47,6 +49,7 @@ const createTicket = async (
     urgency: payload.urgency || TicketUrgency.medium,
     description: payload.description,
     attachments: payload.attachments || [],
+    assistantConversationId: payload.assistantConversationId,
     status: TicketStatus.open,
   });
 

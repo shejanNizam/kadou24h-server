@@ -69,6 +69,15 @@ export const updateSettingsZodSchema = z
       })
       .partial(),
 
+    assistant: z
+      .object({
+        enabled: z.boolean(),
+        dailyLimitPerUser: z.number().int({ message: "WHOLE_NUMBER" }).min(1, { message: "NUMBER_TOO_LOW" }).max(200, { message: "NUMBER_TOO_HIGH" }),
+        dailyLimitTotal: z.number().int({ message: "WHOLE_NUMBER" }).min(10, { message: "NUMBER_TOO_LOW" }).max(100000, { message: "NUMBER_TOO_HIGH" }),
+        knowledge: z.string().trim().max(8000, { message: "TEXT_TOO_LONG" }),
+      })
+      .partial(),
+
     moderation: z
       .object({
         restrictAfter: z.number().int().min(1),

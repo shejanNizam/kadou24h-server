@@ -71,6 +71,13 @@ const settingsSchema = new Schema<ISettings>(
       retentionDays: { type: Number, default: 90, min: 30, max: 730 },
     },
 
+    assistant: {
+      enabled: { type: Boolean, default: true },
+      dailyLimitPerUser: { type: Number, default: 20, min: 1, max: 200 },
+      dailyLimitTotal: { type: Number, default: 2000, min: 10, max: 100000 },
+      knowledge: { type: String, default: "", maxlength: 8000 },
+    },
+
     moderation: {
       restrictAfter: { type: Number, default: 3 },
       suspendAfter: { type: Number, default: 5 },

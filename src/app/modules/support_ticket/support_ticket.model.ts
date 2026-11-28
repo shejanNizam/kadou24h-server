@@ -50,6 +50,10 @@ export const supportTicketSchema = new Schema<ISupportTicket>(
       type: [String],
       default: [],
     },
+    assistantConversationId: {
+      type: Schema.Types.ObjectId,
+      ref: "assistant_conversations",
+    },
     status: {
       type: String,
       enum: Object.values(TicketStatus),

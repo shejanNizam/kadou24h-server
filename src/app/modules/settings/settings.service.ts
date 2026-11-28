@@ -3,6 +3,7 @@ import { ISettings, ISettingsInitial } from "./settings.interface";
 import { Settings } from "./settings.model";
 import httpStatus from "http-status";
 import AppError from "../../errorHelpers/AppError";
+import { configs } from "../../config";
 import { DeliveryRate } from "../delivery_rate/delivery_rate.model";
 import { DeliveryRateType } from "../delivery_rate/delivery_rate.interface";
 
@@ -45,6 +46,11 @@ const getPublicSettings = async () => {
     rides: s.rides,
     // The app tells people how long their messages are kept
     chat: s.chat,
+    // The help assistant is offered only when the team switched it on and a key is set
+    assistant: {
+      available: Boolean(s.assistant?.enabled && configs.OPENAI.api_key),
+      dailyLimitPerUser: s.assistant?.dailyLimitPerUser ?? 20,
+    },
   };
 };
 

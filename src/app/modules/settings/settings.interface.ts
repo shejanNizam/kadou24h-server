@@ -70,6 +70,15 @@ export interface ISettingsInitial {
     retentionDays: number;
   };
 
+  // Help assistant (AI, 2026-11-28): answers questions about Kadou24h and hands over to the team
+  assistant: {
+    enabled: boolean;
+    dailyLimitPerUser: number; // questions per person per day
+    dailyLimitTotal: number; // questions for the whole platform per day (cost guard)
+    // What the Kadou24h team wants the assistant to know (FAQ, opening hours, promotions…)
+    knowledge: string;
+  };
+
   moderation: {
     restrictAfter: number; // violations before chat is restricted
     suspendAfter: number; // violations before the account is suspended

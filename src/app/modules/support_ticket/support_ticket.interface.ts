@@ -35,6 +35,8 @@ export interface ISupportTicketInitial {
   urgency: TicketUrgency;
   description: string;
   attachments?: string[];
+  /** Sent from the help assistant: the team reads that conversation */
+  assistantConversationId?: Types.ObjectId;
   status: TicketStatus;
   assignedTo?: Types.ObjectId;
   resolution?: string;

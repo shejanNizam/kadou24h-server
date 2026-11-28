@@ -17,6 +17,7 @@
 import { spawn } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
+import http from "node:http";
 import path from "node:path";
 import { parseEnv } from "node:util";
 import { fileURLToPath } from "node:url";
@@ -52,6 +53,37 @@ const redisEnv = Object.fromEntries(
     .filter(([, value]) => value !== undefined),
 );
 
+// ── Fake OpenAI (the help assistant): no real key, no cost, and we can see what is sent ──
+// A question containing FAIL_PLEASE answers 500; one containing HUMAN asks for the team.
+const AI_PORT = PORT + 1;
+const aiRequests = [];
+const fakeOpenAi = http.createServer((req, res) => {
+  let raw = "";
+  req.on("data", (chunk) => (raw += chunk));
+  req.on("end", () => {
+    const body = JSON.parse(raw || "{}");
+    aiRequests.push({ url: req.url, auth: req.headers.authorization, body });
+    const last = body.messages?.at(-1)?.content ?? "";
+    if (last.includes("FAIL_PLEASE")) {
+      res.writeHead(500, { "Content-Type": "application/json" });
+      return res.end(JSON.stringify({ error: { message: "fake failure", type: "server_error" } }));
+    }
+    const answer = { reply: `Réponse à : ${last}`, needsHuman: last.includes("HUMAN") };
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(
+      JSON.stringify({
+        id: "chatcmpl-e2e",
+        object: "chat.completion",
+        created: Math.floor(Date.now() / 1000),
+        model: body.model,
+        choices: [{ index: 0, finish_reason: "stop", message: { role: "assistant", content: JSON.stringify(answer), refusal: null } }],
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+      }),
+    );
+  });
+});
+await new Promise((resolve) => fakeOpenAi.listen(AI_PORT, "127.0.0.1", resolve));
+
 let serverLog = "";
 const server = spawn(process.execPath, ["--import", "tsx", "src/server.ts"], {
   cwd: ROOT,
@@ -79,6 +111,8 @@ const server = spawn(process.execPath, ["--import", "tsx", "src/server.ts"], {
     CHAT_RETENTION_SWEEP_MS: "1000",
     REDIS_HOST: "localhost",
     REDIS_PORT: "6379",
+    OPENAI_API_KEY: "e2e-fake-key",
+    OPENAI_BASE_URL: `http://127.0.0.1:${AI_PORT}/v1`,
     ...redisEnv,
   },
   stdio: ["ignore", "pipe", "pipe"],
@@ -90,6 +124,7 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const cleanup = async () => {
   server.kill();
+  fakeOpenAi.close();
   if (process.env.E2E_KEEP_DB) return console.log(`(kept database ${dbName})`);
   await mongoose.connect(DATABASE_URL);
   await mongoose.connection.dropDatabase();
@@ -2286,6 +2321,102 @@ const run = async () => {
   check("i18n: a verified phone number answers PHONE_ALREADY_REGISTERED", r.status === 409 && r.body.code === "PHONE_ALREADY_REGISTERED" && /existe déjà/.test(r.body.message ?? ""), brief(r));
   r = await call("POST", "/auth/register", { name: "Langue", phone: "12", password: "abc" }, null, { "Accept-Language": "fr", "X-Forwarded-For": "10.204.0.2" });
   check("i18n: schema messages are translated (password length from the rule)", r.status === 400 && r.body.errorSources?.some((e) => e.message === "Le mot de passe doit contenir au moins 8 caractères."), brief(r));
+
+  // ── Help assistant (AI, 2026-11-28) — talks to the fake OpenAI above ──
+  const asker = await signup("Asker", `+22467${stamp}5`);
+  r = await call("GET", "/settings/public");
+  check("assistant: public settings say it is available (key set, on by default)", r.body.data?.assistant?.available === true, JSON.stringify(r.body.data?.assistant));
+  r = await call("GET", "/assistant/conversation", null, C.token);
+  check("assistant: nothing yet — no conversation, today 0 questions", ok(r) && r.body.data?.conversation === null && r.body.data?.quota?.used === 0 && r.body.data?.quota?.limit === 20, brief(r));
+  r = await call("GET", "/assistant/conversation");
+  check("assistant: needs to be signed in", r.status === 401, brief(r));
+  r = await call("POST", "/assistant/messages", { text: " " }, C.token);
+  check("assistant: an empty question is refused", r.status === 400, brief(r));
+
+  const myOrders = (await call("GET", "/orders/my-orders?limit=5", null, C.token)).body.data ?? [];
+  aiRequests.length = 0;
+  r = await call("POST", "/assistant/messages", { text: "Où est ma commande ?", mode: "customer" }, C.token);
+  const firstTurn = r.body.data?.conversation?.messages ?? [];
+  check(
+    "assistant: answers a question (both kept, the answer from the model)",
+    ok(r) && firstTurn.length === 2 && firstTurn[0].role === "user" && firstTurn[1].role === "assistant" && firstTurn[1].text === "Réponse à : Où est ma commande ?" && r.body.data?.quota?.used === 1,
+    brief(r),
+  );
+  const sent = aiRequests.at(-1);
+  const system = sent?.body?.messages?.[0]?.content ?? "";
+  check("assistant: the key stays on the server (sent to OpenAI only)", sent?.auth === "Bearer e2e-fake-key" && !JSON.stringify(r.body).includes("e2e-fake-key"));
+  check("assistant: a small model, a short answer, a structured reply", sent?.body?.model === "gpt-4.1-mini" && sent?.body?.max_completion_tokens === 500 && sent?.body?.response_format?.type === "json_schema");
+  check("assistant: the model knows the person's own orders", myOrders.length > 0 && myOrders.every((o) => system.includes(o.orderNumber)), myOrders.map((o) => o.orderNumber).join(","));
+  check("assistant: …and the live fees (service fee from the settings)", /service fee of [\d ]+ GNF/.test(system));
+  check(
+    "assistant: nothing private is sent (no name, phone or address)",
+    !system.includes("Customer One") && !system.includes(`62${stamp}3`) && !system.includes("Kipé") && !system.includes("+224620000111"),
+  );
+  check("assistant: OpenAI gets a hashed id, never the account id", typeof sent?.body?.safety_identifier === "string" && sent.body.safety_identifier.length === 64 && sent.body.safety_identifier !== C.id);
+
+  r = await call("POST", "/assistant/messages", { text: "Et le paiement ?" }, C.token);
+  const followUp = aiRequests.at(-1)?.body?.messages ?? [];
+  check("assistant: a follow-up carries the earlier turns", ok(r) && followUp.length === 4 && followUp[1].content === "Où est ma commande ?" && r.body.data?.conversation?.messages?.length === 4, `${followUp.length}`);
+
+  r = await call("POST", "/assistant/messages", { text: "FAIL_PLEASE" }, C.token);
+  check("assistant: OpenAI down → ASSISTANT_FAILED", r.status === 502 && r.body.code === "ASSISTANT_FAILED", brief(r));
+  r = await call("GET", "/assistant/conversation", null, C.token);
+  check("assistant: …a failed question is not kept and not counted", r.body.data?.conversation?.messages?.length === 4 && r.body.data?.quota?.used === 2, brief(r));
+
+  r = await call("POST", "/assistant/messages", { text: "Je veux parler à un HUMAN" }, C.token);
+  check("assistant: the model can ask for the team (needsHuman)", ok(r) && r.body.data?.conversation?.messages?.at(-1)?.needsHuman === true, brief(r));
+
+  r = await call("POST", "/assistant/conversation/hand-off", { note: "Remboursement pas reçu" }, C.token);
+  const handed = r.body.data;
+  check("assistant: hand-over creates a support ticket", r.status === 201 && Boolean(handed?.ticketNumber), brief(r));
+  r = await call("GET", "/support-tickets/me", null, C.token);
+  const aiTicket = (r.body.data ?? []).find((t) => t.ticketNumber === handed?.ticketNumber);
+  check(
+    "assistant: …in the person's words (first question as subject, note as text), linked to the conversation",
+    aiTicket?.subject === "Où est ma commande ?" && aiTicket?.description === "Remboursement pas reçu" && Boolean(aiTicket?.assistantConversationId),
+    JSON.stringify(aiTicket),
+  );
+  r = await call("GET", `/assistant/admin/conversations/${aiTicket?.assistantConversationId}`, null, admin);
+  check("assistant: the team reads the whole conversation", ok(r) && r.body.data?.messages?.length === 6 && r.body.data?.status === "handed_off", brief(r));
+  r = await call("GET", `/assistant/admin/conversations/${aiTicket?.assistantConversationId}`, null, asker.token);
+  check("assistant: …nobody else can", r.status === 403, brief(r));
+  r = await call("GET", "/assistant/conversation", null, C.token);
+  check("assistant: after the hand-over a new conversation starts", r.body.data?.conversation === null, brief(r));
+  r = await call("POST", "/assistant/conversation/hand-off", {}, C.token);
+  check("assistant: nothing to hand over → ASSISTANT_NOTHING_TO_SEND", r.status === 400 && r.body.code === "ASSISTANT_NOTHING_TO_SEND", brief(r));
+
+  // Seller mode: the assistant knows the store, not the seller's orders as a customer
+  r = await call("POST", "/assistant/messages", { text: "Ma boutique est-elle ouverte ?", mode: "vendor" }, V.token);
+  check("assistant: seller mode — the model knows the store", ok(r) && (aiRequests.at(-1)?.body?.messages?.[0]?.content ?? "").includes("Their store: TechHub"), brief(r));
+  r = await call("DELETE", "/assistant/conversation", null, V.token);
+  const afterReset = await call("GET", "/assistant/conversation", null, V.token);
+  check("assistant: start again closes the conversation", ok(r) && afterReset.body.data?.conversation === null, brief(r));
+
+  // Limits and the switch (admin)
+  r = await call("PATCH", "/settings", { assistant: { dailyLimitPerUser: 1 } }, admin);
+  check("assistant: admin sets the daily limit", ok(r) && r.body.data?.assistant?.dailyLimitPerUser === 1, brief(r));
+  r = await call("POST", "/assistant/messages", { text: "Bonjour" }, asker.token);
+  check("assistant: within the daily limit", ok(r), brief(r));
+  r = await call("POST", "/assistant/messages", { text: "Encore une question" }, asker.token, { "Accept-Language": "fr" });
+  check("assistant: over the daily limit → ASSISTANT_DAILY_LIMIT, in French, with the limit", r.status === 429 && r.body.code === "ASSISTANT_DAILY_LIMIT" && r.body.params?.limit === 1 && /1 questions aujourd'hui/.test(r.body.message ?? ""), brief(r));
+  r = await call("PATCH", "/settings", { assistant: { knowledge: "x".repeat(8001) } }, admin);
+  check("assistant: the team's notes are limited to 8000 characters", r.status === 400, brief(r));
+  r = await call("PATCH", "/settings", { assistant: { enabled: false, dailyLimitPerUser: 20, knowledge: "Livraison gratuite le vendredi." } }, admin);
+  const offPublic = await call("GET", "/settings/public");
+  check("assistant: switched off → the app hides it", ok(r) && offPublic.body.data?.assistant?.available === false, brief(offPublic));
+  r = await call("POST", "/assistant/messages", { text: "Bonjour" }, C.token);
+  check("assistant: switched off → ASSISTANT_UNAVAILABLE", r.status === 503 && r.body.code === "ASSISTANT_UNAVAILABLE", brief(r));
+  await call("PATCH", "/settings", { assistant: { enabled: true } }, admin);
+  r = await call("POST", "/assistant/messages", { text: "Livraison le vendredi ?" }, C.token);
+  check("assistant: the team's notes reach the model", ok(r) && (aiRequests.at(-1)?.body?.messages?.[0]?.content ?? "").includes("Livraison gratuite le vendredi."), brief(r));
+  r = await call("GET", "/assistant/admin/usage", null, admin);
+  check(
+    "assistant: admin sees today's use",
+    ok(r) && r.body.data?.configured === true && r.body.data?.enabled === true && r.body.data?.questionsToday >= 5 && r.body.data?.handOffsToday >= 1,
+    brief(r),
+  );
+  r = await call("GET", "/assistant/admin/usage", null, C.token);
+  check("assistant: …customers can't", r.status === 403, brief(r));
 };
 
 run().then(() => finish(), finish);
